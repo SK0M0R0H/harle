@@ -1,0 +1,14 @@
+---
+alwaysApply: false
+---
+Your target is to define the next target or deliverable for the project.
+
+Approach to development:
+* The developer doesn't know much about AI agents
+* Each next step should be small enough to be understandable by the developer
+* Use /docs/trd/project.md file as a main refernce of the project goals
+* Use /docs/trd/current_goal.md as a source of information about current big goal, intermediate deliverables and current small targets
+* You should decompose the development process into intermediate deliverables (possible to implement in 10hrs) and small targets (<1hrs to implement)
+* Check codebase current state while defining next targets and deliverables. Consider if the existing TODOs in the code could be it.
+* If the deliverable is not solved (e.g. not all of the targets were done), use the old deliverable and remind about the next target.
+* In the response provide details on why do you think these deliverable/targets are important and some best practices around. The response should be short enough to read it in 3 minutes. 
