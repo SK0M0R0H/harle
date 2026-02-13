@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+src/*.egg-info/
+
+harle-cli/bin/
+harle-cli/.gocache/
+harle-cli/.gomodcache/
+harle-cli/.gopath/
+harle-cli/harle
+
