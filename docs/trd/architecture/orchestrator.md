@@ -238,6 +238,34 @@ As described in [architecture.md](./architecture.md), language models have a har
 └─────────────────────────────────────────────────────────┘
 ```
 
+**Why the 80/20 budget split?**
+
+A language model's context window (e.g. 128k tokens for GPT-4o) is a **single shared budget** for both the input (what you send to the model) and the output (what the model writes back). They compete for the same space. If you fill the entire window with input context, the model has zero tokens left to generate a response — it would be like filling a whiteboard with reference material and leaving no room to write the answer.
+
+The 80/20 rule means: if the model has 128k tokens total, the Context Assembler uses at most ~100k for input and reserves ~28k for the model's response.
+
+```
+Model context window (e.g. 128k tokens)
+┌──────────────────────────────────────────────────────┐
+│                                                      │
+│  INPUT (~80%)                     │  OUTPUT (~20%)   │
+│                                   │                  │
+│  Agent prompt                     │  The model's     │
+│  Policies                         │  actual response │
+│  Dataset search results           │  (research       │
+│  Trello cards                     │  report, task    │
+│  Web search results               │  suggestions,    │
+│  Conversation history             │  analysis, etc.) │
+│  Prior run context                │                  │
+│                                   │                  │
+│  ← Context Assembler fills this   │  ← Model needs   │
+│    and stops at the budget limit  │    this space to  │
+│                                   │    write          │
+└──────────────────────────────────────────────────────┘
+```
+
+In practice, short answers (like task triage suggestions) may only use ~1k tokens of output, while long answers (a multi-page research report) may need 5–10k. The 20% reserve is a safe default that works for most tasks. The important rule is: the Context Assembler must **never fill the entire window** — it must always leave room for the model to respond.
+
 **How it decides what to include (priority system):**
 
 Not everything can fit. The Context Assembler uses a **priority-based budget system**:

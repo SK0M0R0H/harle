@@ -46,30 +46,45 @@ The system consists of six main components connected in a pipeline. The diagram 
 
 ### 1. Interface (CLI first)
 
-**What it does:** This is how you talk to Harle — the "front door" of the system. You type a request, and it sends that request to the Orchestrator running on a remote server. Later it shows you the result.
+**What it does:** This is how you talk to Harle — the "front door" of the system. You launch it, enter a session, and communicate with Harle until you explicitly quit — like launching a Python shell or `psql`.
 
-**Important architectural note:** The CLI is a **thin client**. It does not run any AI logic, load any models, or process data. All it does is send your request over the network to the Orchestrator (via an HTTP/REST API) and display the response. This means the CLI has no dependency on AI/ML libraries — it only needs to make HTTP calls and render text.
+**Important architectural note:** The CLI is a **thin client**. It does not run any AI logic, load any models, or process data. All it does is send your messages over the network to the Orchestrator (via an HTTP/REST API), stream back responses, and handle interactive flows (clarifications, approvals). This means the CLI has no dependency on AI/ML libraries.
 
-The first interface is a command-line tool (CLI) — a program you run in your terminal. Think of it like a chat window, but in text mode.
+**Session-first interaction model:**
+
+The CLI is always session-based. Running `harle` drops you into an interactive session. Every message you type is part of that session — the Orchestrator keeps full conversation history, so follow-up questions work naturally. To start a fresh session, you explicitly type `/quit` or `/new`. This is analogous to how `python`, `node`, or `psql` work: you enter the shell, interact, and leave when done.
+
+```
+$ harle --context=work
+harle> Find stalled tasks in Trello
+[secretary] Found 7 stalled tasks...
+harle> Reformulate the first one       ← context carries over
+[secretary] Here are options: ...
+harle> /quit
+Session saved.
+```
+
+For scripting and automation, `harle exec "..."` runs a single task non-interactively (no session, no prompt) and exits — the escape hatch for shell scripts and pipelines.
 
 **Why CLI first:**
 - **Simplest to build.** A CLI has no buttons, no styling, no browser. You focus on the logic, not the look.
 - **Developer-friendly.** You are already using a terminal (e.g. in Cursor). A CLI fits naturally into that workflow.
 - **Easy to extend later.** Once the CLI works, you can add a web chat UI, a Telegram bot, or a Slack integration on top — they all just send the same request to the Orchestrator's API.
 
-**Technology: Go with [Cobra](https://cobra.dev/)**
+**Technology: Go with [Cobra](https://cobra.dev/) + [Bubbletea](https://github.com/charmbracelet/bubbletea)**
 
 Since the CLI is a thin HTTP client, the language choice is **independent** from the server side. The server (Orchestrator) is written in Python because of the AI/ML ecosystem, but the CLI has no AI dependencies — it only sends JSON over HTTP and renders the response.
 
 **Why Go:**
 - **Single binary.** `go build` produces one executable file with zero dependencies. You copy it to any machine (Linux, macOS, Windows, even a phone via Termux) and it works. No runtime, no `pip install`, no virtual environments.
-- **Fast startup.** Go binaries start in ~10ms. For a CLI you run many times a day, this feels instant — compared to ~200–500ms for a Python CLI that has to load an interpreter.
+- **Fast startup.** Go binaries start in ~10ms. For a tool you launch many times a day, this feels instant — compared to ~200–500ms for a Python CLI that has to load an interpreter.
 - **Industry standard for CLI tools.** Docker, Kubernetes (`kubectl`), GitHub CLI (`gh`), Terraform, and Hugo are all written in Go. The ecosystem for building CLI tools in Go is mature and well-documented.
 - **Easy cross-compilation.** One command builds the binary for any OS/architecture: `GOOS=linux GOARCH=arm64 go build`. This is useful for deploying to different machines.
-- **Cobra library.** Cobra is the de facto standard for Go CLI applications. It provides subcommands, flags, auto-generated help, shell completions, and argument validation out of the box.
 
 **Why not Python for the CLI:**
 The server is Python, but that does not mean the CLI should be too. The CLI talks to the server via a simple HTTP API (JSON in, JSON out) — there is no shared business logic, no imported modules. The only cost of using a different language is maintaining a small API contract (a few JSON request/response schemas), which is trivial. The benefits (single binary, fast startup, easy distribution) far outweigh this.
+
+For the full CLI architecture (session management, commands, rendering, project structure), see [cli.md](./cli.md).
 
 **Future interfaces** (not in the first version):
 - Web chat UI (e.g. using a lightweight React/Next.js app or Streamlit)
@@ -445,7 +460,7 @@ Tailscale creates a private network between your devices. Your Harle server, you
 | Component | Technology | Why this choice |
 |---|---|---|
 | **Server language** | Python 3.12+ | Dominant in AI/ML, best SDK support |
-| **CLI (Interface)** | Go + Cobra | Single binary, fast startup, no runtime needed |
+| **CLI (Interface)** | Go + Cobra + Bubbletea | Session-based REPL, single binary, fast startup |
 | **Orchestrator** | OpenAI Agents SDK | Full control, clean logs, MCP support |
 | **Search** | Whoosh | Pure Python, no external services, fast |
 | **Database** | PostgreSQL + pgvector | One DB for everything, industry standard |
@@ -474,10 +489,11 @@ Harle follows a "secure enough, not paranoid" philosophy:
 
 ## How It All Fits Together (Example Flow)
 
-Here is a concrete example of what happens when you ask Harle: *"Find all stalled tasks in Trello and suggest how to reformulate them."*
+Here is a concrete example. You launch Harle and type: *"Find all stalled tasks in Trello and suggest how to reformulate them."*
 
 ```
-1. You type the request in the CLI (Interface)
+1. You are in a session (launched with 'harle --context=work')
+   You type the request at the harle> prompt
    → CLI sends an HTTP POST to the Orchestrator's API
          │
      [network — your machine → server via Tailscale]
@@ -509,9 +525,10 @@ Here is a concrete example of what happens when you ask Harle: *"Find all stalle
    → Output saved to Files and Data (Markdown file in vault)
          │
          ▼
-7. Response travels back over the network to your CLI
-   → CLI displays the suggestions to you
-   → You review, approve, or modify
+7. Response streams back over the network to your CLI
+   → CLI renders the suggestions in real-time
+   → Session stays open — you can type a follow-up:
+     harle> "Reformulate the first one and create a Trello card"
 ```
 
 ---
