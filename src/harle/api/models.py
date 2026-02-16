@@ -1,4 +1,4 @@
-"""API models for the minimal orchestrator service."""
+"""API models for the orchestrator service."""
 
 from __future__ import annotations
 
@@ -33,4 +33,38 @@ class HealthResponse(BaseModel):
     """Simple health response."""
 
     status: str = "ok"
+
+
+# --- Data layer models ---
+
+
+class InitResponse(BaseModel):
+    """Response from the ``/init`` endpoint."""
+
+    status: str
+    tables_created: bool
+    files_seeded: int
+    files_indexed: int
+    total_files: int
+    dataset_path: str
+
+
+class SearchResultItem(BaseModel):
+    """A single search result."""
+
+    file_path: str
+    title: str
+    score: float
+    context: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    snippet: str | None = None
+
+
+class SearchResponse(BaseModel):
+    """Response from the ``/search`` endpoint."""
+
+    query: str
+    context: str | None = None
+    results: list[SearchResultItem] = Field(default_factory=list)
+    total: int = 0
 

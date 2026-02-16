@@ -146,7 +146,7 @@ Research on metadata-enriched RAG [3] and contextual retrieval [5] shows that th
 | **Source of truth for user knowledge** | Yes | No (mirror only) | Metadata in DB, content in files |
 | **Machine-generated** (run logs, cost tracking, embeddings) | Summary only (in `logs/`) | Full structured data | Summary in file, structured in DB |
 | **Needs to survive DB rebuild** | Yes — files are the recovery source | No — DB can be rebuilt from files | — |
-| **Relationships between entities** | No (files are flat) | Yes (foreign keys, joins) | — |
+| **Relationships between entities** | Unstructured only (wiki-style `[[links]]` form a graph, but no enforced schema) | Yes (foreign keys, joins, enforced referential integrity) | — |
 | **Requires real-time querying** | No (file system scan is slow) | Yes (indexed queries are fast) | — |
 
 ### 3.3 Concrete Split for Harle
@@ -325,6 +325,14 @@ This contextual enrichment reduces the "orphaned chunk" problem where a chunk li
 
 ### 6.2 Recommended Retrieval Pipeline for Harle
 
+**How metadata pre-filter is derived from the request.** Before the pipeline starts, the system must translate a raw user request into a set of filter criteria for Phase 1. This happens in a lightweight extraction step:
+
+1. **Context scope** is determined by the active session: each Harle session is bound to a scope (e.g. `work`, `personal`, a specific project), so the scope filter is implicit — no NLP needed.
+2. **Tag matching** uses a two-pronged approach: (a) exact keyword matching against a known tag vocabulary (e.g. request contains "privacy" → tag `#privacy`), and (b) optionally, a fast LLM classification call that maps the request to one or more predefined categories. The tag vocabulary is maintained in the vault metadata and indexed in PostgreSQL.
+3. **Priority inclusion** is unconditional — P0 (critical/always-relevant) files are always injected into the candidate set regardless of the request content. This ensures core policies, user preferences, and active project context are never missed.
+
+The result of this extraction is a PostgreSQL `WHERE` clause that narrows the full file set down to a candidate set (typically 30–100 files), which is then passed into the parallel retrieval phase.
+
 ```
 User request
     │
@@ -426,13 +434,13 @@ Tier 3: SEMANTIC MEMORY (Markdown vault + embeddings)
 
 **Key design principles from the literature:**
 
-1. **Memories should have connections to each other** [8]. A preference "user likes bullet points" should be linked to the correction "but use numbered lists for step-by-step instructions." This prevents contradictory memories from being applied simultaneously.
+1. **Memories should have connections to each other** [8]. This follows directly from A-MEM's Zettelkasten-inspired model, where each memory is not an isolated record but a node in a graph — linked to related memories via explicit connections. A-MEM's "memory evolution" mechanism means that storing a new memory triggers a search for related existing memories and may update or merge them. For Harle, this means a preference "user likes bullet points" should be linked to the correction "but use numbered lists for step-by-step instructions." This prevents contradictory memories from being applied simultaneously.
 
-2. **Memories should have confidence scores that update** [8, 16]. A new memory starts at low confidence. Each time it's used and the user doesn't correct the agent, confidence increases. If the user corrects the agent, confidence decreases or the memory is updated.
+2. **Memories should have confidence scores that update** [8, 16]. Two papers converge on this idea from different angles. A-MEM's memory evolution provides the mechanism: when a memory is reinforced by new evidence it strengthens, when contradicted it gets revised. RMM's *retrospective reflection* provides the signal: by tracking which retrieved memories actually led to successful outcomes (via RL), the system learns which memories deserve higher confidence. For Harle, a new memory starts at low confidence. Each time it's used and the user doesn't correct the agent, confidence increases. If the user corrects the agent, confidence decreases or the memory is updated.
 
-3. **Old conversation history should be summarized, not truncated** [16, 17]. RMM shows that multi-resolution summarization (keep recent turns verbatim, summarize older turns, create a one-line session summary for very old sessions) outperforms both full-context and simple-truncation approaches.
+3. **Old conversation history should be summarized, not truncated** [16, 17]. RMM's *prospective reflection* directly addresses this: it dynamically summarizes interactions at multiple granularities (utterance → turn → session), creating multi-resolution memory that preserves key information while staying within token limits. MemGPT complements this with its tiered architecture: recent turns stay in main context (RAM), older turns are evicted to archival memory (disk) and replaced with compressed summaries — the agent can page them back in when needed. Together, they show that multi-resolution summarization (keep recent turns verbatim, summarize older turns, create a one-line session summary for very old sessions) outperforms both full-context and simple-truncation approaches.
 
-4. **The agent should be able to write to its own memory** [17]. This means Harle's agents should have a `save_memory` tool that creates entries in the `memories` table. This is not automatic — the agent decides when something is worth remembering.
+4. **The agent should be able to write to its own memory** [17]. This is MemGPT's central contribution: treating memory management as a set of tool calls (`core_memory_append`, `archival_memory_insert`, etc.) that the agent invokes autonomously, just as an OS manages its own page table. Rather than relying on an external system to decide what to store, the agent itself decides when something is worth remembering. For Harle, this means agents should have a `save_memory` tool that creates entries in the `memories` table. This is not automatic — the agent decides when something is worth remembering.
 
 ---
 

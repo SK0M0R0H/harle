@@ -55,3 +55,28 @@ func (h *HTTPClient) Run(ctx context.Context, request RunRequest) (RunResponse, 
 
 	return response, nil
 }
+
+func (h *HTTPClient) Init(ctx context.Context) (InitResponse, error) {
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/init", nil)
+	if err != nil {
+		return InitResponse{}, fmt.Errorf("build request: %w", err)
+	}
+
+	httpResponse, err := h.Client.Do(httpRequest)
+	if err != nil {
+		return InitResponse{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer httpResponse.Body.Close()
+
+	if httpResponse.StatusCode >= 300 {
+		responseBody, _ := io.ReadAll(httpResponse.Body)
+		return InitResponse{}, fmt.Errorf("server returned %d: %s", httpResponse.StatusCode, string(responseBody))
+	}
+
+	var response InitResponse
+	if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
+		return InitResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+
+	return response, nil
+}

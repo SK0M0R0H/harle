@@ -13,3 +13,12 @@ type RunResponse struct {
 	Context        string  `json:"context"`
 	ConversationID *string `json:"conversation_id"`
 }
+
+type InitResponse struct {
+	Status        string `json:"status"`
+	TablesCreated bool   `json:"tables_created"`
+	FilesSeeded   int    `json:"files_seeded"`
+	FilesIndexed  int    `json:"files_indexed"`
+	TotalFiles    int    `json:"total_files"`
+	DatasetPath   string `json:"dataset_path"`
+}

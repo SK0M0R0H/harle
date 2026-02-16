@@ -4,20 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harle"
-version = "0.1.0"
-description = "Harle prototype: CLI + simple orchestrator"
+version = "0.2.0"
+description = "Harle: personal AI assistant with dataset search"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.116.0",
   "openai>=1.100.0",
+  "psycopg2-binary>=2.9.0",
   "pydantic>=2.10.0",
   "pyyaml>=6.0",
+  "sqlalchemy>=2.0.0",
   "uvicorn>=0.35.0",
 ]
 
 [project.scripts]
 harle-server = "harle.main:run"
+harle-init = "harle.bootstrap:run_init"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

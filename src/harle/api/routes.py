@@ -1,15 +1,42 @@
-"""HTTP routes for the prototype orchestrator API."""
+"""HTTP routes for the orchestrator API."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import logging
 
-from harle.api.models import HealthResponse, RunRequest, RunResponse
+from fastapi import APIRouter, HTTPException, Query
+
+from harle.api.models import (
+    HealthResponse,
+    InitResponse,
+    RunRequest,
+    RunResponse,
+    SearchResponse,
+    SearchResultItem,
+)
+from harle.config import Settings
+from harle.db.connection import Database
 from harle.orchestrator.service import OrchestratorService
+from harle.search.engine import SearchEngine
+
+logger = logging.getLogger(__name__)
 
 
-def build_router(*, orchestrator: OrchestratorService) -> APIRouter:
-    """Create API routes bound to a concrete orchestrator service instance."""
+def build_router(
+    *,
+    orchestrator: OrchestratorService,
+    db: Database | None = None,
+    search_engine: SearchEngine | None = None,
+    settings: Settings | None = None,
+) -> APIRouter:
+    """Create API routes bound to concrete service instances.
+
+    Args:
+        orchestrator: The LLM orchestrator service.
+        db: Optional database instance (enables ``/init``).
+        search_engine: Optional search engine (enables ``/search``).
+        settings: Application settings (needed for ``/init``).
+    """
     router = APIRouter()
 
     @router.get("/health", response_model=HealthResponse)
@@ -19,6 +46,67 @@ def build_router(*, orchestrator: OrchestratorService) -> APIRouter:
     @router.post("/run", response_model=RunResponse)
     def run_task(request: RunRequest) -> RunResponse:
         return orchestrator.run(request=request)
+
+    @router.post("/init", response_model=InitResponse)
+    def init_system() -> InitResponse:
+        """Create database tables, seed the dataset, and run initial indexing."""
+        if db is None or settings is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Database is not configured. Set DATABASE_URL in config.",
+            )
+        if not settings.HARLE_DATASET_PATH:
+            raise HTTPException(
+                status_code=503,
+                detail="Dataset path is not configured. Set HARLE_DATASET_PATH in config.",
+            )
+
+        from harle.bootstrap import init_system as _init_system
+
+        result = _init_system(db, settings.HARLE_DATASET_PATH)
+        return InitResponse(
+            status="initialized",
+            tables_created=result["tables_created"],  # type: ignore[arg-type]
+            files_seeded=result["files_seeded"],  # type: ignore[arg-type]
+            files_indexed=result["files_indexed"],  # type: ignore[arg-type]
+            total_files=result["total_files"],  # type: ignore[arg-type]
+            dataset_path=result["dataset_path"],  # type: ignore[arg-type]
+        )
+
+    @router.get("/search", response_model=SearchResponse)
+    def search_dataset(
+        q: str = Query(min_length=1, description="Search query"),
+        context: str | None = Query(default=None, description="Context scope filter"),
+        max_results: int = Query(default=10, ge=1, le=50, description="Max results"),
+    ) -> SearchResponse:
+        """Search the indexed dataset for relevant files."""
+        if search_engine is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Search is not configured. Run /init first and check config.",
+            )
+
+        from harle.search.types import SearchQuery
+
+        query = SearchQuery(query=q, context=context, max_results=max_results)
+        results = search_engine.search(query)
+
+        return SearchResponse(
+            query=q,
+            context=context,
+            results=[
+                SearchResultItem(
+                    file_path=r.file_path,
+                    title=r.title,
+                    score=r.score,
+                    context=r.context,
+                    tags=r.tags,
+                    snippet=r.snippet,
+                )
+                for r in results
+            ],
+            total=len(results),
+        )
 
     return router
 

@@ -28,6 +28,7 @@ func NewRootCommand() *cobra.Command {
 	command.PersistentFlags().StringVar(&serverURL, "server", "http://127.0.0.1:8000", "Orchestrator server URL")
 	command.PersistentFlags().StringVarP(&contextValue, "context", "c", "personal", "Context scope: personal or work")
 	command.AddCommand(newExecCommand(&serverURL, &contextValue))
+	command.AddCommand(newInitCommand(&serverURL))
 
 	return command
 }
