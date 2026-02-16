@@ -635,12 +635,20 @@ The Orchestrator is configured through a combination of:
 | **Config file** (`config.yaml`) | Service settings, defaults, limits | Max iterations, timeout, token budget, default model |
 | **Dataset vault** (Markdown files) | Agent prompts, policies, workflows | `prompts/secretary.md`, `policies/tools-allowlist.md` |
 
-**Example `config.yaml`:**
+**Configuration file setup:**
+
+The Harle code repository contains a **`config.example.yaml`** — a template with documented defaults. Each user copies this template to their own location (e.g. `~/.config/harle/config.yaml`) and customizes it for their deployment. The actual `config.yaml` with real paths, secrets, and per-user settings is **never committed to the code repository**.
 
 ```yaml
+# config.example.yaml — provided in the repo as a template
+# Copy to ~/.config/harle/config.yaml and customize
+
 server:
   host: "0.0.0.0"
   port: 8000
+
+dataset:
+  path: "/home/user/harle-vault"  # Path to YOUR vault (external directory)
 
 models:
   default: "gpt-4o-mini"          # For routine tasks (cheap, fast)
@@ -657,13 +665,20 @@ search:
   max_results: 10                 # Max files returned by dataset search
   max_context_pages: 8            # Max pages of context sent to LLM
 
+indexer:
+  database_url: "postgresql+asyncpg://harle:password@localhost:5432/harle"
+
 approval:
   require_for_write: true         # All write actions need user approval
   auto_approve_read: true         # Read actions proceed automatically
   work_context_strict: true       # Extra caution for work-related actions
 ```
 
-This file lives in the repository, not in the dataset vault (it is a service configuration, not user knowledge). You can override any value with environment variables for deployment flexibility.
+**Key points:**
+- The `config.example.yaml` lives in the code repository. The actual `config.yaml` does not.
+- All data paths (`dataset.path`, `indexer.database_url`) point to external resources.
+- Every config value can be overridden with environment variables (e.g. `HARLE_DATASET_PATH`, `DATABASE_URL`, `OPENAI_API_KEY`).
+- Different users running the same Harle codebase simply have different `config.yaml` files pointing at their own vaults and databases.
 
 ---
 
@@ -687,10 +702,10 @@ All errors are logged in the Run Logger with full details for debugging.
 ## Project Structure (Python)
 
 ```
-harle-server/
+harle/                                 ← This repository (application code only)
 ├── pyproject.toml              # Dependencies and project metadata
 ├── Dockerfile                  # Container definition
-├── config.yaml                 # Service configuration
+├── config.example.yaml         # Configuration TEMPLATE (copy & customize per user)
 │
 ├── src/
 │   └── harle/

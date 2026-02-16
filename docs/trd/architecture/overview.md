@@ -42,6 +42,55 @@ The system consists of six main components connected in a pipeline. The diagram 
 
 ---
 
+## Key Architectural Principle: Data Lives Outside the Code Repository
+
+**This repository contains the Harle application — code, configuration templates, and documentation. It does not contain any user data.** All user-specific data is stored externally and referenced by configurable paths:
+
+| What | Where it lives | Why |
+|---|---|---|
+| **Application code** (orchestrator, CLI, tools) | This repository (`harle`) | Shared across all users. Version-controlled as software. |
+| **Architecture docs, config templates** | This repository (`harle`) | Describe and configure the system. Templates are copied and customized per deployment. |
+| **User Dataset** (Markdown vault) | Separate directory or Git repository (e.g. `~/harle-vault`) | Each user has their own rules, prompts, knowledge, and preferences. The vault is personal. |
+| **Database state** (PostgreSQL data) | External PostgreSQL instance (Docker volume, managed DB, etc.) | Run logs, memories, embeddings, and conversation history are per-user runtime state. |
+| **Runtime configuration** (`config.yaml`) | Outside the repo (e.g. `~/.config/harle/config.yaml`, Docker volume, or env vars) | Contains paths, secrets, and per-deployment settings. A `config.example.yaml` template is provided in the repo. |
+
+**Why this separation matters:**
+
+1. **Multi-user customization.** Different users clone or fork the same Harle repository and point it at their own vault and database. The code is identical; the data is personal.
+2. **Clean version control.** The application repository tracks code changes. User data (which changes constantly — new notes, new run logs, new memories) has its own versioning lifecycle (the vault's own Git repo).
+3. **Security.** Secrets, personal knowledge, and API keys never end up in the application repository — even accidentally.
+4. **Reproducibility.** A fresh clone of this repository is a working Harle installation once you provide a vault path, a database connection, and an API key. No data migration, no state cleanup.
+5. **Portability.** You can upgrade Harle (pull new code) without touching your data. You can migrate your data (move your vault to a new machine) without touching the code.
+
+**In practice, a Harle deployment looks like this:**
+
+```
+Your machine / server
+│
+├── ~/projects/harle/              ← This repository (application code)
+│   ├── src/harle/                 ← Python orchestrator
+│   ├── harle-cli/                 ← Go CLI
+│   ├── docs/                      ← Architecture docs
+│   ├── config.example.yaml        ← Template configuration
+│   └── docker-compose.yml         ← Deployment template
+│
+├── ~/harle-vault/                 ← User dataset (separate Git repo)
+│   ├── prompts/
+│   ├── policies/
+│   ├── knowledge/
+│   └── ...
+│
+├── ~/.config/harle/
+│   └── config.yaml                ← Runtime configuration (not in any repo)
+│
+└── /var/lib/postgresql/           ← Database storage (Docker volume or system)
+    └── harle/                     ← PostgreSQL data directory
+```
+
+This separation is enforced at every level: the `.gitignore` excludes data directories, the configuration uses external paths, and Docker Compose mounts data as volumes.
+
+---
+
 ## Component Details
 
 ### 1. Interface (CLI first)
@@ -369,28 +418,31 @@ SearXNG is a free, open-source meta search engine that you host yourself. It que
 
 **What it does:** This is your personal knowledge base — the collection of Markdown files, notes, rules, prompts, and documents that Harle operates over. It is the "ground truth" that agents refer to when making decisions.
 
-**Technology: Plain Markdown files in an [Obsidian](https://obsidian.md/)-style vault, synced via Git or [Syncthing](https://syncthing.net/)**
+**Critical: the dataset is NOT part of the Harle code repository.** It lives in its own directory (or its own Git repository) outside the application code. Harle reads the dataset path from configuration (`dataset.path` in `config.yaml` or the `HARLE_DATASET_PATH` environment variable). This means every user has their own vault with their own rules, prompts, and knowledge — while sharing the same Harle codebase.
+
+**Technology: Plain Markdown files in an [Obsidian](https://obsidian.md/)-style vault, stored in a separate Git repository or directory, synced via Git or [Syncthing](https://syncthing.net/)**
 
 **What is an Obsidian-style vault?**  
 It is simply a folder of Markdown files organized in directories. Obsidian is a popular note-taking app that uses this format, but you do not need Obsidian — any text editor works. The key idea is that your data is **plain files**, not locked inside a proprietary database.
 
 **Why Markdown files:**
 - **Human-readable.** You can open, read, and edit any file with any text editor. No special tools required.
-- **Version-controlled.** Put the vault in a Git repository and you get full history: who changed what, when, and why.
+- **Version-controlled.** Put the vault in its own Git repository and you get full history: who changed what, when, and why.
 - **Portable.** If Harle stops working tomorrow, your data is still usable. It is just text files.
 - **Searchable.** Both traditional search (grep, Whoosh) and AI-based search work well on Markdown.
 
-**Why Git for syncing:**
-- **You already use it.** As a developer, Git is already part of your workflow.
-- **Conflict resolution.** If you edit a file on one computer while Harle edits it on another, Git can show you the conflict and let you resolve it.
-- **History.** Every change is tracked, so you can always go back.
+**Why a separate Git repository for the vault (not the same repo as the code):**
+- **Different lifecycle.** Application code changes with features and bug fixes. Your vault changes every day as you add notes, update workflows, and agents write logs. These are independent versioning streams.
+- **Multi-user support.** The Harle code repo is shared (everyone runs the same application). Each user's vault is personal and private.
+- **Clean separation.** You can `git pull` a Harle update without merge conflicts against your personal notes. You can push your vault to a private Git remote without exposing the Harle codebase.
+- **Different access controls.** The code repo may be public or shared with collaborators. The vault contains personal and potentially sensitive data.
 
 **Alternative: Syncthing** for real-time sync without commits. Useful if you want automatic, seamless sync between two computers without thinking about Git operations.
 
 **Vault structure (recommended):**
 
 ```
-harle-vault/
+~/harle-vault/                    ← Separate directory or Git repo, NOT inside Harle code
 ├── prompts/              # Instructions for each agent role
 │   ├── researcher.md
 │   ├── secretary.md
@@ -432,6 +484,26 @@ Docker Compose lets you define multiple containers in one file and start them al
 - **Isolates dependencies.** Postgres runs in its own container. The orchestrator runs in its own. They do not interfere with each other.
 - **Standard in the industry.** Nearly every modern project uses Docker for deployment.
 
+**Data is mounted, not baked in.** Docker Compose uses volumes to mount external data into containers. The Harle code lives in the container image; the user's vault, database storage, and configuration are mounted from the host machine. This means the same Docker image works for any user — only the mounted volumes differ.
+
+```yaml
+# Simplified docker-compose.yml (conceptual)
+services:
+  orchestrator:
+    image: harle-orchestrator
+    volumes:
+      - ${HARLE_DATASET_PATH:-~/harle-vault}:/data/vault:ro    # User's vault (read-only)
+      - ${HARLE_CONFIG_PATH:-~/.config/harle}:/etc/harle:ro     # Runtime config
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://harle:***@db:5432/harle
+  db:
+    image: pgvector/pgvector:pg16
+    volumes:
+      - pgdata:/var/lib/postgresql/data    # Persistent DB storage
+volumes:
+  pgdata:
+```
+
 **Deployment options:**
 
 | Option | Cost | Always on? | Best for |
@@ -467,7 +539,7 @@ Tailscale creates a private network between your devices. Your Harle server, you
 | **Models** | OpenAI API (now), self-hosted (later) | Best quality today, clean migration path |
 | **Integrations** | MCP-compatible Python wrappers | Portable, standardized |
 | **Web Search** | Tavily or Bing API (now), SearXNG (later) | Fast to integrate, AI-optimized, low cost at personal scale |
-| **Data storage** | Markdown files in Git repo | Human-readable, version-controlled |
+| **Data storage** | Markdown files in a separate Git repo (external to this codebase) | Human-readable, version-controlled, per-user |
 | **Deployment** | Docker Compose | One command to start everything |
 | **Networking** | Tailscale | Private, secure, zero-config |
 | **Sync** | Git or Syncthing | Familiar, reliable, conflict-aware |
@@ -478,12 +550,13 @@ Tailscale creates a private network between your devices. Your Harle server, you
 
 Harle follows a "secure enough, not paranoid" philosophy:
 
-1. **Separate contexts.** Work and personal data live in separate directories (or database schemas) with different access rules.
-2. **Read-first, write-later.** All integrations start as read-only. Write access is enabled explicitly, per tool, with approval gates.
-3. **No secrets in the vault.** API keys and tokens live in environment variables or a secrets manager (e.g. Docker secrets), never in your Markdown files.
-4. **Private network only.** Harle is only accessible over Tailscale — no public ports, no public URLs.
-5. **Audit log.** Every agent run is logged: what was asked, what was decided, what tools were called, what was returned. This is how you build trust.
-6. **Propose-only mode.** Agents draft results and suggest actions. You approve before anything is executed — especially for work-related tasks.
+1. **Data never in the code repository.** User datasets, database state, and runtime configuration live outside the Harle application repo. The `.gitignore` enforces this. The code repo is safe to share or make public without leaking personal data.
+2. **Separate contexts.** Work and personal data live in separate directories (or database schemas) with different access rules.
+3. **Read-first, write-later.** All integrations start as read-only. Write access is enabled explicitly, per tool, with approval gates.
+4. **No secrets in the vault or the code repo.** API keys and tokens live in environment variables or a secrets manager (e.g. Docker secrets), never in Markdown files or committed configuration.
+5. **Private network only.** Harle is only accessible over Tailscale — no public ports, no public URLs.
+6. **Audit log.** Every agent run is logged: what was asked, what was decided, what tools were called, what was returned. This is how you build trust.
+7. **Propose-only mode.** Agents draft results and suggest actions. You approve before anything is executed — especially for work-related tasks.
 
 ---
 

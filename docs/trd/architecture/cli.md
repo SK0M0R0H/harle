@@ -642,6 +642,8 @@ Following platform conventions:
 
 **Config file structure:**
 
+This is a per-user configuration file. It lives on the user's machine (not in the Harle code repository) and is specific to their deployment — which server they connect to, their authentication token, and their preferences:
+
 ```yaml
 # Server connection
 server:
@@ -668,6 +670,8 @@ display:
   width: 0                           # 0 = auto-detect terminal width
   markdown: true                     # Render Markdown in responses
 ```
+
+Each user who installs the Harle CLI has their own config file. The Harle code repository does not contain any CLI configuration — only the CLI binary and its source code.
 
 **Environment variable overrides:**
 

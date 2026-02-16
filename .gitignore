@@ -10,3 +10,21 @@ harle-cli/.gomodcache/
 harle-cli/.gopath/
 harle-cli/harle
 
+# User data — NEVER committed to this repository
+# The vault, database, and runtime config are per-user and external
+harle-vault/
+data/
+vault/
+*.db
+*.sqlite
+*.sqlite3
+config.yaml
+config.yml
+!config.example.yaml
+!config.example.yml
+
+# Secrets
+.env
+.env.*
+!.env.example
+

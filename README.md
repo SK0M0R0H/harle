@@ -24,6 +24,11 @@ This prototype intentionally excludes:
 - `src/harle/orchestrator/` - simple orchestration service
 - `src/harle/llm/` - LLM provider interface + OpenAI/echo providers
 
+User data (NOT in this repository — configured via `HARLE_DATASET_PATH` or `config.yaml`):
+
+- `~/harle-vault/` - Markdown files: prompts, policies, workflows, knowledge base
+- PostgreSQL instance - run logs, memories, search index, conversation history
+
 ## Quick start
 
 1. Create Python env and install orchestrator:

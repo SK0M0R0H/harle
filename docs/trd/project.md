@@ -7,6 +7,7 @@ Requirements:
 * Prompts and rules live in Markdown, ideally in an Obsidian style vault, so you can edit, version, and
 search them.
 * Whole dataset is human-friendly to update it (directories, readable files, etc.)
+* **Data (user dataset, DB state) lives outside the code repository.** The repo is the application — customizable for different users. Each user points it at their own vault and database via configuration.
 * On top of the dataset there's a database which may duplicate some dataset information for better search.
 * Integrations with Notion, Trello, GitHub, and room for more later.
 * Start on hosted LLMs, for example OpenAI, later switch to open-source models with minimal
@@ -18,6 +19,7 @@ refactors.
 database.
 * Future friendly, you may add cross-agent communication and payments, including x402.
 * Chat mode (like chatgpt)
+* **Multi-user customizable.** Different users share the same codebase, with all personalization via external configuration and data.
 
 List of potential actions for Harle:
 * Protocol design

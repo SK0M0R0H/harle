@@ -9,6 +9,26 @@ For the Orchestrator (which consumes data from this layer), see [orchestrator.md
 
 ---
 
+## Fundamental Principle: Data Is External to the Code Repository
+
+**All data — the User Dataset, the PostgreSQL database state, and runtime configuration — lives outside the Harle application repository.** This repository contains the application code, documentation, and configuration templates. It never contains user-specific data.
+
+This separation is foundational, not optional:
+
+- **The User Dataset (vault)** is a separate directory or Git repository on disk (e.g. `~/harle-vault`). The Orchestrator reads its location from `config.yaml` (`dataset.path`) or the `HARLE_DATASET_PATH` environment variable.
+- **The PostgreSQL database** runs as a separate service (Docker container, managed instance, or system install). Its data directory is a Docker volume or a system path — never inside this repository.
+- **Runtime configuration** (`config.yaml` with actual paths, secrets, and per-deployment settings) lives outside the repo (e.g. `~/.config/harle/config.yaml`). The repository provides only a `config.example.yaml` template.
+
+**Why:**
+1. **Multi-user support.** Different users share the same Harle codebase but each has their own vault, database, and config. A user clones this repo, creates their own vault, and runs Harle — no fork needed for customization.
+2. **Clean versioning.** Code changes (features, fixes) and data changes (new notes, run logs) are independent version histories. They never create merge conflicts with each other.
+3. **Safety.** Personal data, API keys, and private knowledge never risk being committed to the application repository — even by mistake.
+4. **Upgradeability.** Pulling a Harle update (`git pull`) never touches your data. Moving your vault to a new machine never touches the code.
+
+For the full explanation of this principle, see the "Key Architectural Principle" section in [overview.md](./overview.md).
+
+---
+
 ## Where the Data Layer Sits
 
 ```
@@ -80,7 +100,9 @@ The User Dataset is a directory of plain files — primarily Markdown — organi
 
 Think of it as your personal Wikipedia, but private and editable.
 
-### Technology: Markdown files in a Git repository
+### Technology: Markdown files in a separate Git repository (not the Harle code repo)
+
+The vault is its own Git repository, completely independent from the Harle application repository. This is a deliberate design decision — see "Fundamental Principle" above.
 
 **Why Markdown:**
 - **Human-readable.** Open any file in any text editor and it makes sense. No special viewer needed.
@@ -88,10 +110,13 @@ Think of it as your personal Wikipedia, but private and editable.
 - **Structured enough.** Markdown supports headers, lists, tables, links, and code blocks — enough structure for search and parsing, but not so rigid that it becomes annoying to write.
 - **Universal.** Markdown is supported by Obsidian, Notion (export), GitHub, VS Code, Cursor, and hundreds of other tools.
 
-**Why Git for versioning and syncing:**
+**Why its own Git repository (separate from the Harle code):**
+- **Different lifecycle.** Application code changes with features and bug fixes. Your vault changes daily as you add notes, agents write logs, and preferences evolve. These are independent versioning streams.
+- **Multi-user support.** Two users running the same Harle codebase have completely different vaults. The vault is personal; the code is shared.
 - **Full history.** Every change to every file is tracked — who changed it, when, and what exactly changed. If an agent modifies a file badly, you can revert.
 - **Two-computer sync.** Push from one machine, pull on the other. The dataset stays consistent.
 - **Conflict detection.** If you edit a file on your laptop while an agent edits it on the server, Git shows the conflict instead of silently overwriting.
+- **Different access controls.** The code repo may be public. The vault is private and contains personal data.
 - **Branching (future).** Agents could work on a branch and you merge their changes after review — like a code review, but for your knowledge base.
 
 ### Dataset structure
@@ -99,7 +124,7 @@ Think of it as your personal Wikipedia, but private and editable.
 The dataset has a specific directory layout. Each directory has a purpose, and agents know where to look for different types of content.
 
 ```
-harle-vault/
+~/harle-vault/                         ← Separate Git repo, NOT inside the Harle code repo
 │
 ├── prompts/                    # Agent role definitions
 │   ├── researcher.md           #   How the Researcher agent should behave
@@ -212,18 +237,22 @@ Agent wants to write a file
 
 The dataset must be accessible from both the server (where the Orchestrator runs) and your computers (where you edit files).
 
-**Primary method: Git**
+**Primary method: Git (the vault has its own Git remote, separate from the Harle code repo)**
 
 ```
-Your laptop           Git remote             Server
-    │                 (GitHub/Gitea)             │
-    │  git push ──────────>│                     │
-    │                      │<──── git pull ──────│
-    │                      │                     │
-    │  You edit files      │     Orchestrator    │
-    │  and push            │     pulls latest    │
-    │                      │     on startup and  │
-    │                      │     periodically    │
+Your laptop           Vault Git remote         Server
+    │                 (private GitHub/Gitea)        │
+    │  git push ──────────>│                        │
+    │                      │<──── git pull ─────────│
+    │                      │                        │
+    │  You edit files      │     Orchestrator reads │
+    │  in ~/harle-vault/   │     vault from the     │
+    │  and push            │     configured path    │
+    │                      │     (dataset.path)     │
+
+Note: The Harle code repo and the vault repo are completely
+independent. They have different remotes, different commit
+histories, and different access controls.
 ```
 
 The server pulls the latest dataset on startup and at regular intervals (e.g. every 5 minutes), or on demand when a request comes in and the dataset is stale.
@@ -241,6 +270,8 @@ The Indexer is a PostgreSQL database that stores structured, queryable data abou
 Think of it this way: the User Dataset is a library of books. The Indexer is the library's catalog system — it tells you which books exist, what they are about, when they were last checked out, and where to find them.
 
 ### Technology: [PostgreSQL](https://www.postgresql.org/) 16+ with [pgvector](https://github.com/pgvector/pgvector)
+
+**The database runs as a separate service, external to the Harle code repository.** In development, it runs as a Docker container with a named volume for persistence. In production, it can be a managed PostgreSQL instance or a system-installed Postgres. The connection URL is configured via `config.yaml` (`indexer.database_url`) or the `DATABASE_URL` environment variable. Database state (tables, data, indices) is per-user runtime data — it is never committed to the code repository.
 
 ### Database schema
 
@@ -732,11 +763,13 @@ Here is the full data flow when the Orchestrator handles a request:
 
 ## Configuration
 
-Data layer configuration lives in the Orchestrator's `config.yaml`:
+Data layer configuration lives in the Orchestrator's `config.yaml`, which is **external to the code repository**. The Harle repo provides a `config.example.yaml` template that users copy and customize for their deployment.
+
+Every path and connection string points to external resources — nothing references locations inside the Harle code repository:
 
 ```yaml
 dataset:
-  path: "/data/harle-vault"            # Path to the vault directory
+  path: "/home/user/harle-vault"       # Path to the vault directory (EXTERNAL)
   sync_interval_seconds: 300           # Re-sync every 5 minutes
   sync_on_request: true                # Also check for changes before each request
   file_extensions: [".md", ".txt"]     # File types to index
@@ -750,11 +783,20 @@ search:
   min_score: 0.1                       # Minimum relevance score to include
 
 indexer:
-  database_url: "postgresql+asyncpg://harle:***@localhost:5432/harle"
+  database_url: "postgresql+asyncpg://harle:***@localhost:5432/harle"  # External DB
   summary_model: "gpt-4o-mini"         # Model used for auto-generating summaries
   auto_summarize: true                 # Generate summaries for new files
   embedding_model: "text-embedding-3-small"  # For future semantic search
 ```
+
+**Environment variable overrides** (useful for Docker and CI):
+
+| Config key | Environment variable | Example |
+|---|---|---|
+| `dataset.path` | `HARLE_DATASET_PATH` | `/data/vault` |
+| `indexer.database_url` | `DATABASE_URL` | `postgresql+asyncpg://harle:pass@db:5432/harle` |
+
+All data paths are user-configurable. Two users running the same Harle codebase simply point `dataset.path` at their own vaults and `database_url` at their own databases.
 
 ---
 
@@ -770,12 +812,12 @@ indexer:
 
 ---
 
-## Project Structure (Python, inside harle-server)
+## Project Structure (Python, inside the Harle code repository)
 
-The Data Layer modules live inside the Orchestrator's Python project:
+The Data Layer **code** (readers, writers, search engine, indexer) lives inside the Orchestrator's Python project in the Harle code repository. The **data** it operates on (vault files, database rows) is external.
 
 ```
-harle-server/src/harle/
+harle/src/harle/              ← Code (in this repository)
 │
 ├── dataset/                     # User Dataset interface
 │   ├── reader.py               # Read files, parse frontmatter, load content

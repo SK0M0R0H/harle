@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 
 from harle.api.models import RunRequest, RunResponse
-from harle.config import Settings
+from harle.config import PROVIDER_OPENAI, Settings
 from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
 
 
@@ -38,7 +38,7 @@ def build_orchestrator(*, settings: Settings) -> OrchestratorService:
     """Build a runtime orchestrator with provider fallback."""
     provider_name = settings.llm_provider.lower()
 
-    if provider_name == "openai" and settings.openai_api_key:
+    if provider_name == PROVIDER_OPENAI and settings.openai_api_key:
         provider: LLMProvider = OpenAIProvider(
             model=settings.llm_model,
             api_key=settings.openai_api_key,
