@@ -23,5 +23,5 @@ def create_app() -> FastAPI:
 def run() -> None:
     """Run the orchestrator HTTP service."""
     settings = load_settings()
-    uvicorn.run("harle.main:create_app", host=settings.host, port=settings.port, factory=True)
+    uvicorn.run("harle.main:create_app", host=settings.HARLE_HOST, port=settings.HARLE_PORT, factory=True)
 

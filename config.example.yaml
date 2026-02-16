@@ -1,0 +1,25 @@
+# Harle configuration file.
+#
+# Copy this file to "config.yaml" (which is git-ignored) and adjust
+# values for your local environment.  Every key is optional — missing
+# keys fall back to the same-named environment variable and then to
+# built-in defaults.
+#
+# Keys use the exact same names as the corresponding environment
+# variables — one canonical name everywhere.
+#
+# You can also override the config file path with the HARLE_CONFIG_PATH
+# environment variable.
+
+# --- Server ---
+HARLE_HOST: "127.0.0.1"
+HARLE_PORT: 8000
+
+# --- LLM ---
+HARLE_LLM_PROVIDER: "openai"
+HARLE_LLM_MODEL: "gpt-4o-mini"
+# OPENAI_API_KEY: "sk-..."   # prefer env var for secrets
+
+# --- External data (per-user, never committed) ---
+# HARLE_DATASET_PATH: "/path/to/harle-vault"
+# DATABASE_URL: "sqlite:///harle.db"

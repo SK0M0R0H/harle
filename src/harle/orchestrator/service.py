@@ -36,12 +36,12 @@ class OrchestratorService:
 
 def build_orchestrator(*, settings: Settings) -> OrchestratorService:
     """Build a runtime orchestrator with provider fallback."""
-    provider_name = settings.llm_provider.lower()
+    provider_name = settings.HARLE_LLM_PROVIDER.lower()
 
-    if provider_name == PROVIDER_OPENAI and settings.openai_api_key:
+    if provider_name == PROVIDER_OPENAI and settings.OPENAI_API_KEY:
         provider: LLMProvider = OpenAIProvider(
-            model=settings.llm_model,
-            api_key=settings.openai_api_key,
+            model=settings.HARLE_LLM_MODEL,
+            api_key=settings.OPENAI_API_KEY,
         )
         return OrchestratorService(llm_provider=provider)
 
