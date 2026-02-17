@@ -126,13 +126,13 @@ HARLE_HOST: "127.0.0.1"
 HARLE_PORT: 8000
 HARLE_LLM_PROVIDER: "openai"
 HARLE_LLM_MODEL: "gpt-4o-mini"
-# OPENAI_API_KEY: "sk-..."          # or set as env var
 
 HARLE_DATASET_PATH: "/home/you/harle-vault"
 DATABASE_URL: "postgresql+psycopg2://harle:harle@localhost:5432/harle"
 ```
 
-If `OPENAI_API_KEY` is not set, the app uses a local echo provider so you can still test the end-to-end flow.
+Set `OPENAI_API_KEY` as an environment variable (e.g. `export OPENAI_API_KEY="sk-..."`).
+If the variable is not set, the app uses a local echo provider so you can still test the end-to-end flow.
 
 ### 4. Initialise the data layer
 

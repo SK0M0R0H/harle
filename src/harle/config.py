@@ -44,7 +44,6 @@ class Settings:
     HARLE_PORT: int = 8000
     HARLE_LLM_PROVIDER: str = PROVIDER_OPENAI
     HARLE_LLM_MODEL: str = "gpt-4o-mini"
-    OPENAI_API_KEY: str | None = None
 
     # External data paths — configured per user, never inside this repo
     HARLE_DATASET_PATH: str | None = None

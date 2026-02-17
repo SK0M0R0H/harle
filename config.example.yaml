@@ -18,7 +18,7 @@ HARLE_PORT: 8000
 # --- LLM ---
 HARLE_LLM_PROVIDER: "openai"
 HARLE_LLM_MODEL: "gpt-4o-mini"
-# OPENAI_API_KEY: "sk-..."   # prefer env var for secrets
+# OPENAI_API_KEY — read exclusively from the environment variable; never put it in this file.
 
 # --- External data (per-user, never committed) ---
 # HARLE_DATASET_PATH: "/path/to/harle-vault"

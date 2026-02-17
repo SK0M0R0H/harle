@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass
 
@@ -37,11 +38,12 @@ class OrchestratorService:
 def build_orchestrator(*, settings: Settings) -> OrchestratorService:
     """Build a runtime orchestrator with provider fallback."""
     provider_name = settings.HARLE_LLM_PROVIDER.lower()
+    openai_api_key = os.getenv("OPENAI_API_KEY")
 
-    if provider_name == PROVIDER_OPENAI and settings.OPENAI_API_KEY:
+    if provider_name == PROVIDER_OPENAI and openai_api_key:
         provider: LLMProvider = OpenAIProvider(
             model=settings.HARLE_LLM_MODEL,
-            api_key=settings.OPENAI_API_KEY,
+            api_key=openai_api_key,
         )
         return OrchestratorService(llm_provider=provider)
 

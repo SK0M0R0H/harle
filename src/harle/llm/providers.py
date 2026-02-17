@@ -45,6 +45,6 @@ class EchoProvider:
 
     def generate(self, *, prompt: str, context: str, conversation_id: str | None) -> str:
         """Return a deterministic placeholder response."""
-        prefix = "[echo provider] No OPENAI_API_KEY configured."
+        prefix = "[echo provider] OPENAI_API_KEY environment variable not set."
         return f"{prefix}\ncontext={context}\nmessage={prompt}"
 
