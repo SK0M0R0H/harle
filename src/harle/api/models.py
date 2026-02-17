@@ -49,6 +49,15 @@ class InitResponse(BaseModel):
     dataset_path: str
 
 
+class ReindexResponse(BaseModel):
+    """Response from the ``/reindex`` endpoint."""
+
+    status: str
+    files_indexed: int
+    total_files: int
+    dataset_path: str
+
+
 class SearchResultItem(BaseModel):
     """A single search result."""
 

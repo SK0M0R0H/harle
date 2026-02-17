@@ -57,34 +57,34 @@ class SearchEngine:
         with self.db.session() as session:
             candidates = get_all_entries(session, context=query.context)
 
-        results: list[SearchResult] = []
-        for candidate in candidates:
-            file_path = self.dataset_path / candidate.file_path
-            if not file_path.exists():
-                continue
+            results: list[SearchResult] = []
+            for candidate in candidates:
+                file_path = self.dataset_path / candidate.file_path
+                if not file_path.exists():
+                    continue
 
-            try:
-                content = file_path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue
+                try:
+                    content = file_path.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    continue
 
-            score = _compute_score(
-                terms=terms,
-                title=candidate.title or "",
-                tags=candidate.tags or [],
-                content=content,
-            )
-            if score > 0:
-                results.append(
-                    SearchResult(
-                        file_path=candidate.file_path,
-                        title=candidate.title or candidate.file_path,
-                        score=score,
-                        context=candidate.context,
-                        tags=candidate.tags or [],
-                        snippet=_extract_snippet(content, terms),
-                    )
+                score = _compute_score(
+                    terms=terms,
+                    title=candidate.title or "",
+                    tags=candidate.tags or [],
+                    content=content,
                 )
+                if score > 0:
+                    results.append(
+                        SearchResult(
+                            file_path=candidate.file_path,
+                            title=candidate.title or candidate.file_path,
+                            score=score,
+                            context=candidate.context,
+                            tags=candidate.tags or [],
+                            snippet=_extract_snippet(content, terms),
+                        )
+                    )
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results[: query.max_results]

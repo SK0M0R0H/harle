@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 harle-server = "harle.main:run"
 harle-init = "harle.bootstrap:run_init"
+harle-reindex = "harle.bootstrap:run_reindex"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

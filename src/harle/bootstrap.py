@@ -342,6 +342,31 @@ def init_system(db: Database, dataset_path: str) -> dict[str, object]:
     }
 
 
+def reindex_dataset(db: Database, dataset_path: str) -> dict[str, object]:
+    """Re-index all dataset files without seeding or recreating tables.
+
+    A lightweight alternative to :func:`init_system` for when new files
+    have been added to the vault and just need to be picked up.
+
+    Args:
+        db: Initialised :class:`Database` instance.
+        dataset_path: Absolute path to the vault root.
+
+    Returns:
+        Summary dict with the number of index changes and total files.
+    """
+    reader = DatasetReader(dataset_path)
+    indexer = Indexer(db, reader)
+    changes = indexer.sync()
+    total_files = len(reader.list_files())
+
+    return {
+        "files_indexed": changes,
+        "total_files": total_files,
+        "dataset_path": dataset_path,
+    }
+
+
 def run_init() -> None:
     """Standalone CLI entry-point for ``harle-init``.
 
@@ -370,6 +395,38 @@ def run_init() -> None:
     logger.info("Initialisation complete.")
     logger.info("  Tables created: %s", result["tables_created"])
     logger.info("  Seed files written: %s", result["files_seeded"])
+    logger.info("  Files indexed: %s", result["files_indexed"])
+    logger.info("  Total files in dataset: %s", result["total_files"])
+    logger.info("  Dataset path: %s", result["dataset_path"])
+
+
+def run_reindex() -> None:
+    """Standalone CLI entry-point for ``harle-reindex``.
+
+    Reads settings from config and re-indexes the dataset without
+    seeding or recreating tables.  Exits with code 1 on configuration
+    errors.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    from harle.config import load_settings
+
+    settings = load_settings()
+
+    if not settings.DATABASE_URL:
+        logger.error("DATABASE_URL is not configured. Set it in config.yaml or as an env var.")
+        sys.exit(1)
+
+    if not settings.HARLE_DATASET_PATH:
+        logger.error(
+            "HARLE_DATASET_PATH is not configured. Set it in config.yaml or as an env var."
+        )
+        sys.exit(1)
+
+    db = Database(settings.DATABASE_URL)
+    result = reindex_dataset(db, settings.HARLE_DATASET_PATH)
+
+    logger.info("Re-index complete.")
     logger.info("  Files indexed: %s", result["files_indexed"])
     logger.info("  Total files in dataset: %s", result["total_files"])
     logger.info("  Dataset path: %s", result["dataset_path"])

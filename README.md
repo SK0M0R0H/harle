@@ -156,7 +156,19 @@ Both options do the same thing:
 2. Write starter files to your vault (prompts, policies, examples)
 3. Index every `.md` file into the `file_index` table
 
-### 5. Start the server and use the CLI
+### 5. Re-index after adding files
+
+When you add new Markdown files to the vault, re-index so they become searchable:
+
+```bash
+# Standalone (no server needed)
+harle-reindex
+
+# Or via the API (server must be running)
+curl -X POST http://127.0.0.1:8000/reindex
+```
+
+### 6. Start the server and use the CLI
 
 ```bash
 harle-server
@@ -175,7 +187,7 @@ go build -o bin/harle ./cmd/harle
 ./bin/harle --context work
 ```
 
-### 6. Try the search API
+### 7. Try the search API
 
 With the server running:
 
@@ -196,4 +208,5 @@ curl "http://127.0.0.1:8000/search?q=researcher+agent&context=global"
 | `GET` | `/health` | Health check |
 | `POST` | `/run` | Send a message to the orchestrator |
 | `POST` | `/init` | Create tables, seed dataset, run indexing |
+| `POST` | `/reindex` | Re-index dataset files (no seeding or table creation) |
 | `GET` | `/search?q=...` | Search the indexed dataset |

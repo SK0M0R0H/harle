@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from harle.api.models import (
     HealthResponse,
     InitResponse,
+    ReindexResponse,
     RunRequest,
     RunResponse,
     SearchResponse,
@@ -68,6 +69,30 @@ def build_router(
             status="initialized",
             tables_created=result["tables_created"],  # type: ignore[arg-type]
             files_seeded=result["files_seeded"],  # type: ignore[arg-type]
+            files_indexed=result["files_indexed"],  # type: ignore[arg-type]
+            total_files=result["total_files"],  # type: ignore[arg-type]
+            dataset_path=result["dataset_path"],  # type: ignore[arg-type]
+        )
+
+    @router.post("/reindex", response_model=ReindexResponse)
+    def reindex() -> ReindexResponse:
+        """Re-index dataset files without seeding or recreating tables."""
+        if db is None or settings is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Database is not configured. Set DATABASE_URL in config.",
+            )
+        if not settings.HARLE_DATASET_PATH:
+            raise HTTPException(
+                status_code=503,
+                detail="Dataset path is not configured. Set HARLE_DATASET_PATH in config.",
+            )
+
+        from harle.bootstrap import reindex_dataset
+
+        result = reindex_dataset(db, settings.HARLE_DATASET_PATH)
+        return ReindexResponse(
+            status="reindexed",
             files_indexed=result["files_indexed"],  # type: ignore[arg-type]
             total_files=result["total_files"],  # type: ignore[arg-type]
             dataset_path=result["dataset_path"],  # type: ignore[arg-type]
