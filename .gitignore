@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.egg-info/
 src/*.egg-info/
+build/
+dist/
+.pytest_cache/
 
 harle-cli/bin/
 harle-cli/.gocache/

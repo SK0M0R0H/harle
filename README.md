@@ -196,6 +196,44 @@ curl "http://127.0.0.1:8000/search?q=privacy"
 curl "http://127.0.0.1:8000/search?q=researcher+agent&context=global"
 ```
 
+## Running tests
+
+The project uses **pytest** for unit testing. Tests cover configuration, frontmatter parsing, dataset reader, content hashing, search scoring, Pydantic models, LLM providers, orchestrator logic, and API endpoints. No external services (PostgreSQL, OpenAI) are required — all tests run with in-memory fixtures and the echo provider.
+
+```bash
+# Install test dependencies (once)
+source .venv/bin/activate
+pip install ".[test]"
+
+# Run all tests
+python -m pytest
+
+# Verbose output with test names
+python -m pytest -v
+
+# Run a specific test file
+python -m pytest tests/test_search_engine.py
+
+# Run a specific test class or method
+python -m pytest tests/test_reader.py::TestDatasetReader::test_read_all
+```
+
+Test structure:
+
+```
+tests/
+  conftest.py              # Shared fixtures (temporary dataset directory)
+  test_config.py           # Settings, _coerce, _load_yaml, load_settings
+  test_frontmatter.py      # YAML frontmatter parser
+  test_reader.py           # DatasetReader (list, read, edge cases)
+  test_hasher.py           # SHA-256 content hashing
+  test_search_engine.py    # Tokenizer, scorer, snippet extraction
+  test_models.py           # Pydantic request/response validation
+  test_providers.py        # EchoProvider
+  test_orchestrator.py     # OrchestratorService, build_orchestrator
+  test_api.py              # FastAPI routes via TestClient
+```
+
 ## Session commands
 
 - `/help` — list available commands

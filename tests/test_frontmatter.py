@@ -1,0 +1,90 @@
+"""Tests for harle.dataset.frontmatter — YAML frontmatter parser."""
+
+from __future__ import annotations
+
+from textwrap import dedent
+
+from harle.dataset.frontmatter import parse_frontmatter
+
+
+class TestParseFrontmatter:
+    def test_valid_frontmatter(self) -> None:
+        content = dedent("""\
+            ---
+            title: My Note
+            tags:
+              - python
+              - testing
+            context: work
+            ---
+            Body content here.
+        """)
+        meta, body = parse_frontmatter(content)
+        assert meta["title"] == "My Note"
+        assert meta["tags"] == ["python", "testing"]
+        assert meta["context"] == "work"
+        assert body == "Body content here."
+
+    def test_no_frontmatter(self) -> None:
+        content = "# Just a heading\n\nSome text.\n"
+        meta, body = parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_unclosed_frontmatter(self) -> None:
+        content = "---\ntitle: Oops\nNo closing fence\n"
+        meta, body = parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_empty_frontmatter(self) -> None:
+        content = "---\n---\nBody after empty frontmatter.\n"
+        meta, body = parse_frontmatter(content)
+        # yaml.safe_load("") returns None, not a dict
+        assert meta == {}
+        assert body == content
+
+    def test_frontmatter_with_only_title(self) -> None:
+        content = "---\ntitle: Solo\n---\nText.\n"
+        meta, body = parse_frontmatter(content)
+        assert meta == {"title": "Solo"}
+        assert body == "Text."
+
+    def test_invalid_yaml_in_frontmatter(self) -> None:
+        content = "---\n: invalid: yaml: here\n---\nBody.\n"
+        meta, body = parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_non_dict_frontmatter(self) -> None:
+        content = "---\n- item1\n- item2\n---\nBody.\n"
+        meta, body = parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_multiline_body(self) -> None:
+        content = dedent("""\
+            ---
+            title: Multi
+            ---
+            Line one.
+
+            Line two.
+
+            Line three.
+        """)
+        meta, body = parse_frontmatter(content)
+        assert meta["title"] == "Multi"
+        assert "Line one." in body
+        assert "Line three." in body
+
+    def test_content_not_starting_with_dashes(self) -> None:
+        content = "No dashes at start.\n---\nThis is not frontmatter.\n"
+        meta, body = parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
+
+    def test_empty_content(self) -> None:
+        meta, body = parse_frontmatter("")
+        assert meta == {}
+        assert body == ""
