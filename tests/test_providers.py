@@ -49,3 +49,26 @@ class TestEchoProvider:
         # Both contain same prompt/context info
         assert "message=hi" in r1
         assert "message=hi" in r2
+
+    def test_system_prompt_ignored(self) -> None:
+        """EchoProvider accepts but ignores the system_prompt parameter."""
+        provider = EchoProvider()
+        result = provider.generate(
+            prompt="hi",
+            context="work",
+            conversation_id=None,
+            system_prompt="Custom system prompt",
+        )
+        assert "message=hi" in result
+        assert "context=work" in result
+
+    def test_system_prompt_defaults_to_none(self) -> None:
+        """Calling without system_prompt still works (backward compat)."""
+        provider = EchoProvider()
+        result = provider.generate(
+            prompt="hello",
+            context="personal",
+            conversation_id=None,
+        )
+        assert isinstance(result, str)
+        assert "hello" in result
