@@ -1,3 +1,11 @@
+---
+title: "Harle Current Development Goal"
+tags: [goal, roadmap, researcher, secretary, specialist, roles]
+context: global
+last_updated: 2026-02-19
+summary: "Defines the current big goal: implementing three agent use-cases — Researcher, Secretary, and Specialist."
+---
+
 # Big goal
 Implement three types of use-cases for Harle:
 1. Researcher for the company: uses company-related materials from dataset, does a lot of internet search, returns files as a result. 

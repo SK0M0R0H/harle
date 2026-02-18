@@ -1,0 +1,50 @@
+---
+description: Require YAML frontmatter on every new .md file created inside docs/
+globs: docs/**/*.md
+alwaysApply: false
+---
+
+# Markdown Frontmatter for docs/
+
+Every new `.md` file created inside `docs/` must start with YAML frontmatter following the Harle vault convention defined in `docs/trd/architecture/data.md`.
+
+## Required format
+
+```yaml
+---
+title: "Descriptive title with key terms"
+tags: [lowercase, hyphenated-multi-word, tags]
+context: global
+last_updated: YYYY-MM-DD
+summary: "One-sentence description of what this document covers."
+---
+```
+
+## Field rules
+
+- **title** — matches the document's H1 heading or describes its content.
+- **tags** — 3–7 lowercase, hyphenated tags. Include at least one domain tag and one action/type tag. Use the existing tag vocabulary in the project when possible.
+- **context** — use `global` for project documentation in `docs/`.
+- **last_updated** — set to the current date when creating or modifying the file.
+- **summary** — a single sentence describing the document's purpose. Keep it under 200 characters.
+
+## Tag style
+
+- Lowercase only, hyphenate multi-word tags: `data-layer`, not `DataLayer`.
+- Prefer specific terms over generic ones: `postgresql` over `database`.
+
+## Example
+
+```markdown
+---
+title: "Harle Orchestrator — Architecture & Functionality"
+tags: [orchestrator, architecture, fastapi, agents, routing, context-assembly, tools]
+context: global
+last_updated: 2026-02-19
+summary: "Describes the Orchestrator's internal modules, request lifecycle, conversation mode, and technology choices."
+---
+
+# Harle Orchestrator — Architecture & Functionality
+
+> The Orchestrator is the central component of Harle...
+```

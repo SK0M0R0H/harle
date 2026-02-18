@@ -1,3 +1,11 @@
+---
+title: "Harle Project Description"
+tags: [project, requirements, overview, roles, functionality]
+context: global
+last_updated: 2026-02-19
+summary: "High-level description of Harle's purpose, requirements, potential actions, required functionality, and agent roles."
+---
+
 Harle is a system that feels like a small team of reliable assistants, but with your rules, your
 integrations, and a memory you control.
 The basic idea is create an AI orchestration which operates other huge personal dataset.

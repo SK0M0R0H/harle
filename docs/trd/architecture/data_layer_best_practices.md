@@ -1,3 +1,11 @@
+---
+title: "Data Layer Best Practices for Harle"
+tags: [data-layer, best-practices, retrieval, chunking, search, memory, metadata, research]
+context: global
+last_updated: 2026-02-19
+summary: "Research-backed guide to structuring, storing, indexing, and retrieving personal knowledge so that LLM agents produce consistently relevant results."
+---
+
 # Data Layer Best Practices for Harle
 
 ## What We Know That Can Help Harle Be Actually Useful on Big Personal Datasets

@@ -1,3 +1,11 @@
+---
+title: "Harle Orchestrator — Architecture & Functionality"
+tags: [orchestrator, architecture, fastapi, agents, routing, context-assembly, tools]
+context: global
+last_updated: 2026-02-19
+summary: "Describes the Orchestrator's internal modules, request lifecycle, conversation mode, and technology choices for Harle's central coordination component."
+---
+
 # Harle Orchestrator — Architecture & Functionality
 
 > The Orchestrator is the central component of Harle. It receives every request, decides what to do, coordinates all other components, and returns the result. Everything flows through it.

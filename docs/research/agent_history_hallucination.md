@@ -1,3 +1,11 @@
+---
+title: "Do AI Agents Hallucinate When Their History Grows Large?"
+tags: [research, hallucination, memory, context-window, attention, mitigation]
+context: global
+last_updated: 2026-02-19
+summary: "Research survey on context-induced hallucination in long-running AI agent systems, covering root causes, mitigation strategies, and implications for Harle's architecture."
+---
+
 # Do AI Agents Hallucinate When Their History Grows Large?
 
 ## A Research Survey on Context-Induced Hallucination in Long-Running AI Agent Systems

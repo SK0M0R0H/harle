@@ -1,3 +1,11 @@
+---
+title: "Harle Architecture Description"
+tags: [architecture, overview, components, deployment, infrastructure, technology-stack]
+context: global
+last_updated: 2026-02-19
+summary: "Describes the overall architecture of Harle, its six main components, technology choices, deployment strategy, and security approach."
+---
+
 # Harle Architecture Description
 
 > Harle is a personal AI assistant system that feels like a small team of reliable assistants, operating over your own data with your rules, your integrations, and a memory you control.

@@ -1,3 +1,11 @@
+---
+title: "Harle Data Layer — Architecture & Functionality"
+tags: [data-layer, architecture, dataset, indexer, search, postgresql, whoosh]
+context: global
+last_updated: 2026-02-19
+summary: "Describes the three data components — User Dataset, Indexer, and Search Algorithm — their internal architecture, interactions, and technology choices."
+---
+
 # Harle Data Layer — Architecture & Functionality
 
 > The Data Layer is everything that stores, indexes, and retrieves information in Harle. It is the reason Harle can be personalized — without it, the system would be a generic chatbot with no memory, no context, and no knowledge of your rules.

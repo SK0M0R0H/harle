@@ -1,3 +1,11 @@
+---
+title: "Harle CLI — Architecture & Functionality"
+tags: [cli, architecture, go, session, interface, cobra, bubbletea]
+context: global
+last_updated: 2026-02-19
+summary: "Describes the CLI's session-first interaction model, internal modules, technology choices, and project structure for Harle's primary user interface."
+---
+
 # Harle CLI — Architecture & Functionality
 
 > The CLI is Harle's primary user interface — a session-based terminal application that connects to the Orchestrator. You launch it, you are in a session, and you stay there until you explicitly quit — like a Python shell, `psql`, or `node` REPL.

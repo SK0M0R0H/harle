@@ -1,3 +1,11 @@
+---
+title: "The Four Challenges"
+tags: [challenges, search, hallucination, cold-start, security, architecture]
+context: global
+last_updated: 2026-02-19
+summary: "Describes the four hardest problems Harle must solve: data retrieval accuracy, hallucination from accumulated history, cold start dataset creation, and security from both agent and external threats."
+---
+
 # The Four Challenges
 
 A truly personal AI assistant does not exist yet. Not one that remembers your decisions from three months ago, respects the boundary between your work and personal life, and improves the more you use it — without slowly going insane from its own accumulated history. Harle is being built to be that assistant. These are the four hardest problems standing in the way.
