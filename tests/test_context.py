@@ -747,6 +747,137 @@ class TestLoadFileContent:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ContextAssembler — P4 conversation history
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestAssembleP4ConversationHistory:
+    """P4 loading: conversation history as background context."""
+
+    def test_no_history_returns_zero_messages(self) -> None:
+        asm = ContextAssembler()
+        pkg = asm.assemble(message="hi", context="work")
+        assert pkg.conversation_messages_included == 0
+
+    def test_none_history_same_as_empty(self) -> None:
+        asm = ContextAssembler()
+        pkg = asm.assemble(
+            message="hi", context="work", conversation_history=None
+        )
+        assert pkg.conversation_messages_included == 0
+        assert "Conversation History" not in pkg.system_prompt
+
+    def test_history_appears_in_prompt(self) -> None:
+        history = [
+            {"role": "user", "content": "What is Harle?"},
+            {"role": "assistant", "content": "Harle is a personal AI assistant."},
+        ]
+        asm = ContextAssembler()
+        pkg = asm.assemble(
+            message="Tell me more", context="work", conversation_history=history
+        )
+        assert "Conversation History" in pkg.system_prompt
+        assert "What is Harle?" in pkg.system_prompt
+        assert "Harle is a personal AI assistant." in pkg.system_prompt
+        assert pkg.conversation_messages_included == 2
+
+    def test_history_tokens_tracked(self) -> None:
+        history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        ]
+        asm = ContextAssembler()
+        pkg_without = asm.assemble(message="test", context="work")
+        pkg_with = asm.assemble(
+            message="test", context="work", conversation_history=history
+        )
+        assert pkg_with.total_tokens > pkg_without.total_tokens
+
+    def test_history_trimmed_by_budget(self) -> None:
+        """Long history is trimmed to fit the remaining budget."""
+        history = [
+            {"role": "user", "content": f"Message {i} " + "word " * 100}
+            for i in range(50)
+        ]
+        asm = ContextAssembler(context_window=1_000, input_ratio=1.0)
+        pkg = asm.assemble(
+            message="test", context="work", conversation_history=history
+        )
+        assert pkg.conversation_messages_included < 50
+        assert pkg.total_tokens <= asm.token_budget
+
+    def test_recent_messages_preferred(self) -> None:
+        """When budget is tight, the most recent messages are kept."""
+        history = [
+            {"role": "user", "content": "old message"},
+            {"role": "assistant", "content": "old reply"},
+            {"role": "user", "content": "recent message"},
+            {"role": "assistant", "content": "recent reply"},
+        ]
+        asm = ContextAssembler(context_window=500, input_ratio=1.0)
+        pkg = asm.assemble(
+            message="follow up", context="work", conversation_history=history
+        )
+        if pkg.conversation_messages_included > 0:
+            assert "recent" in pkg.system_prompt.lower()
+
+    def test_user_and_assistant_labels(self) -> None:
+        history = [
+            {"role": "user", "content": "my question"},
+            {"role": "assistant", "content": "my answer"},
+        ]
+        asm = ContextAssembler()
+        pkg = asm.assemble(
+            message="next", context="work", conversation_history=history
+        )
+        assert "**User:**" in pkg.system_prompt
+        assert "**Assistant:**" in pkg.system_prompt
+
+
+class TestFormatConversationHistory:
+    """Direct tests for the _format_conversation_history static method."""
+
+    def test_empty_history(self) -> None:
+        text, count = ContextAssembler._format_conversation_history(
+            history=[], budget_remaining=10_000
+        )
+        assert text == ""
+        assert count == 0
+
+    def test_single_message(self) -> None:
+        history = [{"role": "user", "content": "hello"}]
+        text, count = ContextAssembler._format_conversation_history(
+            history=history, budget_remaining=10_000
+        )
+        assert count == 1
+        assert "**User:** hello" in text
+        assert "## Conversation History" in text
+
+    def test_zero_budget(self) -> None:
+        history = [{"role": "user", "content": "hello"}]
+        text, count = ContextAssembler._format_conversation_history(
+            history=history, budget_remaining=0
+        )
+        assert text == ""
+        assert count == 0
+
+    def test_messages_in_chronological_order(self) -> None:
+        history = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "second"},
+            {"role": "user", "content": "third"},
+        ]
+        text, count = ContextAssembler._format_conversation_history(
+            history=history, budget_remaining=10_000
+        )
+        assert count == 3
+        first_pos = text.index("first")
+        second_pos = text.index("second")
+        third_pos = text.index("third")
+        assert first_pos < second_pos < third_pos
+
+
+# ══════════════════════════════════════════════════════════════════════
 # End-to-end integration
 # ══════════════════════════════════════════════════════════════════════
 

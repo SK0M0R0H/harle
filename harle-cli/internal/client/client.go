@@ -56,6 +56,37 @@ func (h *HTTPClient) Run(ctx context.Context, request RunRequest) (RunResponse, 
 	return response, nil
 }
 
+func (h *HTTPClient) Chat(ctx context.Context, request RunRequest) (RunResponse, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return RunResponse{}, fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/chat", bytes.NewReader(body))
+	if err != nil {
+		return RunResponse{}, fmt.Errorf("build request: %w", err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+
+	httpResponse, err := h.Client.Do(httpRequest)
+	if err != nil {
+		return RunResponse{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer httpResponse.Body.Close()
+
+	if httpResponse.StatusCode >= 300 {
+		responseBody, _ := io.ReadAll(httpResponse.Body)
+		return RunResponse{}, fmt.Errorf("server returned %d: %s", httpResponse.StatusCode, string(responseBody))
+	}
+
+	var response RunResponse
+	if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
+		return RunResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+
+	return response, nil
+}
+
 func (h *HTTPClient) Init(ctx context.Context) (InitResponse, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/init", nil)
 	if err != nil {

@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     orchestrator = build_orchestrator(
         settings=settings,
         context_assembler=context_assembler,
+        db=db,
     )
 
     app = FastAPI(title="Harle", version="0.2.0")

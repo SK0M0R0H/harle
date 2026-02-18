@@ -35,6 +35,12 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class ErrorResponse(BaseModel):
+    """Structured error returned by the API."""
+
+    detail: str
+
+
 # --- Data layer models ---
 
 

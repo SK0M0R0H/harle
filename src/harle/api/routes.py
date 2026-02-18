@@ -48,6 +48,26 @@ def build_router(
     def run_task(request: RunRequest) -> RunResponse:
         return orchestrator.run(request=request)
 
+    @router.post("/chat", response_model=RunResponse)
+    def chat(request: RunRequest) -> RunResponse:
+        """Send a message in a multi-turn conversation.
+
+        If ``conversation_id`` is ``null``, a new conversation is
+        created.  Otherwise the existing conversation is continued
+        and recent history is included in the LLM context.
+
+        Requires a configured database connection.
+        """
+        if db is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Database is not configured. Chat requires DATABASE_URL.",
+            )
+        try:
+            return orchestrator.chat(request=request)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @router.post("/init", response_model=InitResponse)
     def init_system() -> InitResponse:
         """Create database tables, seed the dataset, and run initial indexing."""

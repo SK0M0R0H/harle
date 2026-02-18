@@ -51,6 +51,8 @@ class ContextPackage:
         p0_files: Prompt and policy files loaded as mandatory context.
         total_tokens: Estimated token count of the assembled context.
         budget_remaining: Tokens remaining before hitting the budget.
+        conversation_messages_included: Number of conversation history
+            messages included in the context (P4).
     """
 
     system_prompt: str
@@ -58,6 +60,7 @@ class ContextPackage:
     p0_files: list[str] = field(default_factory=list)
     total_tokens: int = 0
     budget_remaining: int = 0
+    conversation_messages_included: int = 0
 
 
 # ── Assembler ─────────────────────────────────────────────────────────
@@ -115,6 +118,7 @@ class ContextAssembler:
         *,
         message: str,
         context: str,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> ContextPackage:
         """Build a complete context package for an LLM request.
 
@@ -122,13 +126,19 @@ class ContextAssembler:
             1. Load P0 (mandatory) — agent prompts and policies.
             2. Search dataset for P1 (critical) — relevant files,
                excluding anything already present in P0.
-            3. Format and pack into a single system prompt, respecting
+            3. Append P4 (background) — recent conversation history,
+               trimmed to fit the remaining budget.
+            4. Format and pack into a single system prompt, respecting
                the token budget.
 
         Args:
             message: The user's request text.
             context: Active context scope (``"work"`` or
                 ``"personal"``).
+            conversation_history: Optional list of prior messages for
+                multi-turn conversations.  Each entry is a dict with
+                ``"role"`` (``"user"`` / ``"assistant"``) and
+                ``"content"`` keys.
 
         Returns:
             A :class:`ContextPackage` with the assembled system prompt
@@ -152,7 +162,6 @@ class ContextAssembler:
             message=message,
             context=context,
         )
-        # Deduplicate: exclude files already loaded in P0.
         search_results = [
             r for r in search_results if r.file_path not in p0_paths
         ]
@@ -173,6 +182,23 @@ class ContextAssembler:
                     len(included_results),
                 )
 
+        # ── P4: conversation history (background) ────────────────────
+        conv_messages_included = 0
+        if conversation_history:
+            p4_text, conv_messages_included = self._format_conversation_history(
+                history=conversation_history,
+                budget_remaining=budget - tokens_used,
+            )
+            if p4_text:
+                p4_tokens = count_tokens(p4_text)
+                sections.append(p4_text)
+                tokens_used += p4_tokens
+                logger.debug(
+                    "P4 (conversation history): %d tokens, %d messages",
+                    p4_tokens,
+                    conv_messages_included,
+                )
+
         system_prompt = "\n\n".join(sections)
         return ContextPackage(
             system_prompt=system_prompt,
@@ -180,6 +206,7 @@ class ContextAssembler:
             p0_files=[f.relative_path for f in p0_files],
             total_tokens=tokens_used,
             budget_remaining=budget - tokens_used,
+            conversation_messages_included=conv_messages_included,
         )
 
     # ── P0 helpers ────────────────────────────────────────────────────
@@ -252,6 +279,54 @@ class ContextAssembler:
                 parts.append(f"### {heading}\n\n{f.content.strip()}")
 
         return "\n\n".join(parts)
+
+    # ── P4 helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _format_conversation_history(
+        *,
+        history: list[dict[str, str]],
+        budget_remaining: int,
+    ) -> tuple[str, int]:
+        """Format conversation messages into a context section.
+
+        Adds messages from most recent backwards until the token budget
+        is exhausted, then returns them in chronological order.
+
+        Args:
+            history: Messages with ``"role"`` and ``"content"`` keys,
+                ordered oldest-first.
+            budget_remaining: Maximum tokens available for this section.
+
+        Returns:
+            Tuple of ``(formatted_text, messages_included)``.
+        """
+        if not history:
+            return "", 0
+
+        header = "## Conversation History"
+        header_tokens = count_tokens(header)
+        if header_tokens >= budget_remaining:
+            return "", 0
+
+        remaining = budget_remaining - header_tokens
+        selected: list[str] = []
+
+        for msg in reversed(history):
+            role_label = "User" if msg["role"] == "user" else "Assistant"
+            entry = f"**{role_label}:** {msg['content']}"
+            entry_tokens = count_tokens(entry)
+            if entry_tokens > remaining:
+                break
+            selected.append(entry)
+            remaining -= entry_tokens
+
+        if not selected:
+            return "", 0
+
+        selected.reverse()
+        parts = [header, *selected]
+        return "\n\n".join(parts), len(selected)
 
     # ── P1 helpers ────────────────────────────────────────────────────
 
