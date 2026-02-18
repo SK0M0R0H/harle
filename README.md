@@ -1,4 +1,6 @@
-Harle is your most personal AI assistant.
+Harle is a truly personal AI assistant.
+
+It operates over a dataset you own and control — your notes, rules, project docs, preferences, and workflow templates, all stored as plain Markdown files you can read, edit, and version with Git. Unlike generic chatbots that forget you between sessions, Harle learns from your decisions: every clarification you give, every correction you make, every preference you express becomes part of its working knowledge. Over time it aligns with how *you* think and work — not through opaque fine-tuning, but through a transparent, human-readable knowledge base that you can inspect and change at any moment.
 
 ## Current scope (v0.2)
 
