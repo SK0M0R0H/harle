@@ -198,6 +198,30 @@ curl "http://127.0.0.1:8000/search?q=privacy"
 curl "http://127.0.0.1:8000/search?q=researcher+agent&context=global"
 ```
 
+### 8. Stopping services
+
+Kill the harle-server process:
+
+```bash
+# If running in the foreground, press Ctrl+C
+
+# If running in the background, find and kill by name
+pkill -f harle-server
+```
+
+Stop and remove the Docker container with the database:
+
+```bash
+# Stop the container (preserves data)
+docker stop harle-db
+
+# Remove the container (data is lost)
+docker rm harle-db
+
+# Stop and remove in one step
+docker rm -f harle-db
+```
+
 ## Running tests
 
 The project uses **pytest** for unit testing. Tests cover configuration, frontmatter parsing, dataset reader, content hashing, search scoring, Pydantic models, LLM providers, orchestrator logic, and API endpoints. No external services (PostgreSQL, OpenAI) are required — all tests run with in-memory fixtures and the echo provider.
