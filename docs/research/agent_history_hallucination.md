@@ -294,6 +294,21 @@ Several of the recommended mitigations are not yet present in the architecture:
 | **Prompt-position optimization** | Not explicitly designed. The Context Assembler packs by priority tier but does not consider position within the prompt. | Place P0 (agent prompt, policies) at the start and P3/P4 (memories, conversation history) at the end. Place P1/P2 (search results, external data) in between but anchor the most relevant result at the prompt boundary. |
 | **Semantic forgetting** (HEMA-style summary-of-summaries) | The `conversations.summary` field exists but the mechanism to compute and refresh it is not implemented. | Implement a periodic summarization job: every N turns, regenerate the conversation summary. Every M summaries, produce a meta-summary to prevent drift. |
 | **Tool-call validation layer** | Not designed. The Tool Manager calls tools without pre-validation of parameters. | Add schema-based parameter validation before every tool call. Log and flag calls where the agent fabricates parameter values not present in the context. |
+| **UX guardrails against context mixing** | Not designed. The CLI session is topic-agnostic — users can freely change subjects within one conversation without any system-level awareness. | Implement topic-drift detection and user-facing guardrails (see details below). |
+
+**UX guardrails — detailed design.** Several hallucination risks documented in this paper (cross-topic confusion, conversation summary dilution, retrieval noise from mixed contexts) are not purely backend problems — they can be mitigated at the user-experience level by making the user aware of risky interaction patterns before they cause harm:
+
+1. **Topic-drift warning.** When the user shifts topic drastically within a session (e.g., from Trello task triage to a research question about privacy), the system should detect the shift and explicitly warn: *"You're changing topics significantly. Continuing in this session means earlier context may influence the response. Would you like to start a new session instead?"* Detection can be lightweight — compare keyword overlap or embedding similarity between the current message and the conversation summary; a drop below a threshold triggers the warning.
+
+2. **Session length nudge.** After a configurable number of turns (e.g., 50), display a non-blocking notice: *"This session is getting long. Starting a fresh session can improve response accuracy."* This is grounded in the research: the lost-in-the-middle effect and attention dilution worsen with conversation length, even when summaries are maintained. The nudge is informational, not mandatory — power users can dismiss it.
+
+3. **Stale memory surfacing.** When the agent acts on a memory entry older than a configurable threshold (e.g., 30 days), surface it to the user: *"I'm using a preference from [date]: '[memory content]'. Is this still correct?"* This turns passive memory staleness into an active feedback loop. The user confirms (boosting confidence) or corrects (updating the memory and preventing the snowball effect).
+
+4. **Confidence visibility.** When the agent's response relies on low-confidence memories or when retrieved context has low relevance scores, show an indicator in the CLI output (e.g., a subtle marker or a footnote: *"Note: this response draws on context I'm less certain about"*). This does not prevent hallucination but calibrates the user's trust — they know when to double-check.
+
+5. **Context-scope mismatch alert.** If the user is in `--context=work` but the request appears to be personal (or vice versa), warn before proceeding: *"This looks like a personal request, but you're in work context. Personal files are excluded from search. Switch context?"* This prevents a different but related failure mode: the agent hallucinates an answer because the relevant data was in the excluded scope.
+
+These guardrails are inexpensive to implement (most rely on heuristics or metadata already available in the system) and address a significant portion of the "Scenario 2" risk — medium-length sessions where cross-topic confusion is the primary hallucination driver.
 
 #### Expected performance envelope
 
