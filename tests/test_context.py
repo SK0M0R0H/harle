@@ -68,6 +68,11 @@ def _write_vault_file(
     return target
 
 
+def _assemble_without_dependencies(context: str = "work") -> ContextPackage:
+    """Assemble context using the default no-dependency path."""
+    return ContextAssembler().assemble(message="hello", context=context)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Tokenizer
 # ══════════════════════════════════════════════════════════════════════
@@ -168,40 +173,25 @@ class TestContextAssemblerInit:
 class TestAssembleNoDependencies:
     """Assembler with no search engine and no dataset reader."""
 
-    def test_returns_context_package(self) -> None:
-        asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="work")
-        assert isinstance(pkg, ContextPackage)
+    @pytest.fixture()
+    def pkg(self) -> ContextPackage:
+        return _assemble_without_dependencies("work")
 
-    def test_system_prompt_contains_identity(self) -> None:
-        asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="work")
+    def test_package_shape_and_identity(self, pkg: ContextPackage) -> None:
+        assert isinstance(pkg, ContextPackage)
         assert "Harle" in pkg.system_prompt
         assert "work" in pkg.system_prompt
-
-    def test_context_scope_in_prompt(self) -> None:
-        asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="personal")
-        assert "personal" in pkg.system_prompt
-
-    def test_no_search_results(self) -> None:
-        asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="work")
         assert pkg.search_results == []
-
-    def test_no_p0_files(self) -> None:
-        asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="work")
         assert pkg.p0_files == []
 
-    def test_tokens_counted(self) -> None:
-        asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="work")
-        assert pkg.total_tokens > 0
+    @pytest.mark.parametrize("context", ["work", "personal"])
+    def test_context_scope_in_prompt(self, context: str) -> None:
+        pkg = _assemble_without_dependencies(context=context)
+        assert context in pkg.system_prompt
 
-    def test_budget_remaining_positive(self) -> None:
+    def test_token_accounting(self, pkg: ContextPackage) -> None:
         asm = ContextAssembler()
-        pkg = asm.assemble(message="hello", context="work")
+        assert pkg.total_tokens > 0
         assert pkg.budget_remaining > 0
         assert pkg.total_tokens + pkg.budget_remaining == asm.token_budget
 
@@ -213,6 +203,12 @@ class TestAssembleNoDependencies:
 
 class TestAssembleP0:
     """P0 loading: prompts/ and policies/ from a real dataset reader."""
+
+    @staticmethod
+    def _assemble(vault: Path, *, context: str = "work") -> ContextPackage:
+        reader = DatasetReader(str(vault))
+        asm = ContextAssembler(dataset_reader=reader)
+        return asm.assemble(message="hello", context=context)
 
     @pytest.fixture()
     def vault(self, tmp_path: Path) -> Path:
@@ -244,46 +240,37 @@ class TestAssembleP0:
         return tmp_path
 
     def test_loads_prompts(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hello", context="work")
-
+        pkg = self._assemble(vault)
         assert "prompts/secretary.md" in pkg.p0_files
         assert "Secretary Prompt" in pkg.system_prompt
 
     def test_loads_policies(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hello", context="work")
-
+        pkg = self._assemble(vault)
         assert "policies/privacy.md" in pkg.p0_files
         assert "Privacy Policy" in pkg.system_prompt
 
     def test_excludes_knowledge_from_p0(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hello", context="work")
-
+        pkg = self._assemble(vault)
         assert "knowledge/work/notes.md" not in pkg.p0_files
 
     def test_prompt_section_before_policies(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hello", context="work")
-
+        pkg = self._assemble(vault)
         prompt_pos = pkg.system_prompt.index("Agent Roles")
         policy_pos = pkg.system_prompt.index("Active Policies")
         assert prompt_pos < policy_pos
 
     def test_identity_at_beginning(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hello", context="work")
-
+        pkg = self._assemble(vault)
         assert pkg.system_prompt.startswith("You are Harle")
 
 
 class TestAssembleP0ContextFiltering:
+    @staticmethod
+    def _assemble(vault: Path, *, context: str) -> ContextPackage:
+        reader = DatasetReader(str(vault))
+        asm = ContextAssembler(dataset_reader=reader)
+        return asm.assemble(message="hi", context=context)
+
     """P0 files are filtered by context scope."""
 
     @pytest.fixture()
@@ -319,28 +306,19 @@ class TestAssembleP0ContextFiltering:
         return tmp_path
 
     def test_global_files_always_included(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-
-        work_pkg = asm.assemble(message="hi", context="work")
-        personal_pkg = asm.assemble(message="hi", context="personal")
+        work_pkg = self._assemble(vault, context="work")
+        personal_pkg = self._assemble(vault, context="personal")
 
         assert "prompts/global-agent.md" in work_pkg.p0_files
         assert "prompts/global-agent.md" in personal_pkg.p0_files
 
     def test_matching_context_included(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hi", context="work")
-
+        pkg = self._assemble(vault, context="work")
         assert "prompts/work-agent.md" in pkg.p0_files
         assert "policies/work-policy.md" in pkg.p0_files
 
     def test_mismatched_context_excluded(self, vault: Path) -> None:
-        reader = DatasetReader(str(vault))
-        asm = ContextAssembler(dataset_reader=reader)
-        pkg = asm.assemble(message="hi", context="work")
-
+        pkg = self._assemble(vault, context="work")
         assert "prompts/personal-agent.md" not in pkg.p0_files
 
     def test_no_context_file_included(self, tmp_path: Path) -> None:

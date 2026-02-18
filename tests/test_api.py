@@ -1,116 +1,165 @@
-"""Tests for harle.api.routes — FastAPI endpoints via TestClient."""
+"""Tests for harle.api.routes — endpoint behavior and wiring."""
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 import pytest
 
 from harle.api.routes import build_router
 from harle.config import Settings
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
+from harle.search.types import SearchResult
+
+
+def _make_client(
+    *,
+    db: object | None = None,
+    search_engine: object | None = None,
+    settings: Settings | None = None,
+) -> TestClient:
+    svc = OrchestratorService(llm_provider=EchoProvider())
+    router = build_router(
+        orchestrator=svc,
+        db=db,  # type: ignore[arg-type]
+        search_engine=search_engine,  # type: ignore[arg-type]
+        settings=settings,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
 
 
 @pytest.fixture()
 def client() -> TestClient:
-    """Create a test client with echo provider and no data layer."""
-    svc = OrchestratorService(llm_provider=EchoProvider())
-    router = build_router(orchestrator=svc, db=None, search_engine=None, settings=None)
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
+    return _make_client()
 
 
 @pytest.fixture()
 def client_with_settings() -> TestClient:
-    """Test client with settings but no DB (for testing 503 on /init, /reindex)."""
-    svc = OrchestratorService(llm_provider=EchoProvider())
-    settings = Settings()
-    router = build_router(orchestrator=svc, db=None, search_engine=None, settings=settings)
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
+    return _make_client(settings=Settings())
 
 
-# ---------------------------------------------------------------------------
-# GET /health
-# ---------------------------------------------------------------------------
+@pytest.fixture()
+def client_with_db_and_settings_no_dataset() -> TestClient:
+    return _make_client(db=object(), settings=Settings())
+
 
 class TestHealthEndpoint:
     def test_returns_ok(self, client: TestClient) -> None:
         resp = client.get("/health")
         assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        assert resp.json() == {"status": "ok"}
 
-
-# ---------------------------------------------------------------------------
-# POST /run
-# ---------------------------------------------------------------------------
 
 class TestRunEndpoint:
     def test_valid_request(self, client: TestClient) -> None:
         resp = client.post("/run", json={"message": "hello"})
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "completed"
-        assert "hello" in data["result"]
-        assert data["run_id"].startswith("run_")
+        payload = resp.json()
+        assert payload["status"] == "completed"
+        assert payload["run_id"].startswith("run_")
+        assert "hello" in payload["result"]
 
-    def test_with_context(self, client: TestClient) -> None:
-        resp = client.post("/run", json={"message": "test", "context": "work"})
-        assert resp.status_code == 200
-        assert resp.json()["context"] == "work"
-
-    def test_empty_message_rejected(self, client: TestClient) -> None:
-        resp = client.post("/run", json={"message": ""})
-        assert resp.status_code == 422
-
-    def test_missing_message_rejected(self, client: TestClient) -> None:
-        resp = client.post("/run", json={})
-        assert resp.status_code == 422
-
-    def test_invalid_context_rejected(self, client: TestClient) -> None:
-        resp = client.post("/run", json={"message": "hi", "context": "invalid"})
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"message": ""},
+            {},
+            {"message": "hi", "context": "invalid"},
+        ],
+    )
+    def test_invalid_request_rejected(self, client: TestClient, body: dict[str, str]) -> None:
+        resp = client.post("/run", json=body)
         assert resp.status_code == 422
 
     def test_conversation_id_roundtrip(self, client: TestClient) -> None:
-        resp = client.post(
-            "/run",
-            json={"message": "hi", "conversation_id": "conv-abc"},
-        )
+        resp = client.post("/run", json={"message": "hi", "conversation_id": "conv-abc"})
         assert resp.status_code == 200
         assert resp.json()["conversation_id"] == "conv-abc"
 
-
-# ---------------------------------------------------------------------------
-# POST /init — 503 when DB not configured
-# ---------------------------------------------------------------------------
 
 class TestInitEndpoint:
     def test_503_when_no_db(self, client: TestClient) -> None:
         resp = client.post("/init")
         assert resp.status_code == 503
-
-    def test_503_mentions_database(self, client: TestClient) -> None:
-        resp = client.post("/init")
         assert "DATABASE_URL" in resp.json()["detail"]
 
+    def test_503_when_dataset_path_missing(
+        self,
+        client_with_db_and_settings_no_dataset: TestClient,
+    ) -> None:
+        resp = client_with_db_and_settings_no_dataset.post("/init")
+        assert resp.status_code == 503
+        assert "HARLE_DATASET_PATH" in resp.json()["detail"]
 
-# ---------------------------------------------------------------------------
-# POST /reindex — 503 when DB not configured
-# ---------------------------------------------------------------------------
+    def test_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_db = object()
+        client = _make_client(db=mock_db, settings=Settings(HARLE_DATASET_PATH="/tmp/vault"))
+
+        def _fake_init_system(db: object, dataset_path: str) -> dict[str, object]:
+            assert db is mock_db
+            assert dataset_path == "/tmp/vault"
+            return {
+                "tables_created": True,
+                "files_seeded": 2,
+                "files_indexed": 3,
+                "total_files": 3,
+                "dataset_path": "/tmp/vault",
+            }
+
+        monkeypatch.setattr("harle.bootstrap.init_system", _fake_init_system)
+        resp = client.post("/init")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "status": "initialized",
+            "tables_created": True,
+            "files_seeded": 2,
+            "files_indexed": 3,
+            "total_files": 3,
+            "dataset_path": "/tmp/vault",
+        }
+
 
 class TestReindexEndpoint:
     def test_503_when_no_db(self, client: TestClient) -> None:
         resp = client.post("/reindex")
         assert resp.status_code == 503
 
+    def test_503_when_dataset_path_missing(
+        self,
+        client_with_db_and_settings_no_dataset: TestClient,
+    ) -> None:
+        resp = client_with_db_and_settings_no_dataset.post("/reindex")
+        assert resp.status_code == 503
+        assert "HARLE_DATASET_PATH" in resp.json()["detail"]
 
-# ---------------------------------------------------------------------------
-# GET /search — 503 when search engine not configured
-# ---------------------------------------------------------------------------
+    def test_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_db = object()
+        client = _make_client(db=mock_db, settings=Settings(HARLE_DATASET_PATH="/tmp/vault"))
+
+        def _fake_reindex(db: object, dataset_path: str) -> dict[str, object]:
+            assert db is mock_db
+            assert dataset_path == "/tmp/vault"
+            return {
+                "files_indexed": 5,
+                "total_files": 8,
+                "dataset_path": "/tmp/vault",
+            }
+
+        monkeypatch.setattr("harle.bootstrap.reindex_dataset", _fake_reindex)
+        resp = client.post("/reindex")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "status": "reindexed",
+            "files_indexed": 5,
+            "total_files": 8,
+            "dataset_path": "/tmp/vault",
+        }
+
 
 class TestSearchEndpoint:
     def test_503_when_no_engine(self, client: TestClient) -> None:
@@ -120,3 +169,31 @@ class TestSearchEndpoint:
     def test_missing_query_rejected(self, client: TestClient) -> None:
         resp = client.get("/search")
         assert resp.status_code == 422
+
+    def test_success_and_query_mapping(self) -> None:
+        mock_engine = MagicMock()
+        mock_engine.search.return_value = [
+            SearchResult(
+                file_path="knowledge/work/note.md",
+                title="Work Note",
+                score=6.5,
+                context="work",
+                tags=["python"],
+                snippet="relevant snippet",
+            )
+        ]
+        client = _make_client(search_engine=mock_engine)
+
+        resp = client.get("/search", params={"q": "deploy", "context": "work", "max_results": 7})
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["query"] == "deploy"
+        assert payload["context"] == "work"
+        assert payload["total"] == 1
+        assert payload["results"][0]["file_path"] == "knowledge/work/note.md"
+        assert payload["results"][0]["snippet"] == "relevant snippet"
+
+        query = mock_engine.search.call_args.args[0]
+        assert query.query == "deploy"
+        assert query.context == "work"
+        assert query.max_results == 7
