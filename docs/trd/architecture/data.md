@@ -167,6 +167,7 @@ The dataset has a specific directory layout. Each directory has a purpose, and a
 └── logs/                       # Agent run summaries (auto-generated)
     └── 2026-02/                #   Organized by month
         ├── run_001_result.md
+        ├── run_001_context.md  #   (Optional) Assembled prompt sent to the LLM
         └── run_002_result.md
 ```
 
@@ -354,6 +355,9 @@ CREATE TABLE runs (
 - **Cost tracking.** "How much did I spend this week?" — `SELECT SUM(estimated_cost) FROM runs WHERE timestamp > ...`
 - **Quality improvement.** "Which requests take the most iterations?" — find patterns to optimize with better prompts or workflow templates.
 - **The Specialist agent** uses this table to analyze system performance.
+
+**Where to store the assembled prompt (Context Assembler output):**  
+The full prompt built by the Context Assembler (system prompt + policies + search results + conversation slice) is not stored in the database — the `runs` table only keeps metadata (`files_used`, token counts, etc.). The **recommended place** to persist it is the **User Dataset** in the same `logs/` directory as the run result, as a sibling file (e.g. `run_001_context.md` next to `run_001_result.md`). That keeps run artifacts together, human-readable and version-controlled; storage can be made optional via config (e.g. `logging.store_assembled_context`) to control size and privacy. If the application needs to fetch the assembled prompt by `run_id` without reading the vault, an optional `context_path` column on `runs` can point to this file, or the content can be stored in a separate `run_contexts` table in PostgreSQL for programmatic access and retention policies.
 
 #### Table 3: `artifacts` — agent outputs
 
