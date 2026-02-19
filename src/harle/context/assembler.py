@@ -260,7 +260,10 @@ class ContextAssembler:
             f"You are Harle, a personal AI assistant. "
             f"Current context scope: {context}. "
             f"Answer using information from the user's dataset when "
-            f"available. Be concise and structured."
+            f"available. Lead with the direct answer: put the most "
+            f"relevant fact or conclusion first (e.g. a date, a yes/no, "
+            f"or a one-sentence takeaway). Be concise; avoid padding "
+            f"with generic sections when a short answer suffices."
         )
 
         prompts = [f for f in files if f.relative_path.startswith("prompts/")]

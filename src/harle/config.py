@@ -49,6 +49,9 @@ class Settings:
     HARLE_DATASET_PATH: str | None = None
     DATABASE_URL: str | None = None
 
+    # Run logging (vault logs/ directory)
+    HARLE_RUN_LOG_STORE_CONTEXT: bool = False  # Store assembled context in logs (optional, for size/privacy)
+
 
 def _coerce(value: Any, target_type: type) -> Any:
     """Coerce *value* to *target_type* with basic ``str | None`` handling."""

@@ -197,3 +197,23 @@ class TestSearchEndpoint:
         assert query.query == "deploy"
         assert query.context == "work"
         assert query.max_results == 7
+
+
+class TestGetRunEndpoint:
+    """Tests for GET /run/{run_id}."""
+
+    def test_503_when_no_db(self, client: TestClient) -> None:
+        resp = client.get("/run/run_abc123")
+        assert resp.status_code == 503
+        assert "DATABASE_URL" in resp.json()["detail"]
+
+    def test_404_when_run_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_session = MagicMock()
+        mock_db = MagicMock()
+        mock_db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
+        client = _make_client(db=mock_db)
+        monkeypatch.setattr("harle.db.runs.get_run", lambda session, run_id: None)
+        resp = client.get("/run/run_nonexistent")
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()

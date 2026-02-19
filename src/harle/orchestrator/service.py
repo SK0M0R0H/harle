@@ -17,6 +17,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from harle.api.models import RunRequest, RunResponse
 from harle.config import PROVIDER_OPENAI, Settings
@@ -27,6 +28,20 @@ from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
 logger = logging.getLogger(__name__)
 
 DEFAULT_AGENT_ROLE: str = "secretary"
+RESULT_SUMMARY_MAX_CHARS: int = 2000
+
+
+def _files_used_from_package(
+    p0_files: list[str],
+    search_results: list,
+) -> list[str]:
+    """Build combined list of dataset file paths used in context (P0 + P1)."""
+    paths = list(p0_files)
+    for r in search_results:
+        path = getattr(r, "file_path", None)
+        if path and path not in paths:
+            paths.append(path)
+    return paths
 
 
 @dataclass
@@ -42,6 +57,10 @@ class OrchestratorService:
     fetching recent history for context assembly, and persisting both
     user and assistant messages.
 
+    When *dataset_path* is set, run and chat log each execution to the
+    vault ``logs/`` directory and (when *db* is set) to the ``runs``
+    table.
+
     Without optional dependencies the provider receives only the raw
     user message (backward-compatible prototype mode).
 
@@ -49,12 +68,16 @@ class OrchestratorService:
         llm_provider: The LLM generation backend.
         context_assembler: Optional assembler for dataset-aware
             context packing.
-        db: Optional database connection for conversation persistence.
+        db: Optional database connection for conversation and runs.
+        dataset_path: Optional vault root path for writing run logs.
+        run_log_store_context: Whether to store assembled context in logs.
     """
 
     llm_provider: LLMProvider
     context_assembler: ContextAssembler | None = field(default=None)
     db: Database | None = field(default=None)
+    dataset_path: str | None = field(default=None)
+    run_log_store_context: bool = field(default=False)
 
     # ── one-shot execution ────────────────────────────────────────────
 
@@ -67,7 +90,9 @@ class OrchestratorService:
                dataset search results.
             2. Call the LLM provider with the assembled system prompt
                (or fall back to the provider's default).
-            3. Return the response.
+            3. Log the run to the vault logs/ and (if db is set) to the
+               ``runs`` table.
+            4. Return the response.
 
         Args:
             request: Incoming run request from the API.
@@ -76,8 +101,10 @@ class OrchestratorService:
             A :class:`RunResponse` with the generated result.
         """
         run_id = f"run_{uuid.uuid4().hex[:12]}"
+        started_at = datetime.now(timezone.utc)
 
         system_prompt: str | None = None
+        package = None
         if self.context_assembler is not None:
             package = self.context_assembler.assemble(
                 message=request.message,
@@ -99,6 +126,58 @@ class OrchestratorService:
             conversation_id=request.conversation_id,
             system_prompt=system_prompt,
         )
+
+        ended_at = datetime.now(timezone.utc)
+        duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+        result_summary = (
+            result_text[:RESULT_SUMMARY_MAX_CHARS] + "..."
+            if len(result_text) > RESULT_SUMMARY_MAX_CHARS
+            else result_text
+        ) if result_text else None
+        files_used = (
+            _files_used_from_package(package.p0_files, package.search_results)
+            if package
+            else None
+        )
+        result_path: str | None = None
+        context_path: str | None = None
+        if self.dataset_path:
+            from harle.logging.run_logger import log_run_to_vault
+            result_path, context_path = log_run_to_vault(
+                self.dataset_path,
+                run_id=run_id,
+                timestamp=ended_at,
+                agent=DEFAULT_AGENT_ROLE,
+                status="completed",
+                context_scope=request.context,
+                result_body=result_text,
+                context_body=system_prompt,
+                store_context=self.run_log_store_context,
+            )
+            if not result_path:
+                result_path = None
+
+        if self.db is not None:
+            try:
+                from harle.db.runs import create_run
+                with self.db.session() as session:
+                    create_run(
+                        session,
+                        run_id=run_id,
+                        timestamp=ended_at,
+                        user_request=request.message,
+                        context_scope=request.context,
+                        agent=DEFAULT_AGENT_ROLE,
+                        status="completed",
+                        files_used=files_used,
+                        result_summary=result_summary,
+                        result_path=result_path,
+                        context_path=context_path,
+                        conversation_id=request.conversation_id,
+                        duration_ms=duration_ms,
+                    )
+            except Exception as e:  # e.g. no such table: runs (SQLite test db)
+                logger.warning("Could not persist run record: %s", e)
 
         return RunResponse(
             run_id=run_id,
@@ -148,6 +227,7 @@ class OrchestratorService:
 
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         conv_id = request.conversation_id
+        started_at = datetime.now(timezone.utc)
 
         # ── load or create conversation ──────────────────────────────
         conversation_history: list[dict[str, str]] | None = None
@@ -177,6 +257,7 @@ class OrchestratorService:
 
         # ── context assembly ─────────────────────────────────────────
         system_prompt: str | None = None
+        package = None
         if self.context_assembler is not None:
             package = self.context_assembler.assemble(
                 message=request.message,
@@ -203,7 +284,39 @@ class OrchestratorService:
             system_prompt=system_prompt,
         )
 
-        # ── persist messages ─────────────────────────────────────────
+        ended_at = datetime.now(timezone.utc)
+        duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+        result_summary = (
+            result_text[:RESULT_SUMMARY_MAX_CHARS] + "..."
+            if len(result_text) > RESULT_SUMMARY_MAX_CHARS
+            else result_text
+        ) if result_text else None
+        files_used = (
+            _files_used_from_package(package.p0_files, package.search_results)
+            if package
+            else None
+        )
+        result_path_v: str | None = None
+        context_path_v: str | None = None
+        if self.dataset_path:
+            from harle.logging.run_logger import log_run_to_vault
+            rp, cp = log_run_to_vault(
+                self.dataset_path,
+                run_id=run_id,
+                timestamp=ended_at,
+                agent=DEFAULT_AGENT_ROLE,
+                status="completed",
+                context_scope=request.context,
+                result_body=result_text,
+                context_body=system_prompt,
+                store_context=self.run_log_store_context,
+            )
+            if rp:
+                result_path_v = rp
+            if cp:
+                context_path_v = cp
+
+        # ── persist messages ────────────────────────────────────────
         with self.db.session() as session:
             add_message(
                 session,
@@ -220,6 +333,33 @@ class OrchestratorService:
                 run_id=run_id,
             )
             touch_conversation(session, conv_id)
+
+        # ── persist run (separate session so message commit is not affected)
+        try:
+            from harle.db.runs import create_run
+            with self.db.session() as session:
+                create_run(
+                    session,
+                    run_id=run_id,
+                    timestamp=ended_at,
+                    user_request=request.message,
+                    context_scope=request.context,
+                    agent=DEFAULT_AGENT_ROLE,
+                    status="completed",
+                    files_used=files_used,
+                    result_summary=result_summary,
+                    result_path=result_path_v,
+                    context_path=context_path_v,
+                    conversation_id=conv_id,
+                    duration_ms=duration_ms,
+                )
+        except Exception as e:  # e.g. no such table: runs (SQLite test db)
+            logger.warning("Could not persist run record: %s", e)
+            try:
+                with self.db.session() as session:
+                    session.rollback()
+            except Exception:  # noqa: S110
+                pass
 
         return RunResponse(
             run_id=run_id,
@@ -261,6 +401,8 @@ def build_orchestrator(
             llm_provider=provider,
             context_assembler=context_assembler,
             db=db,
+            dataset_path=settings.HARLE_DATASET_PATH,
+            run_log_store_context=settings.HARLE_RUN_LOG_STORE_CONTEXT,
         )
 
     provider = EchoProvider()
@@ -268,5 +410,7 @@ def build_orchestrator(
         llm_provider=provider,
         context_assembler=context_assembler,
         db=db,
+        dataset_path=settings.HARLE_DATASET_PATH,
+        run_log_store_context=settings.HARLE_RUN_LOG_STORE_CONTEXT,
     )
 

@@ -68,6 +68,7 @@ class Run(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     result_summary: Mapped[str | None] = mapped_column(Text)
     result_path: Mapped[str | None] = mapped_column(Text)
+    context_path: Mapped[str | None] = mapped_column(Text)
     conversation_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

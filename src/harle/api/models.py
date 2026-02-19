@@ -29,6 +29,25 @@ class RunResponse(BaseModel):
     conversation_id: str | None = None
 
 
+class RunDetail(BaseModel):
+    """Run metadata returned by GET /run/{run_id}."""
+
+    run_id: str
+    timestamp: str  # ISO format
+    user_request: str
+    context_scope: str
+    agent: str
+    status: str
+    routing_method: str | None = None
+    files_used: list[str] | None = None
+    tools_called: list[str] | None = None
+    result_summary: str | None = None
+    result_path: str | None = None
+    context_path: str | None = None
+    conversation_id: str | None = None
+    duration_ms: int | None = None
+
+
 class HealthResponse(BaseModel):
     """Simple health response."""
 

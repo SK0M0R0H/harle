@@ -23,3 +23,6 @@ HARLE_LLM_MODEL: "gpt-4o-mini"
 # --- External data (per-user, never committed) ---
 # HARLE_DATASET_PATH: "/path/to/harle-vault"
 # DATABASE_URL: "postgresql+psycopg2://harle:harle@localhost:5432/harle"
+
+# --- Run logging (vault logs/ directory) ---
+HARLE_RUN_LOG_STORE_CONTEXT: true   # Set true to save assembled prompt in logs/ (larger, for debugging)

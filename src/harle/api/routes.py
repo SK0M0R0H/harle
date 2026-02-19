@@ -10,6 +10,7 @@ from harle.api.models import (
     HealthResponse,
     InitResponse,
     ReindexResponse,
+    RunDetail,
     RunRequest,
     RunResponse,
     SearchResponse,
@@ -47,6 +48,36 @@ def build_router(
     @router.post("/run", response_model=RunResponse)
     def run_task(request: RunRequest) -> RunResponse:
         return orchestrator.run(request=request)
+
+    @router.get("/run/{run_id}", response_model=RunDetail)
+    def get_run(run_id: str) -> RunDetail:
+        """Return metadata for a single run by run_id."""
+        if db is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Database is not configured. Set DATABASE_URL in config.",
+            )
+        from harle.db.runs import get_run as _get_run
+        with db.session() as session:
+            run = _get_run(session, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run {run_id!r} not found.")
+        return RunDetail(
+            run_id=run.run_id,
+            timestamp=run.timestamp.isoformat(),
+            user_request=run.user_request,
+            context_scope=run.context_scope,
+            agent=run.agent,
+            status=run.status,
+            routing_method=run.routing_method,
+            files_used=run.files_used,
+            tools_called=run.tools_called,
+            result_summary=run.result_summary,
+            result_path=run.result_path,
+            context_path=run.context_path,
+            conversation_id=run.conversation_id,
+            duration_ms=run.duration_ms,
+        )
 
     @router.post("/chat", response_model=RunResponse)
     def chat(request: RunRequest) -> RunResponse:
