@@ -36,6 +36,15 @@ DEFAULT_MAX_SEARCH_RESULTS: int = 10
 _P0_DIRECTORIES: tuple[str, ...] = ("prompts/", "policies/")
 
 
+def _prompt_file_matches_role(relative_path: str, role: str) -> bool:
+    """Check if a prompt file's stem matches the given role name.
+
+    ``prompts/secretary.md`` matches role ``"secretary"``.
+    """
+    stem = relative_path.split("/")[-1].removesuffix(".md")
+    return stem == role
+
+
 # ── Data structures ───────────────────────────────────────────────────
 
 
@@ -118,6 +127,7 @@ class ContextAssembler:
         *,
         message: str,
         context: str,
+        agent_role: str | None = None,
         conversation_history: list[dict[str, str]] | None = None,
     ) -> ContextPackage:
         """Build a complete context package for an LLM request.
@@ -135,6 +145,10 @@ class ContextAssembler:
             message: The user's request text.
             context: Active context scope (``"work"`` or
                 ``"personal"``).
+            agent_role: Active agent role (e.g. ``"secretary"``).
+                When provided, only the prompt file whose stem matches
+                the role is included; other role descriptions are
+                omitted.  Policies are always included regardless.
             conversation_history: Optional list of prior messages for
                 multi-turn conversations.  Each entry is a dict with
                 ``"role"`` (``"user"`` / ``"assistant"``) and
@@ -150,7 +164,11 @@ class ContextAssembler:
 
         # ── P0: agent prompt + policies (mandatory) ──────────────────
         p0_files = self._load_p0_files(context=context)
-        p0_text = self._format_p0(p0_files, context=context)
+        if agent_role is not None:
+            p0_files = self._filter_prompts_by_role(
+                p0_files, agent_role=agent_role,
+            )
+        p0_text = self._format_p0(p0_files, context=context, agent_role=agent_role)
         p0_tokens = count_tokens(p0_text)
         sections.append(p0_text)
         tokens_used += p0_tokens
@@ -242,44 +260,87 @@ class ContextAssembler:
         return results
 
     @staticmethod
+    def _filter_prompts_by_role(
+        files: list[DatasetFile],
+        *,
+        agent_role: str,
+    ) -> list[DatasetFile]:
+        """Keep only the prompt file matching *agent_role*; retain all policies.
+
+        Matching uses the file stem: ``prompts/secretary.md`` matches
+        role ``"secretary"``.  If no prompt matches, all original files
+        are returned unchanged so the LLM still has context.
+        """
+        prompts = [
+            f for f in files if f.relative_path.startswith("prompts/")
+        ]
+        non_prompts = [
+            f for f in files if not f.relative_path.startswith("prompts/")
+        ]
+        matching = [
+            f for f in prompts
+            if _prompt_file_matches_role(f.relative_path, agent_role)
+        ]
+        if not matching:
+            logger.warning(
+                "No prompt file matches agent_role=%r; "
+                "including all %d prompt(s).",
+                agent_role,
+                len(prompts),
+            )
+            return files
+        return matching + non_prompts
+
+    @staticmethod
     def _format_p0(
         files: list[DatasetFile],
         *,
         context: str,
+        agent_role: str | None = None,
     ) -> str:
         """Format P0 files into the opening section of the system prompt.
 
         Places the base identity first, then agent prompts, then
         policies — following the "beginning of context = high
         attention" principle from the TRD.
+
+        When *agent_role* is set the identity block includes an
+        explicit role binding and the section heading reads
+        "Active Role" instead of "Agent Roles".
         """
         parts: list[str] = []
 
         # Base identity — always present regardless of data layer.
-        parts.append(
+        identity = (
             f"You are Harle, a personal AI assistant. "
             f"Current context scope: {context}. "
+        )
+        if agent_role:
+            identity += f"Your active role: {agent_role}. "
+        identity += (
             f"Answer using information from the user's dataset when "
             f"available. Lead with the direct answer: put the most "
             f"relevant fact or conclusion first (e.g. a date, a yes/no, "
             f"or a one-sentence takeaway). Be concise; avoid padding "
             f"with generic sections when a short answer suffices."
         )
+        parts.append(identity)
 
         prompts = [f for f in files if f.relative_path.startswith("prompts/")]
         policies = [f for f in files if f.relative_path.startswith("policies/")]
 
         if prompts:
-            parts.append("## Agent Roles")
+            heading = "## Active Role" if agent_role else "## Agent Roles"
+            parts.append(heading)
             for f in prompts:
-                heading = f.title or f.relative_path
-                parts.append(f"### {heading}\n\n{f.content.strip()}")
+                title = f.title or f.relative_path
+                parts.append(f"### {title}\n\n{f.content.strip()}")
 
         if policies:
             parts.append("## Active Policies")
             for f in policies:
-                heading = f.title or f.relative_path
-                parts.append(f"### {heading}\n\n{f.content.strip()}")
+                title = f.title or f.relative_path
+                parts.append(f"### {title}\n\n{f.content.strip()}")
 
         return "\n\n".join(parts)
 

@@ -601,6 +601,173 @@ class TestFormatP0:
 
         assert "### prompts/no-title.md" in text
 
+    def test_agent_role_adds_role_binding(self) -> None:
+        text = ContextAssembler._format_p0(
+            [], context="work", agent_role="secretary",
+        )
+        assert "Your active role: secretary." in text
+
+    def test_no_agent_role_omits_role_binding(self) -> None:
+        text = ContextAssembler._format_p0([], context="work")
+        assert "Your active role:" not in text
+
+    def test_agent_role_changes_section_heading(self) -> None:
+        from harle.dataset.reader import DatasetFile
+
+        prompt = DatasetFile(
+            relative_path="prompts/secretary.md",
+            title="Secretary",
+            content="You are a secretary agent.",
+        )
+        text = ContextAssembler._format_p0(
+            [prompt], context="work", agent_role="secretary",
+        )
+        assert "## Active Role" in text
+        assert "## Agent Roles" not in text
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ContextAssembler._filter_prompts_by_role
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestFilterPromptsByRole:
+    """Tests for prompt filtering by active agent role."""
+
+    def test_matching_prompt_kept(self) -> None:
+        from harle.dataset.reader import DatasetFile
+
+        secretary = DatasetFile(
+            relative_path="prompts/secretary.md",
+            title="Secretary",
+            content="Secretary body.",
+        )
+        researcher = DatasetFile(
+            relative_path="prompts/researcher.md",
+            title="Researcher",
+            content="Researcher body.",
+        )
+        policy = DatasetFile(
+            relative_path="policies/privacy.md",
+            title="Privacy",
+            content="Privacy body.",
+        )
+        result = ContextAssembler._filter_prompts_by_role(
+            [secretary, researcher, policy], agent_role="secretary",
+        )
+        paths = [f.relative_path for f in result]
+        assert "prompts/secretary.md" in paths
+        assert "prompts/researcher.md" not in paths
+        assert "policies/privacy.md" in paths
+
+    def test_no_match_keeps_all(self) -> None:
+        from harle.dataset.reader import DatasetFile
+
+        prompt = DatasetFile(
+            relative_path="prompts/researcher.md",
+            title="Researcher",
+            content="Researcher body.",
+        )
+        result = ContextAssembler._filter_prompts_by_role(
+            [prompt], agent_role="secretary",
+        )
+        assert len(result) == 1
+        assert result[0].relative_path == "prompts/researcher.md"
+
+    def test_policies_always_kept(self) -> None:
+        from harle.dataset.reader import DatasetFile
+
+        policy = DatasetFile(
+            relative_path="policies/privacy.md",
+            title="Privacy",
+            content="Privacy body.",
+        )
+        result = ContextAssembler._filter_prompts_by_role(
+            [policy], agent_role="secretary",
+        )
+        assert len(result) == 1
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ContextAssembler.assemble — role-filtered P0
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestAssembleWithAgentRole:
+    """Assembly with agent_role filters prompts to the active role."""
+
+    @staticmethod
+    def _assemble(
+        vault: Path, *, context: str = "work", agent_role: str = "secretary",
+    ) -> ContextPackage:
+        reader = DatasetReader(str(vault))
+        asm = ContextAssembler(dataset_reader=reader)
+        return asm.assemble(
+            message="hello", context=context, agent_role=agent_role,
+        )
+
+    @pytest.fixture()
+    def vault(self, tmp_path: Path) -> Path:
+        _write_vault_file(
+            tmp_path,
+            "prompts/secretary.md",
+            title="Secretary",
+            context="global",
+            body="You are a secretary agent.",
+        )
+        _write_vault_file(
+            tmp_path,
+            "prompts/researcher.md",
+            title="Researcher",
+            context="global",
+            body="You are a researcher agent.",
+        )
+        _write_vault_file(
+            tmp_path,
+            "policies/privacy.md",
+            title="Privacy",
+            context="global",
+            body="Never share personal data.",
+        )
+        return tmp_path
+
+    def test_only_active_role_prompt_in_p0_files(self, vault: Path) -> None:
+        pkg = self._assemble(vault, agent_role="secretary")
+        assert "prompts/secretary.md" in pkg.p0_files
+        assert "prompts/researcher.md" not in pkg.p0_files
+
+    def test_active_role_body_in_prompt(self, vault: Path) -> None:
+        pkg = self._assemble(vault, agent_role="secretary")
+        assert "You are a secretary agent." in pkg.system_prompt
+        assert "You are a researcher agent." not in pkg.system_prompt
+
+    def test_policies_still_included(self, vault: Path) -> None:
+        pkg = self._assemble(vault, agent_role="secretary")
+        assert "policies/privacy.md" in pkg.p0_files
+        assert "Never share personal data." in pkg.system_prompt
+
+    def test_role_binding_in_identity(self, vault: Path) -> None:
+        pkg = self._assemble(vault, agent_role="secretary")
+        assert "Your active role: secretary." in pkg.system_prompt
+
+    def test_active_role_heading(self, vault: Path) -> None:
+        pkg = self._assemble(vault, agent_role="secretary")
+        assert "## Active Role" in pkg.system_prompt
+        assert "## Agent Roles" not in pkg.system_prompt
+
+    def test_no_agent_role_includes_all_prompts(self, vault: Path) -> None:
+        reader = DatasetReader(str(vault))
+        asm = ContextAssembler(dataset_reader=reader)
+        pkg = asm.assemble(message="hello", context="work")
+        assert "prompts/secretary.md" in pkg.p0_files
+        assert "prompts/researcher.md" in pkg.p0_files
+        assert "## Agent Roles" in pkg.system_prompt
+
+    def test_unmatched_role_falls_back_to_all(self, vault: Path) -> None:
+        pkg = self._assemble(vault, agent_role="nonexistent")
+        assert "prompts/secretary.md" in pkg.p0_files
+        assert "prompts/researcher.md" in pkg.p0_files
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ContextAssembler._format_search_results

@@ -27,7 +27,7 @@ from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_AGENT_ROLE: str = "secretary"
+DEFAULT_AGENT_ROLE: str = "researcher"
 RESULT_SUMMARY_MAX_CHARS: int = 2000
 
 
@@ -109,6 +109,7 @@ class OrchestratorService:
             package = self.context_assembler.assemble(
                 message=request.message,
                 context=request.context,
+                agent_role=DEFAULT_AGENT_ROLE,
             )
             system_prompt = package.system_prompt
             logger.info(
@@ -262,6 +263,7 @@ class OrchestratorService:
             package = self.context_assembler.assemble(
                 message=request.message,
                 context=request.context,
+                agent_role=DEFAULT_AGENT_ROLE,
                 conversation_history=conversation_history,
             )
             system_prompt = package.system_prompt

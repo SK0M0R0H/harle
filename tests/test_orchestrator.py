@@ -80,6 +80,7 @@ class TestOrchestratorService:
         mock_assembler.assemble.assert_called_once_with(
             message="find tasks",
             context="work",
+            agent_role="researcher",
         )
         assert resp.status == "completed"
         assert "find tasks" in resp.result
