@@ -164,11 +164,12 @@ The dataset has a specific directory layout. Each directory has a purpose, and a
 │   ├── good-goals.md           #   Examples of well-defined task requests
 │   └── report-samples.md       #   Examples of reports in your preferred format
 │
-└── logs/                       # Agent run summaries (auto-generated)
-    └── 2026-02/                #   Organized by month
-        ├── run_001_result.md
-        ├── run_001_context.md  #   (Optional) Assembled prompt sent to the LLM
-        └── run_002_result.md
+└── logs/                       # Agent run artifacts (auto-generated)
+    └── 2026/
+        └── 02/                 #   Date-based: YYYY/MM for log-friendly search
+            ├── run_2026-02-12_001_result.md
+            ├── run_2026-02-12_001_context.md  #   (Optional) Assembled prompt
+            └── run_2026-02-12_002_result.md
 ```
 
 ### How each directory is used
@@ -181,6 +182,64 @@ The dataset has a specific directory layout. Each directory has a purpose, and a
 | `knowledge/` | Search Algorithm (when relevant) | You (manually); agents (with approval) | Searched on every request; relevant files included in context |
 | `examples/` | Context Assembler (when helpful) | You (manually) | Included as few-shot examples to guide agent output format |
 | `logs/` | Search Algorithm; Specialist agent | Run Logger (automatically) | Referenced for past decisions; analyzed for system improvement |
+
+### Logs directory: structure, format, and search
+
+The `logs/` directory holds **agent run artifacts**: result summaries and, optionally, the assembled prompt (Context Assembler output) for each run. Logs are written by the Run Logger; they must be **searchable at scale** and **easy to open** in an editor or viewer.
+
+**Directory structure (date-based, log-friendly):**
+
+```
+logs/
+├── 2026/
+│   ├── 01/
+│   │   ├── run_2026-01-15_001_result.md
+│   │   ├── run_2026-01-15_001_context.md   # optional
+│   │   └── run_2026-01-15_002_result.md
+│   └── 02/
+│       ├── run_2026-02-12_001_result.md
+│       └── run_2026-02-12_001_context.md
+└── ...
+```
+
+- **Path pattern:** `logs/YYYY/MM/<run_id>_result.md` and `logs/YYYY/MM/<run_id>_context.md`. The `run_id` is unique (e.g. `run_2026-02-12_001`) and encodes date, so files sort by time and stay unique. Date-based folders allow **time-bounded listing** (e.g. "last 7 days" = known subdirs) and keep each directory from growing unbounded.
+- **Opening a log:** Given a `run_id` or a path from the Indexer (`result_path`, `context_path`), the user can open the file directly (e.g. `logs/2026/02/run_2026-02-12_001_result.md`) in any editor. Paths are under the vault root, so they work with VS Code, Cursor, or `cat`/`less`.
+
+**File format (human-readable, machine-parseable):**
+
+Each log file is Markdown with an optional **YAML frontmatter** block so both humans and tools can use it:
+
+```markdown
+---
+run_id: run_2026-02-12_001
+timestamp: "2026-02-12T14:32:00Z"
+agent: secretary
+status: completed
+context_scope: work
+---
+
+# Result
+
+Summary of what the agent returned...
+```
+
+- **Result files** (`*_result.md`): frontmatter + body = result summary (or full output). The Indexer stores the same metadata in the `runs` table and `result_path` points here.
+- **Context files** (`*_context.md`): optional; frontmatter + body = assembled prompt (system prompt + policies + search results + conversation slice). Can be disabled via config to limit size and privacy. If present, `context_path` on `runs` points here.
+
+This format stays **plain Markdown** so logs are easy to open and read; frontmatter supports scripting and classic log tooling (e.g. filter by `agent`, `status`, or `timestamp` in the first few lines).
+
+**Searching logs (classic techniques at scale):**
+
+With a large number of runs, **search should not rely on scanning every file**. The design splits roles:
+
+| Need | Where it lives | How to search |
+|------|----------------|---------------|
+| **By time range, agent, status, cost** | Indexer `runs` table | SQL (e.g. `WHERE timestamp BETWEEN ... AND agent = 'secretary'`). Fast, indexed. |
+| **By user request or result summary text** | Indexer `runs` table | PostgreSQL full-text search (e.g. `tsvector` on `user_request`, `result_summary`). |
+| **By full body of results/context** | Vault `logs/` files | Optional: index log files in Whoosh (same as rest of dataset) or store excerpts in DB. Default: search via `runs` metadata + open by `result_path`/`context_path`. |
+| **Open a specific run** | Vault `logs/` | Use `result_path` or `context_path` from `runs`; or construct path from `run_id` and date. |
+
+So **classic log search** (time range, level/status, agent, full-text on message/summary) is done against the **Indexer**; the vault holds the **durable, human-readable artifact** and a stable path for opening. Optionally, log file bodies can be included in the dataset Whoosh index so "find runs where the result mentioned X" works without storing full bodies in PostgreSQL. Retention (e.g. delete or archive logs older than N months) can be implemented by pruning both `runs` rows and the corresponding files under `logs/`.
 
 ### File format conventions
 
@@ -357,7 +416,10 @@ CREATE TABLE runs (
 - **The Specialist agent** uses this table to analyze system performance.
 
 **Where to store the assembled prompt (Context Assembler output):**  
-The full prompt built by the Context Assembler (system prompt + policies + search results + conversation slice) is not stored in the database — the `runs` table only keeps metadata (`files_used`, token counts, etc.). The **recommended place** to persist it is the **User Dataset** in the same `logs/` directory as the run result, as a sibling file (e.g. `run_001_context.md` next to `run_001_result.md`). That keeps run artifacts together, human-readable and version-controlled; storage can be made optional via config (e.g. `logging.store_assembled_context`) to control size and privacy. If the application needs to fetch the assembled prompt by `run_id` without reading the vault, an optional `context_path` column on `runs` can point to this file, or the content can be stored in a separate `run_contexts` table in PostgreSQL for programmatic access and retention policies.
+The full prompt built by the Context Assembler (system prompt + policies + search results + conversation slice) is not stored in the database — the `runs` table only keeps metadata (`files_used`, token counts, etc.). The **recommended place** to persist it is the **User Dataset** under `logs/`, as described in the [Logs directory](#logs-directory-structure-format-and-search) subsection: same date folder as the run result, filename `<run_id>_context.md` (e.g. `run_2026-02-12_001_context.md`). That keeps run artifacts together, human-readable and version-controlled; storage can be made optional via config (e.g. `logging.store_assembled_context`) to control size and privacy.
+
+- **Search:** Log search (by time, agent, status, or full-text on request/summary) is done via the **Indexer** (`runs` table and optional full-text indexes), not by scanning vault files — see the logs subsection for the split between DB-backed search and vault-backed storage.
+- **Opening:** User opens the file by path; an optional `context_path` column on `runs` can store the vault-relative path so the app can resolve it without reading the filesystem. If the application must fetch the assembled prompt by `run_id` without reading the vault (e.g. for retention or API), the content can alternatively be stored in a `run_contexts` table in PostgreSQL for programmatic access.
 
 #### Table 3: `artifacts` — agent outputs
 
