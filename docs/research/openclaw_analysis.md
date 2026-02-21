@@ -2,7 +2,7 @@
 title: "OpenClaw Codebase Analysis — Relevance to Harle"
 tags: [research, openclaw, comparison, architecture, search, memory, security, agents]
 context: global
-last_updated: 2026-02-21
+last_updated: 2026-02-22
 summary: "Deep analysis of the OpenClaw codebase and how its features, algorithms, and design solutions map to Harle's goals and four main challenges."
 ---
 
@@ -10,7 +10,7 @@ summary: "Deep analysis of the OpenClaw codebase and how its features, algorithm
 
 > This document analyzes the OpenClaw personal AI assistant codebase and evaluates which parts are relevant to Harle — both in terms of end-goal functionality overlap and reusable algorithms/design patterns.
 
-**Source analyzed:** `/openclaw` directory (TypeScript/Node.js, ~39 extensions, multi-channel messaging gateway).
+**Source analyzed:** `/openclaw` directory (TypeScript/Node.js, ~31 extensions, multi-channel messaging gateway).
 
 ---
 
@@ -28,28 +28,28 @@ Key difference from Harle: OpenClaw is **messaging-channel-centric** (its primar
 |---|---|---|
 | **Personal AI assistant** | **Strong** | Core purpose of both projects. OpenClaw provides multi-agent routing, session management, and tool execution. |
 | **Markdown/Obsidian-style dataset** | **Partial** | OpenClaw has `MEMORY.md` and `memory/*.md` files in agent workspaces. No vault-level organization, no frontmatter conventions, no directory taxonomy. |
-| **Dataset search (keyword + semantic)** | **Strong** | Hybrid search with FTS5 (BM25) + sqlite-vec (cosine similarity), MMR re-ranking, temporal decay, query expansion. Fully implemented and tested. |
+| **Dataset search (keyword + semantic)** | **Strong** | Hybrid search with FTS5 (BM25) + sqlite-vec (cosine similarity), optional MMR re-ranking, optional temporal decay, plus keyword extraction for FTS-only mode (EN + ZH stop-words). Implemented and tested. |
 | **Context assembly with token budgeting** | **Partial** | Context tokens are tracked per session. Compaction (summarization) handles overflow. No explicit priority tiers (P0/P1/P2) or position optimization. |
 | **Multi-agent orchestration** | **Strong** | Agent definitions with bindings, routing priority algorithm, subagent spawning, per-agent workspaces, tool policies. |
 | **Agent roles (Researcher, Secretary, Specialist)** | **Weak** | Agents are defined by config, not by domain role. No pre-built roles for research, task management, or dataset optimization. |
 | **Clarification step** | **Absent** | No built-in clarifier. Messages go directly to the agent. |
 | **Chat mode (multi-turn conversation)** | **Strong** | Session-based conversations with JSONL transcripts, history limits, and compaction. |
-| **External integrations (Trello, GitHub, Notion)** | **Partial** | Skill-based integrations (GitHub, Notion, Spotify exist as skills). No Trello integration. MCP is not used — tools are registered via a custom plugin SDK. |
-| **Web search** | **Partial** | Browser control and web fetch tools exist. No dedicated search API integration (Tavily/Bing). |
+| **External integrations (Trello, GitHub, Notion)** | **Strong** | Skill-based integrations exist (Trello, GitHub, Notion, Spotify, etc.). MCP is supported via `mcporter` (bridge approach), while core tools are registered via OpenClaw’s own tool/plugin system. |
+| **Web search** | **Strong** | Dedicated `web_search` tool with provider backends (Brave Search, Perplexity, Grok) plus browser control and `web_fetch`. |
 | **Memory with lifecycle management** | **Partial** | Session transcripts and memory files are indexed. Temporal decay exists. No hot/warm/cold tiers, no memory consolidation, no conflict detection. |
 | **CLI interface (session-based REPL)** | **Strong** | Full CLI with commands, session management. Written in TypeScript (not Go). |
 | **Web/mobile interface** | **Strong** | Control UI, WebChat, macOS menu bar app, iOS app, Android app. |
 | **PostgreSQL + pgvector** | **Absent** | Uses SQLite + sqlite-vec + FTS5. No PostgreSQL. |
 | **Work/personal context separation** | **Partial** | Session isolation per agent/channel/peer, but no first-class "context scope" concept like Harle's work/personal split. |
-| **Docker Compose deployment** | **Absent** | Local-first Node.js process. No Docker. |
+| **Docker Compose deployment** | **Strong** | Optional Docker Compose flow is supported (containerized gateway) and Docker is also used for agent sandboxing. |
 | **Tailscale private networking** | **Present** | Tailscale integration exists for remote access. |
 | **Git-based dataset sync** | **Absent** | No git sync. Memory files are local. File watching for live updates. |
 | **Approval gates for write actions** | **Partial** | `exec` tool approval flow exists. Dataset write approval does not exist (no dataset writer concept). |
-| **Run logging / audit trail** | **Weak** | Session transcripts log messages but not structured run metadata (cost, tokens, tool calls per run). |
+| **Run logging / audit trail** | **Partial** | Session transcripts (JSONL) capture messages and tool calls/results, and OpenClaw tracks usage for status/usage views, but there is no first-class per-run ledger that records full context inputs, outcomes, and cost in a single structured record. |
 | **Security: prompt injection defense** | **Strong** | `wrapExternalContent()` with boundary markers, homoglyph sanitization, suspicious pattern detection, security warnings injected into context. |
 | **Security: credential management** | **Partial** | Credentials stored in `~/.openclaw/credentials/`. No secrets backend, no rotation. |
 | **Security: access control** | **Strong** | DM policies (open/allowlist/pairing/disabled), command authorization, device pairing with cryptographic tokens, per-tool permission policies. |
-| **Plugin/extension system** | **Strong** | Mature plugin architecture with discovery, loading, SDK, hooks, runtime isolation. |
+| **Plugin/extension system** | **Strong** | Mature plugin architecture with discovery, loading, SDK, hooks, and strong path/config safety checks (plus optional Docker sandboxing for agent tools). |
 | **LLM provider abstraction** | **Strong** | Pluggable providers via plugin system. Model fallback chains. |
 | **24/7 operation** | **Strong** | Gateway server design, cron scheduling, always-on architecture. |
 | **Multi-device access** | **Strong** | Gateway + Tailscale + mobile apps + web UI. |
@@ -58,13 +58,13 @@ Key difference from Harle: OpenClaw is **messaging-channel-centric** (its primar
 
 **Agent orchestration and routing.** OpenClaw has a mature multi-agent system. Agents are defined in config with bindings that route messages based on channel, account, peer, guild, team, or roles — with a clear priority cascade. Session isolation ensures agents don't cross-contaminate. Subagent spawning with depth limits enables agent coordination. This covers Harle's need for agent roles and routing, though the routing paradigm is messaging-centric rather than task-type-centric.
 
-**Hybrid search (BM25 + vector).** This is the single most valuable overlap. OpenClaw implements exactly the hybrid search pipeline that Harle has planned but not yet built: FTS5 for keyword search (BM25 scoring), sqlite-vec for vector similarity, weighted score merging, MMR diversity re-ranking, temporal decay for recency, and query expansion with stop-word filtering. The implementation is complete, tested, and production-ready.
+**Hybrid search (BM25 + vector).** This is the single most valuable overlap. OpenClaw implements the hybrid search pipeline that Harle has planned but not yet built: FTS5 for keyword search (BM25 scoring), sqlite-vec for vector similarity, weighted score merging, optional MMR diversity re-ranking, and optional temporal decay for recency. It also includes a stop-word-based keyword extractor (EN + ZH) used to improve FTS-only mode for conversational queries. The implementation is complete, tested, and production-ready.
 
 **Session management and conversation history.** OpenClaw's session system (JSONL transcripts, session keys with hierarchical scoping, history limits, compaction via LLM summarization) covers Harle's need for multi-turn chat, conversation persistence, and history management.
 
 **Security architecture.** OpenClaw's prompt injection defense (`external-content.ts`), DM pairing, command authorization, and tool permission policies are more advanced than what Harle has designed. The external content wrapping pattern — boundary markers, homoglyph sanitization, per-source security warnings — is directly applicable.
 
-**Plugin extensibility.** The plugin SDK with typed APIs, hook system, and runtime isolation shows how to build an extensible tool/integration system. This is relevant to Harle's planned Tool Manager and MCP integration layer.
+**Plugin extensibility.** The plugin SDK with typed APIs, hook system, and strong path/config safety checks shows how to build an extensible tool/integration system. This is relevant to Harle's planned Tool Manager and MCP integration layer.
 
 ### 1.4 What OpenClaw Does Not Cover
 
@@ -78,7 +78,7 @@ Key difference from Harle: OpenClaw is **messaging-channel-centric** (its primar
 
 **Cold start and dataset tooling.** No auto-generated metadata, no quality assessment, no dataset writer with approval logic, no Specialist agent for vault health.
 
-**Structured run logging.** No per-run audit records with cost, tokens, tool calls, context used, and result status.
+**Structured run logging.** OpenClaw has session transcripts plus usage tracking, but it does not appear to maintain a separate per-run audit record that ties together full context inputs, tool calls, cost, and result status as a single structured artifact.
 
 ---
 
@@ -92,9 +92,9 @@ Key difference from Harle: OpenClaw is **messaging-channel-centric** (its primar
 1. **FTS5 with BM25** — Full-text search using SQLite FTS5 extension. Queries are built by tokenizing input, quoting tokens, and joining with AND. BM25 rank is converted to a `[0, 1]` score via `1 / (1 + rank)`.
 2. **Vector search with sqlite-vec** — Cosine similarity search over chunk embeddings stored in a virtual table with `FLOAT[dimensions]` columns.
 3. **Weighted merging** — Results from both sources are merged by ID (path + line range), with configurable weights (default: 70% vector, 30% text). Score = `vectorWeight * vectorScore + textWeight * textScore`.
-4. **MMR re-ranking** — Maximal Marginal Relevance using Jaccard similarity on token sets. Iteratively selects results that balance relevance (λ) against diversity (1−λ). Scores normalized to `[0, 1]` before MMR. Default λ = 0.7.
-5. **Temporal decay** — Exponential decay multiplier based on file age: `score × e^(-λ × ageDays)` where `λ = ln(2) / halfLifeDays`. Files with dates in their path (`memory/2026-02-15.md`) use the path date; others use filesystem mtime. "Evergreen" files (root `MEMORY.md`, undated files) don't decay.
-6. **Query expansion** — Stop-word removal (English + Chinese), keyword extraction from conversational queries, OR-expanded FTS queries. Optional LLM-based expansion with local fallback.
+4. **MMR re-ranking** — Maximal Marginal Relevance using Jaccard similarity on token sets. Iteratively selects results that balance relevance (λ) against diversity (1−λ). Scores normalized to `[0, 1]` before MMR. Default λ = 0.7 (MMR is opt-in via config; default disabled).
+5. **Temporal decay** — Exponential decay multiplier based on file age: `score × e^(-λ × ageDays)` where `λ = ln(2) / halfLifeDays`. Files with dates in their path (`memory/2026-02-15.md`) use the path date. For non-evergreen sources/files, filesystem mtime is used as a fallback timestamp. Temporal decay is opt-in via config (default disabled).
+6. **Query term extraction (FTS-only mode)** — Stop-word removal (English + Chinese) and keyword extraction from conversational queries. In the current pipeline this is used to search multiple extracted keywords and merge/deduplicate results in FTS-only mode; an OR-expanded helper exists but is not wired into the manager.
 
 **How to apply to Harle:**
 - Harle plans Whoosh + pgvector + RRF. OpenClaw proves the hybrid pattern works with SQLite + sqlite-vec. Harle can either:
@@ -239,7 +239,7 @@ Key difference from Harle: OpenClaw is **messaging-channel-centric** (its primar
 
 ## Key Takeaways
 
-1. **OpenClaw's hybrid search is the highest-value reusable component.** It implements exactly what Harle has planned (BM25 + vector + fusion + reranking) with additional features (temporal decay, query expansion) that Harle hasn't designed yet. The algorithms are backend-agnostic and can be ported to Python with Whoosh/pgvector.
+1. **OpenClaw's hybrid search is the highest-value reusable component.** It implements what Harle has planned (BM25 + vector + fusion + reranking) with additional features (temporal decay, keyword extraction for conversational FTS) that Harle hasn't implemented yet. The algorithms are backend-agnostic and can be ported to Python with Whoosh/pgvector.
 
 2. **OpenClaw is messaging-first; Harle is dataset-first.** The fundamental architectural difference means OpenClaw's value to Harle is in algorithms and patterns, not in wholesale component reuse. OpenClaw has no concept of a structured vault, context scopes, or dataset health management.
 
