@@ -1,7 +1,6 @@
 ---
 description: Require YAML frontmatter on every new .md file created inside docs/
-globs: docs/**/*.md
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Markdown Frontmatter for docs/
