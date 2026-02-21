@@ -3,7 +3,7 @@ title: "OpenClaw Codebase Analysis — Relevance to Harle"
 tags: [research, openclaw, comparison, architecture, search, memory, security, agents]
 context: global
 last_updated: 2026-02-22
-summary: "Deep analysis of the OpenClaw codebase and how its features, algorithms, and design solutions map to Harle's goals and four main challenges."
+summary: "Deep analysis of the OpenClaw codebase — architecture, messaging-channel-centric design, and how its features, algorithms, and design solutions map to Harle's goals."
 ---
 
 # OpenClaw Codebase Analysis — Relevance to Harle
@@ -216,6 +216,168 @@ Key difference from Harle: OpenClaw is **messaging-channel-centric** (its primar
 **How to apply to Harle:**
 - Harle's `config.yaml` should be validated against a schema on load. Python equivalent: `pydantic` models for config validation (similar role to Zod).
 - Hot-reload is useful when Harle runs as a long-lived service — config changes without restart.
+
+---
+
+## Section 3: Overall Architecture Overview
+
+### 3.1 System Identity
+
+OpenClaw is a local-first, always-on personal AI assistant that runs on the user's own device and acts as a **multi-channel messaging gateway**. It connects to messaging platforms (Telegram, WhatsApp, Discord, Slack, Signal, iMessage, Google Chat, IRC, Matrix, Microsoft Teams, and others), routes inbound messages to AI agents, and delivers responses back through the same platforms. It also exposes a CLI, a web-based Control UI, WebChat, and native mobile apps (macOS, iOS, Android).
+
+### 3.2 Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Language | TypeScript (ES modules) |
+| Runtime | Node.js ≥ 22.12 |
+| Package manager | pnpm 10 (workspace monorepo) |
+| CLI framework | Commander.js |
+| Gateway transport | WebSocket (`ws`) + Express 5 HTTP |
+| Database | SQLite + FTS5 + sqlite-vec (vector search) |
+| AI runtime | Pi agent (embedded runner + RPC mode) |
+| LLM providers | Pluggable: Anthropic, OpenAI, Google, and others via plugins |
+| Build | tsdown, oxlint, oxfmt |
+| Tests | Vitest (unit, e2e, extensions, gateway, live configs) |
+| Validation | Zod 4 + Ajv 8 |
+| Deployment | Docker, Docker Compose, Fly.io, systemd / launchd user services, Nix |
+
+### 3.3 Monorepo Layout
+
+OpenClaw is a pnpm workspace monorepo:
+
+| Path | Purpose |
+|---|---|
+| `src/` | Core source — gateway, channels, agents, routing, tools, memory, security, config, CLI |
+| `extensions/` | Channel and feature extensions (BlueBubbles, Matrix, Teams, Zalo, etc.) |
+| `ui/` | Web UI package (Control UI, WebChat) — React/Lit |
+| `packages/` | Shared packages |
+| `apps/` | Native apps (macOS menu bar, iOS, Android) |
+| `skills/` | Built-in agent skills |
+| `vendor/` | Vendored dependencies |
+| `test/` | Test suites |
+
+### 3.4 Core Subsystems
+
+**Gateway (Control Plane).** The central WebSocket/HTTP server (`src/gateway/`). Default port 18789. The Gateway is the hub through which everything flows: it manages channel lifecycles, routes inbound messages to agents, maintains sessions, coordinates tool invocations, broadcasts events to connected clients (CLI, WebChat, mobile apps), and handles config hot-reload. Every channel adapter, agent, and UI client connects to the Gateway.
+
+**Channels (Message Adapters).** Plugin-based channel system (`src/channels/`). Each channel implements the `ChannelPlugin` interface, which breaks into four adapter contracts:
+- `ChannelMessagingAdapter` — send/receive messages.
+- `ChannelGatewayAdapter` — lifecycle hooks (start/stop account, connect to gateway).
+- `ChannelOutboundAdapter` — outbound message delivery with platform-specific formatting.
+- `ChannelSecurityAdapter` — DM policies, pairing, access control.
+
+Core channels (Telegram, WhatsApp, Discord, Slack, Signal, iMessage, IRC, Google Chat, WebChat) live under `src/`. Additional channels (BlueBubbles, Matrix, Teams, Zalo) are loaded from `extensions/`.
+
+**Routing.** Message routing system (`src/routing/`). When a message arrives, `resolveAgentRoute()` evaluates configured bindings against the message's channel, account, peer, guild, team, and role metadata. It returns the target `agentId` and a derived `sessionKey`. Bindings follow a priority cascade from most-specific to least-specific: peer → parent thread → guild+roles → guild → team → account → channel → default.
+
+**Agents (AI Runtime).** Agent execution engine (`src/agents/`). Uses the Pi agent runtime in embedded mode. Each agent gets an isolated workspace directory, its own session store, and per-agent tool permission policies. Agents can spawn subagents (with depth limits to prevent infinite nesting). Skills provide reusable, higher-level agent capabilities.
+
+**Sessions.** Conversation state management (`src/config/sessions.ts`, `src/sessions/`). Sessions are identified by hierarchical keys encoding agentId + scope (channel, account, peer). Session stores are JSON files in agent workspaces. Conversation history is persisted as JSONL transcripts. Sessions support configurable scoping modes (`per-sender`, `per-peer`, `per-channel-peer`, `global`) and identity linking across platforms.
+
+**Memory.** File-based knowledge store (`src/memory/`). Each agent workspace contains `memory/*.md` files indexed for search. Indexing uses SQLite FTS5 (BM25) + sqlite-vec (vector cosine similarity) for hybrid search. Delta-based incremental indexing with file watching.
+
+**Tools.** Agent tools (`src/tools/`, `src/agents/tools/`). Built-in tools include: browser control, canvas workspace, device nodes (camera, screen, location), cron scheduling, session management, memory search, web fetch/search, and channel-specific actions (Slack/Discord operations). Tool invocations are mediated by the Gateway.
+
+**Plugins.** Extensibility system (`src/plugins/`). Plugins export a `register()` function and receive a runtime API object. Memory plugins are slot-based (only one active). Channel plugins can be multiple. Plugins are discovered by scanning bundled, global, workspace, and config-specified directories, with validation for file extensions, path containment, and ownership.
+
+**Security.** Security layer (`src/security/`). Includes external content wrapping with boundary markers and homoglyph sanitization, suspicious pattern detection, DM policies (open / allowlist / pairing / disabled), cryptographic device pairing, and per-tool permission policies.
+
+**Config.** Configuration management (`src/config/`). JSON5 config validated with Zod schemas. Hot-reload on file changes. Config defines agents, bindings, channels, accounts, tool policies, and runtime settings.
+
+### 3.5 Message Lifecycle
+
+The complete path of an inbound message through OpenClaw:
+
+1. **Channel adapter** receives a platform-specific event (e.g., Telegram bot webhook, WhatsApp socket message).
+2. **Channel monitor** extracts and normalizes the message (sender, body, attachments, chat type, thread context).
+3. **Gateway** receives the normalized message via the channel's gateway adapter.
+4. **Routing** (`resolveAgentRoute()`) evaluates bindings against the message metadata to select an agent and derive a session key.
+5. **Group gating** (for group chats) checks whether the bot was mentioned or the activation mode allows response.
+6. **DM policy** (for direct messages) checks whether the sender is allowed (open, allowlist, or paired).
+7. **Session resolution** looks up or creates the session, loading conversation history.
+8. **Dispatcher** delivers the message to the agent runtime.
+9. **Agent runtime** (Pi embedded runner) assembles context (system prompt + session history + memory search results + tool definitions), invokes the LLM provider, and processes the response.
+10. **Tool execution** — if the LLM requests tool calls, the Gateway mediates execution and returns results to the agent loop.
+11. **Response streaming** — the agent's reply is chunked and formatted for the target channel.
+12. **Outbound delivery** — the channel's outbound adapter sends the response back to the user on the original platform.
+
+### 3.6 Deployment Model
+
+OpenClaw supports multiple deployment patterns:
+
+- **Local daemon** — installed as a systemd (Linux) or launchd (macOS) user service via `openclaw onboard --install-daemon`. Always-on, runs in the background.
+- **Docker / Docker Compose** — containerized gateway with mounted config and workspace volumes. Sandbox containers for untrusted agent tool execution.
+- **Fly.io** — cloud deployment with persistent volume mount and HTTP service on port 3000.
+- **Nix** — declarative configuration via a dedicated Nix flake.
+
+In all modes the Gateway is the long-lived process. Channel adapters maintain persistent connections to messaging platforms. The CLI, web UI, and mobile apps connect to the Gateway over WebSocket.
+
+---
+
+## Section 4: The Messaging-Channel-Centric Approach
+
+### 4.1 What "Messaging-Channel-Centric" Means
+
+OpenClaw's architecture is organized around a single core premise: **the user already lives in messaging platforms, so the AI assistant should meet them there**. Every architectural decision flows from this premise. The system's primary job is to receive messages from chat platforms, route them to the right AI agent, and deliver responses back. The messaging channel is not a secondary interface layered on top of some other core functionality — it *is* the core.
+
+This manifests in several concrete ways:
+
+**Channels are first-class architectural citizens.** Channels are not thin adapters wrapping a general-purpose API. Each channel is a full plugin with its own lifecycle management, security policies, threading model, streaming support, mention handling, and outbound formatting. The Gateway dedicates an entire subsystem (`server-channels.ts`) to managing channel lifecycles — starting accounts, monitoring connections, handling reconnections, and tracking channel health.
+
+**Agents are invoked per-message, reactively.** When a message arrives from any channel, the system follows a fixed pipeline: route → resolve session → run agent → return response. Agents do not run in the background processing a dataset or performing autonomous work (except for minimal cron/heartbeat tasks). They wake up when a message arrives, respond, and go back to sleep. The system is fundamentally **reactive**, not proactive.
+
+**Routing is channel-metadata-driven.** The binding system that selects which agent handles a message is defined entirely in terms of channel concepts: channel type, account ID, peer identity, guild/server, team, and member roles. The routing priority cascade — peer → thread parent → guild+roles → guild → team → account → channel → default — is a hierarchy of messaging specificity, not a hierarchy of task types or knowledge domains.
+
+**Session isolation mirrors messaging topology.** Session keys are derived from channel topology: `agent:{agentId}:{channel}:{accountId}:direct:{peerId}`. The system's notion of "conversation" is not "a thread about topic X" but "messages from peer Y on channel Z via account W." Identity linking (`identityLinks` config) exists specifically because a single human may have different identities across different messaging platforms, and the system needs to unify their sessions.
+
+**Everything is modeled as a message.** Even non-chat inputs — CLI commands, webhook payloads, cron triggers — are normalized into message-like structures and fed through the same routing → agent → response pipeline. The "message" is the universal input type.
+
+### 4.2 How This Shapes the Architecture
+
+The messaging-channel-centric premise creates several downstream architectural characteristics:
+
+**Gateway-as-hub topology.** The Gateway exists because multiple channel adapters need a central coordination point. Without the messaging premise, there would be no need for a WebSocket-based control plane that manages channel lifecycles, routes between channels and agents, and broadcasts events to multiple connected clients. The Gateway is essentially a **message broker** — channels are producers, agents are consumers, and the Gateway handles routing, session management, and delivery.
+
+**Access control is channel-native.** DM policies (open / allowlist / pairing / disabled) operate at the channel level because the threat model is channel-specific: someone on Telegram can message the bot, and the system needs to decide whether to respond. The cryptographic pairing flow — stranger sends DM, receives pairing code, user approves via CLI — is a pattern that only makes sense when the primary attack surface is incoming messages from external chat platforms.
+
+**Group chat is a first-class concern.** Group gating — deciding whether the bot should respond in a group chat based on mentions, activation modes (`mention|always`), and channel-specific mention syntax — is a significant subsystem. In a dataset-centric architecture, there is no concept of "being mentioned in a group" because the user is interacting directly with the system, not via a shared messaging channel.
+
+**Context assembly is session-history-driven.** When an agent assembles context for an LLM call, the primary source is the session's conversation history (JSONL transcript) plus memory search results scoped to the agent's workspace. There are no priority tiers, no vault-wide search, no structured context budgeting. The "context" is essentially "what has been said in this conversation" augmented by whatever the agent's memory files contain.
+
+**Multi-platform identity is a core problem.** The `identityLinks` system exists because the same person might message the bot from WhatsApp (+1234567890), Telegram (@alice), and Slack (U0ABC). Linking these identities so the agent sees one continuous conversation is a problem unique to the messaging-centric paradigm. A dataset-centric system doesn't have this problem because the user authenticates once and interacts through one interface.
+
+### 4.3 Contrast with Dataset-Centric Architecture
+
+| Dimension | Messaging-Channel-Centric (OpenClaw) | Dataset-Centric (Harle) |
+|---|---|---|
+| **Primary organizing principle** | Messaging platforms and their topology | Structured knowledge vault |
+| **What triggers agent work** | An inbound message from a channel | A user query about the dataset, or a proactive dataset operation |
+| **Agent invocation model** | Reactive: one invocation per message | Task-based: invocation per query, can be proactive |
+| **Routing basis** | Channel metadata (platform, account, peer, guild, roles) | Task type and agent role (Researcher, Secretary, Specialist) |
+| **Session identity** | Channel + account + peer | User + context scope (work/personal) |
+| **Context assembly** | Session transcript + flat agent memory files | Priority-tiered context with token budgeting from vault search |
+| **Knowledge organization** | Flat `memory/*.md` files per agent workspace | Structured vault: directories, frontmatter, taxonomy, context scopes |
+| **Search role** | Memory retrieval within an agent's workspace | Deterministic pre-AI search over the full knowledge base |
+| **Core problem** | Unifying messages across platforms into coherent agent conversations | Operating reliably over a curated, evolving personal knowledge base |
+| **Access control model** | Per-channel DM policies, pairing codes, allowlists | User authentication, per-scope access |
+| **Proactive behavior** | Minimal (cron/heartbeat only) | Planned: dataset health management, stale-data warnings, consolidation |
+
+The fundamental difference is where value comes from. In OpenClaw, value comes from **being available everywhere the user already communicates** — answering on WhatsApp, managing tasks from Slack, discussing code in Discord. The system's sophistication is in multi-channel routing, session unification, and always-on availability. Knowledge (agent memory files) is a support mechanism for better responses.
+
+In Harle, value comes from **the quality and accessibility of the knowledge base itself** — structured notes, research, policies, task logs — and the AI's ability to search, reason over, and maintain that dataset. The interface (CLI, web) is a way to access the dataset. The dataset would have value even without the AI, and the AI's job is to make the dataset more accessible and to keep it healthy.
+
+### 4.4 What Harle Can Learn from This Paradigm Difference
+
+1. **The routing concept is useful even without channels.** OpenClaw's binding-based routing with priority cascade is a powerful pattern. Harle can use the same concept but route on task type, agent role, and context scope instead of channel metadata.
+
+2. **Session key derivation is transferable.** Hierarchical session keys (`agent:{role}:{scope}`) give clean session isolation. Harle should adopt this for conversation management across agent roles and work/personal contexts.
+
+3. **Reactive-only is limiting for dataset work.** OpenClaw's purely reactive model (respond to messages) means it cannot autonomously manage a dataset — no scheduled cleanups, no proactive conflict detection, no unsolicited quality reports. Harle needs proactive agents, which is a fundamentally different execution model.
+
+4. **The "gateway-as-hub" pattern is overkill for Harle's MVP.** OpenClaw's Gateway exists to coordinate many channels. Harle's single CLI interface doesn't need a WebSocket control plane. The Orchestrator can serve this role directly.
+
+5. **Multi-platform identity linking is not a Harle concern (yet).** But the concept of identity linking has an analog in Harle's context scopes: the same user has work and personal contexts, and the system needs to keep them separate rather than unified.
 
 ---
 
