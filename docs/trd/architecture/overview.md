@@ -2,7 +2,7 @@
 title: "Harle Architecture Description"
 tags: [architecture, overview, components, deployment, infrastructure, technology-stack]
 context: global
-last_updated: 2026-02-19
+last_updated: 2026-02-24
 summary: "Describes the overall architecture of Harle, its six main components, technology choices, deployment strategy, and security approach."
 ---
 
@@ -20,8 +20,8 @@ The system consists of six main components connected in a pipeline. The diagram 
 
 ```
 ┌─────────────┐     ┌──────────────────────────┐     ┌────────────────┐     ┌──────────────────────────┐
-│  Interface   │────>│     Orchestrator          │────>│  Models/Agents │────>│  External Integrations   │
-│  (CLI first) │     │  (scripts + agent logic)  │     │                │     │  (Trello first)          │
+│  Interface   │────>│     Orchestrator          │────>│  Models/Agents │────>│  Tool Module Layer       │
+│  (CLI first) │     │  (scripts + agent logic)  │     │                │     │  (Web Search, Trello...) │
 └─────────────┘     └──────────┬───────────────┘     └───────┬────────┘     └────────────┬─────────────┘
                                │                             │                           │
                                │                             │                           │
@@ -43,10 +43,10 @@ The system consists of six main components connected in a pipeline. The diagram 
 
 **Data flows:**
 - The **Interface** sends user requests to the **Orchestrator**.
-- The **Orchestrator** decides what to do: it may query the **Search Algorithm** to find relevant data, call **Models/Agents** for reasoning, or trigger **External Integrations**.
+- The **Orchestrator** decides what to do: it may query the **Search Algorithm** to find relevant data, call **Models/Agents** for reasoning, or invoke tools through the **Tool Module Layer**.
 - The **Search Algorithm** uses the **Indexer** (database) to find relevant content from **Files and Data**.
 - **Models/Agents** can read from and write to both the **Indexer** and **Files and Data**.
-- **External Integrations** (like Trello) can also read from and write to **Files and Data**.
+- **Tool Modules** (like Web Search, Trello) can also read from and write to **Files and Data**.
 
 ---
 
@@ -328,97 +328,37 @@ The Orchestrator calls models through a single internal interface (a "provider w
 
 ---
 
-### 6. External Integrations (Trello + Web Search from day one)
+### 6. Tool Module Layer (Web Search + Trello from day one)
 
-**What it does:** External Integrations are connectors that let Harle interact with third-party services and the outside world. They allow agents to read from and write to tools you already use — like Trello boards — and to search the internet for fresh information.
+**What it does:** The Tool Module Layer is how Harle acts on the outside world. It is the modular, extensible system for all capabilities — web search, Trello, script execution, vault management, and future additions. Each capability is a **tool module**: a self-contained directory with a Python class, tool functions, optional domain knowledge (skills), and configuration.
 
-**Technology: Python wrapper functions exposed via [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) standard**
+**Technology: Python tool modules with a central Tool Registry, bridged to [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) `FunctionTool` objects. Optional [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) compatibility for interoperability.**
 
-**What is MCP?**  
-MCP (Model Context Protocol) is a standard way to expose tools to AI models. Instead of each tool having a custom integration, MCP defines a common format: "here is a tool, here is what it does, here are its inputs and outputs." Any orchestrator that speaks MCP can use any MCP-compatible tool.
+For the full architecture — the `BaseToolModule` interface, the Tool Registry, tool skills, the security model, MCP compatibility, configuration, and the incremental implementation plan — see **[tools.md](./tools.md)**.
 
-**Why MCP:**
-- **Portability.** If you ever switch orchestrators (e.g. from OpenAI Agents SDK to LangGraph), your tool integrations still work.
-- **Standardized.** One format for all tools, instead of writing custom glue code for each.
-- **Growing ecosystem.** More and more tools are publishing MCP connectors.
+**Key design principles:**
+- **Tool functions are the single source of truth.** Each tool is a plain Python function with type hints and a docstring. The registry introspects these to generate JSON schemas for the LLM — no separate schema files, no decorators, no duplication.
+- **Modules group related tools.** All Trello operations live in `TrelloModule`, all web search operations in `WebSearchModule`. Each module handles its own lifecycle (init, shutdown, health check) and configuration.
+- **Config-driven.** Each module is enabled/disabled and configured in `config.yaml`. Operation modes (`read_only`, `propose`, `auto`) control approval behavior per module. Security constraints (allowlists, blocklists, path restrictions) protect tools with local system access.
+- **Skills inject domain knowledge.** Each module can include Markdown files that teach the LLM *how* to use the tools effectively — usage patterns, conventions, safety rules. Which skills are active is controlled by config, and users can override built-in skills from their vault.
+- **MCP is an optional layer.** Internally, modules communicate with the Orchestrator through in-process Python calls (fast, simple). Modules can optionally be exported as MCP servers for use by Cursor, Claude, or other clients. External MCP servers can be imported through an adapter.
 
-#### 6a. Trello
+**First modules (Web Search + Trello):**
 
-**Why Trello from day one:**
-- **Immediate value.** You already use Trello for task management. Connecting it means Harle can read your tasks, suggest priorities, detect stalled work, and propose updates.
-- **Read-write patterns are clear.** Trello has a simple API: lists, cards, labels, due dates. This makes it a safe first integration.
-- **Low risk.** Even if something goes wrong, a misplaced Trello card is easy to fix.
-
-**Integration approach (safety first):**
-1. Start **read-only**: agents can fetch Trello cards but cannot modify them.
-2. Later, enable **propose mode**: agents suggest changes (e.g. "move this card to Done") and wait for your approval.
-3. Finally, enable **auto mode** for low-risk actions (e.g. adding a due date) while keeping approval gates for destructive actions (e.g. archiving a card).
-
-#### 6b. Web Search
-
-**Why Web Search from day one:**
-
-Your personal dataset contains what you already know. But many of Harle's planned tasks — research, market analysis, travel planning, news preparation, finding concert tickets — require **information you don't have yet**. Without web search, Harle is limited to your existing notes and whatever the LLM memorized during training (which is outdated and often wrong for specific facts). Web search transforms Harle from a "smart note assistant" into an actual research tool.
-
-**Technology: Commercial search API — [Tavily](https://tavily.com/) or [Bing Web Search API](https://www.microsoft.com/en-us/bing/apis/bing-web-search-api)**
-
-**What is a search API?**  
-A search API is a service that lets your code perform web searches programmatically. You send a query ("best flights to Tokyo March 2026"), the API returns structured results (titles, URLs, snippets) — just like Google, but for machines instead of humans.
-
-**Why a commercial search API to start:**
-- **Fastest to integrate.** One API key, a few lines of Python, and web search is working. No infrastructure to deploy or maintain.
-- **High-quality results.** Services like Tavily and Bing have mature ranking algorithms and broad web coverage. You get reliable, relevant results immediately.
-- **AI-optimized (Tavily).** Tavily is built specifically for AI agents — it returns clean, extracted content rather than raw HTML, which reduces the work your Orchestrator needs to do before passing results to the model.
-- **Low cost at personal scale.** Tavily offers a free tier (1,000 searches/month) and a paid tier at ~$0.004 per search. Bing API offers 1,000 free calls/month, then ~$0.005 per call. For personal use, this is a few dollars per month at most.
-- **Focus on what matters.** At this stage, the goal is to get the agent loop working end-to-end. Spending time setting up self-hosted search infrastructure is a distraction from building the core product.
-
-**Tavily vs. Bing API:**
-
-| Criteria | Tavily | Bing Web Search API |
+| Module | Role | Why from day one |
 |---|---|---|
-| **Designed for** | AI agents specifically | General-purpose search |
-| **Response format** | Clean extracted content, ready for LLMs | Raw snippets, may need post-processing |
-| **Free tier** | 1,000 searches/month | 1,000 calls/month |
-| **Ease of integration** | Very simple Python SDK | REST API, straightforward |
-| **Result quality** | Excellent for research tasks | Excellent, broader web coverage |
+| **Web Search** | `search_web`, `search_news`, `fetch_page` via Tavily/Bing/SearXNG | Every agent role needs live information. Read-only, low risk. Transforms Harle from "smart notes" to an actual research tool. |
+| **Trello** | `search_cards`, `create_card`, `move_card` via Trello API | Immediate value for task management. Simple API, low risk. Safety-first rollout: read-only → propose → auto. |
 
-Either works well. Tavily is slightly easier for AI agent use cases; Bing has broader coverage. The MCP wrapper abstracts this choice — switching between them later is a one-line change.
+**Planned modules:**
 
-**How it fits the architecture:**  
-The Orchestrator calls the search API through an MCP-compatible wrapper, just like Trello. The wrapper sends a search query, receives results (titles, URLs, snippets/content), and the Orchestrator adds the most relevant pieces to the model's context.
-
-**Web search flow:**
-```
-Agent needs external information
-         │
-         ▼
-Orchestrator calls Web Search tool
-         │
-         ▼
-Search API returns results (title, URL, content)
-         │
-         ▼
-Orchestrator selects the top 3–5 most relevant results
-         │
-         ▼
-Content is trimmed and added to the model's context
-alongside your dataset search results
-```
-
-**Why not just use the LLM's built-in knowledge?**  
-LLMs are trained on data from months or years ago. They do not know today's prices, recent news, current flight schedules, or the latest version of a library. Web search gives the agent access to **live, current information** — which is essential for research, travel planning, news, and event tracking.
-
-**Future improvement: migrate to [SearXNG](https://docs.searxng.org/) (self-hosted meta search engine).**  
-SearXNG is a free, open-source meta search engine that you host yourself. It queries multiple search engines (Google, Bing, DuckDuckGo, etc.) on your behalf and aggregates results. Benefits over commercial APIs: zero cost per query (unlimited searches), full privacy (searches stay on your server), and no vendor dependency. The migration is straightforward — SearXNG returns the same kind of data (titles, URLs, snippets), so only the MCP wrapper internals change. This is worth doing once Harle is stable and search volume grows beyond the free API tiers.
-
-#### Planned integrations (after Trello and Web Search)
-
-| Service | Use case | Priority |
+| Module | Use case | Priority |
 |---|---|---|
+| **Vault** | Read/write notes, search the user dataset | High — needed for all roles |
+| **Scripts** | Execute user scripts on the host (with security sandbox) | Medium |
 | **GitHub** | Read PRs, summarize changes, propose review comments | High |
-| **Notion** | Read/write research documents, store reports | High |
+| **Notion** | Read/write research documents, store reports | Medium |
 | **Calendar** | Schedule-aware task planning | Medium |
-| **Telegram** | Mobile access to Harle via chat | Medium |
 
 ---
 
@@ -545,7 +485,7 @@ Tailscale creates a private network between your devices. Your Harle server, you
 | **Search** | Whoosh | Pure Python, no external services, fast |
 | **Database** | PostgreSQL + pgvector | One DB for everything, industry standard |
 | **Models** | OpenAI API (now), self-hosted (later) | Best quality today, clean migration path |
-| **Integrations** | MCP-compatible Python wrappers | Portable, standardized |
+| **Tool Module Layer** | Python tool modules + Tool Registry + OpenAI Agents SDK bridge | Modular, configurable, secure, MCP-compatible |
 | **Web Search** | Tavily or Bing API (now), SearXNG (later) | Fast to integrate, AI-optimized, low cost at personal scale |
 | **Data storage** | Markdown files in a separate Git repo (external to this codebase) | Human-readable, version-controlled, per-user |
 | **Deployment** | Docker Compose | One command to start everything |
@@ -560,7 +500,7 @@ Harle follows a "secure enough, not paranoid" philosophy:
 
 1. **Data never in the code repository.** User datasets, database state, and runtime configuration live outside the Harle application repo. The `.gitignore` enforces this. The code repo is safe to share or make public without leaking personal data.
 2. **Separate contexts.** Work and personal data live in separate directories (or database schemas) with different access rules.
-3. **Read-first, write-later.** All integrations start as read-only. Write access is enabled explicitly, per tool, with approval gates.
+3. **Read-first, write-later.** All tool modules start in read-only or propose mode. Write access is enabled explicitly, per module, with approval gates. Tools with local system access (scripts, vault) are additionally protected by input validation and execution sandboxing (see [tools.md](./tools.md)).
 4. **No secrets in the vault or the code repo.** API keys and tokens live in environment variables or a secrets manager (e.g. Docker secrets), never in Markdown files or committed configuration.
 5. **Private network only.** Harle is only accessible over Tailscale — no public ports, no public URLs.
 6. **Audit log.** Every agent run is logged: what was asked, what was decided, what tools were called, what was returned. This is how you build trust.
@@ -590,7 +530,7 @@ Here is a concrete example. You launch Harle and type: *"Find all stalled tasks 
    → Finds your Trello preferences from the dataset
          │
          ▼
-4. Orchestrator calls Trello integration (External Integration)
+4. Orchestrator calls Trello module (Tool Module Layer)
    → Reads all cards from your Trello boards
    → Identifies cards with no activity in 14+ days
          │
@@ -620,15 +560,15 @@ This architecture is designed to grow. The first version focuses on:
 
 1. **CLI interface** — talk to Harle from the terminal
 2. **One agent role** (Secretary) — the most immediately useful
-3. **Trello integration** — read-only at first
-4. **Web Search** — enables research and live information from the start
-5. **Markdown dataset** — your knowledge base
-6. **PostgreSQL** — logging and search index
-7. **OpenAI models** — for reasoning
+3. **Tool Module Layer** — Web Search (first module) + Trello, with the registry, skills, and security layers (see [tools.md](./tools.md) for the incremental plan)
+4. **Markdown dataset** — your knowledge base
+5. **PostgreSQL** — logging and search index
+6. **OpenAI models** — for reasoning
 
 Once this loop works reliably, the next steps are:
 - Add Researcher and Specialist roles
-- Enable write integrations (with approval)
+- Add more tool modules (vault, scripts, Notion) following the same pattern
+- Enable write tools with approval gates
 - Add semantic search (pgvector)
 - Deploy to a VPS for always-on access
 - Add Telegram or web chat interface

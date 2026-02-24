@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Architecture & Functionality"
 tags: [orchestrator, architecture, fastapi, agents, routing, context-assembly, tools]
 context: global
-last_updated: 2026-02-19
+last_updated: 2026-02-24
 summary: "Describes the Orchestrator's internal modules, request lifecycle, conversation mode, and technology choices for Harle's central coordination component."
 ---
 
@@ -28,9 +28,10 @@ CLI ──HTTP──>           │                                             
                         │  └──────────┘   └────┬─────┘   └────┬────┘  │
                         │                      │              │       │
                         │                 ┌────▼─────┐   ┌────▼────┐  │
-                        │                 │ Clarifier│   │  Tool   │  │──── External Integrations
-                        │                 │          │   │ Manager │  │     (Trello, Web Search)
-                        │                 └──────────┘   └────┬────┘  │
+                        │                 │ Clarifier│   │  Tool   │  │──── Tool Modules
+                        │                 │          │   │ Module  │  │     (Web Search, Trello, ...)
+                        │                 └──────────┘   │ Layer   │  │
+                        │                                └────┬────┘  │
                         │                                     │       │
                         │  ┌──────────┐   ┌──────────┐   ┌────▼────┐  │
                         │  │ Run      │   │ Context  │   │ Search  │  │
@@ -393,83 +394,56 @@ Handoffs are logged. Each agent in the chain only has access to its own tools �
 
 ---
 
-### 6. Tool Manager (connect to the outside world)
+### 6. Tool Module Layer (connect to the outside world)
 
-**What it does:** The Tool Manager is the Orchestrator's gateway to external services. Every time an agent needs to read Trello cards, search the web, or read/write files in the dataset, the call goes through the Tool Manager.
+**What it does:** The Tool Module Layer is the Orchestrator's gateway to external services and local capabilities. Every time an agent needs to search the web, read Trello cards, run a script, or read/write files in the dataset, the call goes through a tool module.
 
-**Why a separate module (instead of letting agents call APIs directly):**
-- **Centralized control.** All external calls go through one place. You can add logging, rate limiting, and approval gates without changing each tool.
-- **Abstraction.** Agents do not know how Trello's API works. They just call `trello_list_cards(board="Work")`. The Tool Manager handles authentication, retries, error formatting, and response parsing.
-- **Swappable.** If you switch from the Trello API to a Trello MCP server, only the Tool Manager changes. Agents and the Orchestrator are untouched.
+The Tool Module Layer is described in full in its own architecture document: **[tools.md](./tools.md)**. This section summarizes the key points relevant to the Orchestrator.
+
+**Why a separate layer (instead of letting agents call APIs directly):**
+- **Centralized control.** All tool calls go through the Tool Registry. Logging, rate limiting, security constraints, and approval gates apply uniformly without changing each tool.
+- **Abstraction.** Agents do not know how Trello's API works. They call `search_cards(board_id="Work")`. The tool module handles authentication, retries, error formatting, and response parsing.
+- **Modular.** Each integration is a self-contained module (directory with a Python class) that follows the `BaseToolModule` interface. Adding a new integration means adding a new directory — nothing else changes.
+- **Configurable.** Each module can be enabled/disabled, configured with credentials, and assigned an operation mode (`read_only`, `propose`, `auto`) — all in `config.yaml`.
+- **Secure.** Tools that interact with the local system (scripts, vault) are protected by input validation (allowlists, blocklists, path restrictions) and execution sandboxing (timeouts, memory limits).
 
 **How tools are defined:**
 
-Each tool is a Python function decorated with metadata that describes it to the LLM:
+Each tool is a plain Python function with type hints and a docstring. The function *is* the tool definition — no separate schema, no decorator, no manifest:
 
 ```python
-@tool(
-    name="trello_list_cards",
-    description="List all cards on a Trello board, including their status, labels, and due dates.",
-    permission="read",        # read | write | delete
-    requires_approval=False,  # read actions don't need approval
-)
-def trello_list_cards(board: str) -> list[dict]:
-    """Calls Trello API and returns cards."""
+async def search_cards(board_id: str, status: str = "all") -> str:
+    """Search Trello cards on a board, optionally filtered by status.
+
+    Args:
+        board_id: The Trello board ID to search in.
+        status: Filter by card status. Options: all, active, stalled, done.
+    """
     ...
 ```
 
-The LLM sees the `name` and `description` and decides when to call it. The `permission` and `requires_approval` fields are enforced by the Tool Manager, not the LLM — so they cannot be bypassed.
+The Tool Registry introspects each function's signature, type hints, and docstring to generate the JSON schema that the LLM sees — the same way OpenAI's `@function_tool` works, without the decorator.
 
-**Tool registry (first version):**
+**How the Orchestrator uses tools at request time:**
 
-| Tool | Category | Permission | Approval needed? |
-|---|---|---|---|
-| `trello_list_boards` | Trello | read | No |
-| `trello_list_cards` | Trello | read | No |
-| `trello_get_card` | Trello | read | No |
-| `trello_create_card` | Trello | write | Yes |
-| `trello_update_card` | Trello | write | Yes |
-| `trello_move_card` | Trello | write | Yes |
-| `web_search` | Web Search | read | No |
-| `web_fetch_page` | Web Search | read | No |
-| `dataset_search` | Dataset | read | No |
-| `dataset_read_file` | Dataset | read | No |
-| `dataset_write_file` | Dataset | write | Yes (work context) |
+```
+1. Orchestrator determines which tools this agent needs
+   (from the agent's tools-allowlist and the request content)
+2. Calls registry.get_agent_tools(tool_names)
+   → returns FunctionTool objects for the OpenAI Agents SDK
+3. Calls registry.get_skills_for_tools(tool_names)
+   → returns domain knowledge (Markdown) for the active modules
+4. Context Assembler includes skill content in the prompt
+5. Agent Runner executes with the tools
+6. When the LLM calls a tool, the registry checks permissions
+   and security constraints before executing the function
+```
 
 **Approval flow for write actions:**
 
-```
-Agent decides: "I want to create a Trello card"
-         │
-         ▼
-Tool Manager checks: requires_approval = true
-         │
-         ▼
-Run is paused. Pending action sent to user:
-  "Agent wants to create a card:
-   Board: Work
-   List: To Do
-   Title: Research privacy solutions
-   Description: [...]
-   
-   Approve? [y/n]"
-         │
-    ┌────┴────┐
-    │         │
-  [yes]     [no]
-    │         │
-    ▼         ▼
-  Execute   Skip action,
-  the tool  agent continues
-             without it
-```
+Write and delete tools pause for user approval in `propose` mode (the default). The user sees the proposed action and decides `[y/n]` before execution proceeds.
 
-**MCP compatibility:**
-
-Tools are exposed via MCP (Model Context Protocol) standard. This means:
-- If you find an existing MCP server for a service (e.g. a community-built Notion MCP server), you can plug it in directly.
-- If you later switch orchestrators, your tools still work.
-- Other agents or systems can reuse your tools via the same MCP interface.
+For the full architecture — the `BaseToolModule` interface, the Tool Registry, tool skills, the security model, MCP compatibility, and the incremental implementation plan — see **[tools.md](./tools.md)**.
 
 ---
 
@@ -581,7 +555,7 @@ Here is the full lifecycle of a request, from the moment you hit Enter to the mo
     │                          │
     │                    5. Agent Runner
     │                       Sends context + request to LLM
-    │                       LLM may call tools → Tool Manager → loop back
+    │                       LLM may call tools → Tool Module Layer → loop back
     │                       Enforces guardrails (max iterations, timeout, allowlist)
     │                       On write actions: pauses for user approval
     │  <── approval request ───│  (optional round-trip)
@@ -740,11 +714,16 @@ harle/                                 ← This repository (application code onl
 │       │   ├── definitions.py  # Agent role loading from vault
 │       │   └── guardrails.py   # Safety checks, limits, validation
 │       │
-│       ├── tools/              # Tool Manager and tool implementations
-│       │   ├── manager.py      # Central tool registry, approval flow
-│       │   ├── trello.py       # Trello API wrapper
-│       │   ├── web_search.py   # Tavily/Bing wrapper
-│       │   └── dataset.py      # Dataset file read/write
+│       ├── tools/              # Tool Module Layer (see tools.md)
+│       │   ├── base.py         # BaseToolModule interface
+│       │   ├── registry.py     # Tool Registry, SDK bridge
+│       │   ├── skills.py       # Skill loader
+│       │   ├── constraints.py  # Security constraint engine
+│       │   ├── permissions.py  # Permission checks, approval flow
+│       │   ├── web_search/     # Web Search module
+│       │   ├── trello/         # Trello module
+│       │   ├── vault/          # Vault operations module
+│       │   └── scripts/        # Script execution module
 │       │
 │       ├── search/             # Search client (interface to Whoosh + pgvector)
 │       │   └── client.py

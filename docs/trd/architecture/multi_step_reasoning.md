@@ -2,7 +2,7 @@
 title: "Multi-Step Reasoning — Design & Incremental Implementation Plan"
 tags: [orchestrator, multi-step-reasoning, agentic-loop, tool-use, planning, react, agents]
 context: global
-last_updated: 2026-02-21
+last_updated: 2026-02-24
 summary: "Describes multi-step reasoning patterns for the orchestrator, how leading AI companies implement them, and a step-by-step plan from simplest to most complex."
 ---
 
@@ -350,8 +350,8 @@ POST /run → ContextAssembler.assemble() → LLMProvider.generate() → Respons
 **Goal:** The LLM can call tools and see results. The simplest possible multi-step pattern.
 
 **What changes:**
-1. **Tool definitions.** Create a `tools/registry.py` with function-tool definitions for the first two tools: `dataset_search` (re-queries the dataset) and `dataset_read_file` (reads a specific file by path). These are read-only, low-risk tools that operate on local data.
-2. **Switch from Responses API to Agents SDK.** Replace `client.responses.create()` with `Runner.run_sync()`. Define the agent with instructions (from Context Assembler) and the tool list.
+1. **Tool Module Layer foundations.** Create `BaseToolModule` and `ToolRegistry` (see [tools.md](./tools.md), Phases 1–2). Register the first two tools as a vault module: `dataset_search` (re-queries the dataset) and `dataset_read_file` (reads a specific file by path). These are read-only, low-risk tools that operate on local data.
+2. **Switch from Responses API to Agents SDK.** Replace `client.responses.create()` with `Runner.run_sync()`. Define the agent with instructions (from Context Assembler) and the tool list from the registry.
 3. **`max_turns` configuration.** Add `max_iterations` to `config.yaml` (default: 5 for Level 1). The SDK enforces this.
 4. **Run logging per turn.** Extend the run logger to record each turn: what the LLM said, which tool it called, what the tool returned, how many tokens were used.
 
@@ -388,11 +388,11 @@ POST /run → ContextAssembler.assemble()
 **Goal:** The agent can interact with external services, with safety guardrails.
 
 **What changes:**
-1. **Tool Manager module** (`tools/manager.py`). Central registry that tracks tool metadata: name, permission level (read/write), requires_approval flag, allowed agent roles.
-2. **Trello tools.** `trello_list_cards`, `trello_get_card` (read-only first).
-3. **Web search tool.** `web_search` via Tavily or Bing API — returns top 3–5 results with snippets.
-4. **Tool allowlist enforcement.** Before each tool call, the Tool Manager checks: (a) is this tool allowed for the active agent role? (b) does it require approval?
-5. **Approval flow for write tools.** When a tool with `requires_approval=True` is called, the run pauses, sends the proposed action to the user via the API, and resumes after approval/denial. Not needed for Level 2 (all tools are read-only) but the infrastructure is built.
+1. **Web Search and Trello modules.** Register `WebSearchModule` and `TrelloModule` with the Tool Registry (see [tools.md](./tools.md), Phases 2 and 6). Each module follows the `BaseToolModule` interface — lifecycle, tool functions, skills, configuration.
+2. **Web search tools.** `search_web`, `search_news` via Tavily or Bing API — returns top 3–5 results with snippets.
+3. **Trello tools.** `search_cards`, `get_card` (read-only first).
+4. **Tool allowlist enforcement.** Before each tool call, the Tool Registry checks: (a) is this tool allowed for the active agent role? (b) does it require approval? (c) do inputs pass security constraints?
+5. **Approval flow for write tools.** When a tool with `requires_approval=True` is called in `propose` mode, the run pauses, sends the proposed action to the user via the API, and resumes after approval/denial. Not needed for Level 2 (all tools are read-only) but the infrastructure is built.
 6. **`max_turns` increase.** Raise default to 10 — external tool calls typically need more turns than dataset-only queries.
 
 **What this enables:**
@@ -403,13 +403,13 @@ POST /run → ContextAssembler.assemble()
 **Architecture:**
 
 ```
-POST /run → ContextAssembler.assemble()
-          → ToolManager.get_tools_for_role(agent_role)
-          → Agent(instructions=system_prompt, tools=filtered_tools)
+POST /run → ContextAssembler.assemble() + registry.get_skills_for_tools()
+          → registry.get_agent_tools(filtered_tool_names)
+          → Agent(instructions=system_prompt + skills, tools=filtered_tools)
           → Runner.run_sync(agent, user_message, max_turns=10)
                │
-               ├─ Turn 1: LLM calls web_search("privacy L2 solutions")
-               │          ToolManager checks: web_search allowed for researcher? Yes.
+               ├─ Turn 1: LLM calls search_web("privacy L2 solutions")
+               │          Registry checks: search_web allowed for researcher? Yes.
                │          Execute → results appended
                ├─ Turn 2: LLM calls dataset_search("L2 architecture")
                │          Execute → results appended
@@ -419,7 +419,7 @@ POST /run → ContextAssembler.assemble()
           → Response
 ```
 
-**Estimated complexity:** Medium-high. The Tool Manager is new infrastructure. External API integrations (Trello, web search) each need error handling, retry logic, and rate limiting.
+**Estimated complexity:** Medium-high. The Tool Module Layer infrastructure (registry, permissions, skills) is built in earlier phases (see [tools.md](./tools.md)). External API integrations (web search, Trello) each need error handling, retry logic, and rate limiting.
 
 ---
 
@@ -530,7 +530,7 @@ ExecutionLoop produces initial_result
 **Goal:** Different agent roles collaborate on a single task. One agent can hand off to another mid-execution.
 
 **What changes:**
-1. **Agent definitions from vault.** Each agent role (Researcher, Secretary, Specialist) is defined as an Agents SDK `Agent` object with role-specific instructions (loaded from `prompts/*.md`), tools (filtered by the Tool Manager), and handoff targets.
+1. **Agent definitions from vault.** Each agent role (Researcher, Secretary, Specialist) is defined as an Agents SDK `Agent` object with role-specific instructions (loaded from `prompts/*.md`), tools (filtered by the Tool Registry), and handoff targets.
 2. **Handoff declarations.** Each agent declares which other agents it can hand off to:
    - Secretary → Researcher (for research subtasks)
    - Researcher → Secretary (to create Trello cards with findings)
@@ -637,7 +637,7 @@ Level 0: Current state (single LLM call)
    │
    └──→ Level 1: Tool-calling loop (Agents SDK integration)
            │
-           └──→ Level 2: External tools (Trello, Web Search, Tool Manager)
+           └──→ Level 2: External tools (Web Search, Trello, Tool Module Layer)
                    │
                    ├──→ Level 3: Plan-then-Execute
                    │       │
@@ -676,7 +676,7 @@ Costs assume GPT-4o-mini for execution ($0.15/1M input, $0.60/1M output) and GPT
 | Risk | Impact | Mitigation |
 |---|---|---|
 | **Runaway loops** (agent calls tools endlessly) | High cost, frozen UX | `max_turns` + timeout + per-tool rate limits. Start with conservative limits (5 turns at Level 1) and increase gradually. |
-| **Tool call hallucination** (LLM invents plausible but wrong tool parameters) | Wrong data returned, silent failures | Schema-based parameter validation in Tool Manager. Log every tool call for audit. Best models (GPT-4o family) have low tool-call hallucination rates. |
+| **Tool call hallucination** (LLM invents plausible but wrong tool parameters) | Wrong data returned, silent failures | Schema-based parameter validation in the Tool Registry + security constraints (see [tools.md](./tools.md)). Log every tool call for audit. Best models (GPT-4o family) have low tool-call hallucination rates. |
 | **Context window overflow** during multi-step runs | Degraded quality in later turns | The Agents SDK manages conversation truncation. Monitor per-run token usage. Long runs may need conversation compression. |
 | **Plan quality** (LLM produces a bad plan) | Wasted execution, wrong results | Plan validation before execution. User approval for expensive plans. Revision mechanism catches bad plans mid-execution. |
 | **Handoff confusion** (wrong agent activated) | Tool access violations, wrong approach | Strict tool allowlists per agent. Handoff logging. Start with explicit handoff rules (no open-ended "hand off to whoever you think is best"). |

@@ -66,7 +66,7 @@ From the Agent Runner's perspective, the Tool Module Layer is a single interface
 
 ## Why a Tool Module Layer (Not Just Functions)
 
-The previous Orchestrator design (see [orchestrator.md](./orchestrator.md), Section 6 — Tool Manager) described tools as individual decorated functions registered in a flat list. This works for a handful of tools but creates problems as the system grows:
+An earlier Orchestrator design described tools as individual decorated functions registered in a flat list. This works for a handful of tools but creates problems as the system grows:
 
 | Problem with flat tool functions | How the Tool Module Layer solves it |
 |---|---|
@@ -607,7 +607,7 @@ a clear scope (e.g., "Draft the /run endpoint schema" instead of
 
 ## Tool Permissions and Approval Flow
 
-Tool modules integrate with the Orchestrator's existing approval system (see [orchestrator.md](./orchestrator.md), Section 6 — Tool Manager). Each tool function carries permission metadata that the registry enforces.
+Tool modules integrate with the Orchestrator's approval system. Each tool function carries permission metadata that the registry enforces.
 
 **Permission model:**
 
@@ -1292,7 +1292,7 @@ If total exceeds max_tokens_per_module → truncate, warn in log.
 | **Orchestrator shutdown** | Calls `registry.shutdown_all()`. |
 | **Run Logger** | Logs module name alongside tool name for each tool call. Logs constraint check results for tools with constraints. |
 
-**What this replaces:** The current Tool Manager described in [orchestrator.md](./orchestrator.md), Section 6. The Tool Manager's responsibilities (registry, approval flow, tool definitions) are absorbed by the Tool Module Layer. The Tool Manager section in the Orchestrator TRD becomes a reference to this document.
+**What this replaces:** The Orchestrator's Section 6 ([orchestrator.md](./orchestrator.md)) now references this document for the full tool architecture. The Tool Module Layer owns the registry, approval flow, skills, and security constraints.
 
 **Verification:**
 - Integration test: start the Orchestrator with Web Search module enabled, send a request that triggers `search_web`, verify the full flow works — routing → context assembly (with skills) → agent execution → tool call → result.
