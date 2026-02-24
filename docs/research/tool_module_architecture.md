@@ -429,21 +429,21 @@ src/harle/tools/
 
 ### 5.4 Base Interface
 
+**Key design principle:** Tool functions are the single source of truth for their names, descriptions, and parameter schemas. The module does not duplicate this information — it only *points to* its tool functions. The registry introspects the functions (docstrings, type hints) to generate the JSON schemas that the LLM sees, exactly like OpenAI's `@function_tool` does.
+
 ```python
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-
-
-@dataclass
-class ToolDefinition:
-    name: str
-    description: str
-    parameters: dict          # JSON Schema
-    module_name: str
+from typing import Callable
 
 
 class BaseToolModule(ABC):
-    """Base class that every tool module implements."""
+    """Base class that every tool module implements.
+
+    The module is a container — it handles lifecycle (init, shutdown,
+    health) and groups related tool functions. It does NOT describe
+    what each tool does; the tool functions describe themselves via
+    their own docstrings and type hints.
+    """
 
     @property
     @abstractmethod
@@ -454,7 +454,7 @@ class BaseToolModule(ABC):
     @property
     @abstractmethod
     def description(self) -> str:
-        """Human-readable description for logging and debugging."""
+        """Human-readable module description for logging and debugging."""
         ...
 
     @abstractmethod
@@ -468,13 +468,13 @@ class BaseToolModule(ABC):
         ...
 
     @abstractmethod
-    def list_tools(self) -> list[ToolDefinition]:
-        """Return the tools this module provides."""
-        ...
+    def get_tools(self) -> list[Callable]:
+        """Return the tool functions this module provides.
 
-    @abstractmethod
-    async def execute(self, tool_name: str, params: dict) -> str:
-        """Execute a tool by name with the given parameters."""
+        Each function is a regular Python callable with type hints
+        and a docstring. The registry will introspect these to build
+        the JSON schemas for the LLM. No manual ToolDefinition needed.
+        """
         ...
 
     async def health_check(self) -> bool:
@@ -482,23 +482,134 @@ class BaseToolModule(ABC):
         return True
 ```
 
-### 5.5 How It Works End-to-End
+**Where information lives (no duplication):**
+
+| What | Where it lives | Who reads it |
+|---|---|---|
+| Tool name | Function name (`def search_cards`) | Registry extracts it |
+| Tool description | Function docstring | Registry extracts it → LLM sees it |
+| Parameter names & types | Function signature + type hints | Registry extracts JSON Schema → LLM sees it |
+| Module identity | `BaseToolModule.name` | Orchestrator (for config, logging, routing) |
+| Module description | `BaseToolModule.description` | Orchestrator (for logging, not sent to LLM) |
+| Lifecycle | `initialize()` / `shutdown()` / `health_check()` | Orchestrator |
+
+**Example — Trello module:**
+
+```python
+# src/harle/tools/trello/tools.py
+# These functions ARE the tool definitions. Docstrings and type hints
+# are the contract with the LLM.
+
+async def search_cards(board_id: str, status: str = "stalled") -> str:
+    """Search Trello cards matching the given status.
+
+    Args:
+        board_id: The Trello board ID to search in.
+        status: Filter by card status. Options: active, stalled, done.
+    """
+    ...
+
+async def create_card(board_id: str, list_name: str, title: str) -> str:
+    """Create a new Trello card in the specified list.
+
+    Args:
+        board_id: The Trello board ID.
+        list_name: Name of the list to add the card to.
+        title: Title for the new card.
+    """
+    ...
+```
+
+```python
+# src/harle/tools/trello/module.py
+
+class TrelloModule(BaseToolModule):
+    name = "trello"
+    description = "Trello board management for task tracking"
+
+    async def initialize(self, config: dict) -> None:
+        self._client = TrelloClient(config["api_key"], config["api_token"])
+
+    async def shutdown(self) -> None:
+        await self._client.close()
+
+    def get_tools(self) -> list[Callable]:
+        return [search_cards, create_card]
+        # ↑ Just pointers. No descriptions, no schemas, no duplication.
+```
+
+### 5.5 How the Registry Bridges to OpenAI Agents SDK
+
+The registry converts the module's tool functions into OpenAI Agents SDK `FunctionTool` objects. This is the adapter layer — it introspects each function to build the schema the LLM needs.
+
+```python
+# src/harle/tools/registry.py
+
+from agents import FunctionTool
+
+class ToolRegistry:
+
+    def register_module(self, module: BaseToolModule) -> None:
+        self._modules[module.name] = module
+        for fn in module.get_tools():
+            self._tools[fn.__name__] = (module, fn)
+
+    def get_agent_tools(self, tool_names: list[str]) -> list[FunctionTool]:
+        """Convert selected tool functions into OpenAI SDK FunctionTool objects.
+
+        The SDK's FunctionTool introspects the function's signature,
+        type hints, and docstring to generate the JSON schema — the same
+        way @function_tool works, but without the decorator.
+        """
+        result = []
+        for name in tool_names:
+            module, fn = self._tools[name]
+            result.append(FunctionTool(fn))
+        return result
+```
+
+**The data flow — single source of truth throughout:**
+
+```
+search_cards(board_id: str, status: str) -> str
+    """Search Trello cards matching the given status."""
+              │
+              │  function is the source of truth
+              │
+              ▼
+TrelloModule.get_tools()
+    → returns [search_cards, ...]          (just pointers, no metadata)
+              │
+              ▼
+ToolRegistry.get_agent_tools(["search_cards"])
+    → FunctionTool(search_cards)           (SDK introspects the function)
+              │
+              ▼
+Agent(tools=[FunctionTool(...)])
+    → LLM sees: name="search_cards",
+                description="Search Trello cards...",
+                parameters={"board_id": {"type": "string"}, ...}
+```
+
+No description is written twice. The function defines it once; the SDK reads it.
+
+### 5.6 How It Works End-to-End
 
 **Startup:**
 1. The Orchestrator reads `config.yaml` to see which modules are enabled and their settings.
 2. For each enabled module, it imports the module class, calls `initialize(config)`, and registers it with the `ToolRegistry`.
-3. The registry calls `list_tools()` on each module and builds a unified tool catalog.
+3. The registry calls `get_tools()` on each module and indexes the functions by name.
 
 **Request processing:**
 1. The Orchestrator receives a user request.
-2. Based on the agent role and task, it selects a subset of tools from the registry (not all — see "tool count should be low" above).
-3. Selected tools are converted to OpenAI Agents SDK `FunctionTool` objects and passed to the agent.
-4. When the LLM calls a tool, the SDK invokes the registry's `execute()`, which routes to the correct module.
+2. Based on the agent role and task, it selects a subset of tool names from the registry (not all — see "tool count should be low" above).
+3. The registry converts selected functions into OpenAI Agents SDK `FunctionTool` objects (introspecting docstrings and type hints to generate schemas).
+4. These `FunctionTool` objects are passed to the agent. When the LLM calls a tool, the SDK invokes the original function.
 
 **Shutdown:**
 1. The Orchestrator calls `shutdown()` on each registered module for clean resource release.
 
-### 5.6 Configuration
+### 5.7 Configuration
 
 ```yaml
 # In config.yaml
@@ -534,7 +645,7 @@ tool_modules:
     # ...
 ```
 
-### 5.7 Why This Combination Works for Harle
+### 5.8 Why This Combination Works for Harle
 
 | Harle Constraint | How This Architecture Addresses It |
 |---|---|
@@ -542,13 +653,13 @@ tool_modules:
 | **Single developer** | All modules live in the same repository. No multi-repo management, no PyPI publishing, no version matrix. |
 | **Privacy-first** | Everything runs locally. No SaaS integration platform. Credentials stay in local config. |
 | **OpenAI Agents SDK** | The registry converts module tools to SDK function tools — a thin adapter, not a framework rewrite. |
-| **Future MCP compatibility** | Modules can be wrapped as MCP servers later (each module already implements `list_tools()` and `execute()`, which maps directly to MCP's `tools/list` and `tools/call`). |
+| **Future MCP compatibility** | Modules can be wrapped as MCP servers later (each module already exposes callable functions, which map directly to MCP's `tools/list` and `tools/call`). |
 | **Selective tool exposure** | The registry holds all tools, but the orchestrator picks a subset per request. This keeps token usage low. |
 | **Needs lifecycle management** | `initialize()` / `shutdown()` / `health_check()` are part of the base class. |
 | **Configurable per deployment** | Each module reads its config from a central `config.yaml`. Enable/disable is a boolean. |
 | **Heterogeneous capabilities** | The same pattern works for external APIs (Trello, Notion), local operations (vault, scripts), and search (web search). |
 
-### 5.8 MCP as an Export Layer (Not the Primary Interface)
+### 5.9 MCP as an Export Layer (Not the Primary Interface)
 
 Harle's overview doc already mentions MCP for integrations. The recommended approach:
 
