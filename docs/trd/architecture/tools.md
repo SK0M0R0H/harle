@@ -2,7 +2,7 @@
 title: "Harle Tool Module Layer — Architecture & Functionality"
 tags: [tools, architecture, registry, modules, skills, extensibility, mcp, openai-agents-sdk]
 context: global
-last_updated: 2026-02-24
+last_updated: 2026-02-25
 summary: "Describes the Tool Module Layer's internal architecture, the BaseToolModule interface, the Tool Registry, the tool skills system, and how modules connect to the Orchestrator and the OpenAI Agents SDK."
 ---
 
@@ -95,6 +95,8 @@ The Tool Module Layer consists of three components. Each has one job.
 from abc import ABC, abstractmethod
 from typing import Callable
 
+from harle.tools.constraints import ConstraintConfig
+
 
 class BaseToolModule(ABC):
 
@@ -129,6 +131,16 @@ class BaseToolModule(ABC):
         """
         ...
 
+    def default_constraints(self) -> ConstraintConfig | None:
+        """Return recommended default constraints for this module.
+
+        Override for modules with local system access (scripts, vault).
+        The registry merges these with user config: user values replace
+        defaults field-by-field; unset fields keep the module's defaults.
+        Returns None by default (no default constraints).
+        """
+        return None
+
     async def health_check(self) -> bool:
         """Verify the module is operational (e.g. credentials valid)."""
         return True
@@ -145,6 +157,8 @@ class BaseToolModule(ABC):
 | Parameter names and types | Function signature + type hints | Registry extracts JSON schema → LLM sees it |
 | Domain knowledge | `skills/*.md` files in the module directory | Registry loads files listed in config → Context Assembler injects into LLM prompt |
 | Which skills are active | `config.yaml` → `tool_modules.<module>.skills` | Registry reads at startup |
+| Default security constraints | `BaseToolModule.default_constraints()` | Registry merges with user config at registration |
+| User security constraints | `config.yaml` → `tool_modules.<module>.constraints` | Registry merges on top of module defaults |
 | Module identity | `BaseToolModule.name` | Orchestrator (for config, logging, routing) |
 | Module description | `BaseToolModule.description` | Orchestrator (for logging, not sent to LLM) |
 | Lifecycle | `initialize()` / `shutdown()` / `health_check()` | Orchestrator |
@@ -790,7 +804,23 @@ tool_modules:
 
 **Why config, not code:** A developer might forget a pattern. A user deploying Harle in a corporate environment might need stricter rules. Keeping constraints in config means security policy is visible, auditable, and adjustable without a code release.
 
-**Default constraints:** Modules that interact with the local system (scripts, vault) ship with **recommended default constraints** documented in `config.example.yaml`. If a module's config section has no `constraints` key, the module is still subject to Layer 1 (permission) and Layer 2 (approval) — but has no input-level restrictions. The `config.example.yaml` template includes all recommended constraints so that a fresh deployment starts secure.
+**Default constraints (module-provided safety floor):**
+
+Modules that interact with the local system (scripts, vault) ship **default constraints** by overriding `BaseToolModule.default_constraints()`. These defaults are the module's safety floor — they apply automatically even when the user's `config.yaml` has no `constraints` block for that module. This ensures that a fresh or misconfigured deployment is still protected.
+
+The registry merges defaults with user config at registration time using **field-level replacement**: if the user's config provides a value for a constraint field (e.g. `blocked_patterns`), it replaces the module's default for that field entirely. Fields the user does not set keep the module's defaults. This means:
+
+- **No config at all →** module defaults apply in full. Secure out of the box.
+- **User adds `blocked_patterns` →** user patterns replace default patterns; all other defaults (e.g. `max_input_length`) are kept.
+- **User sets all fields →** module defaults are fully overridden. The user has complete control.
+
+```
+Merge logic (per field):
+  user value is non-empty / non-None  →  use user value
+  user value is empty / None          →  use module default
+```
+
+The recommended defaults are also documented in `config.example.yaml` so that users can see what the module ships with and adjust as needed.
 
 ### Layer 4: Execution Sandbox (resource limits)
 
@@ -1158,8 +1188,8 @@ Phases 2, 3, and 4 can be developed in parallel after Phase 1 — they are indep
 | File | Contents |
 |---|---|
 | `src/harle/tools/__init__.py` | Package init, re-exports `BaseToolModule` and `ToolRegistry` |
-| `src/harle/tools/base.py` | `BaseToolModule` ABC — `name`, `description`, `initialize()`, `shutdown()`, `get_tools()`, `health_check()` |
-| `src/harle/tools/registry.py` | `ToolRegistry` — `register_module()`, `get_agent_tools()`, `list_all_tools()`, `shutdown_all()` |
+| `src/harle/tools/base.py` | `BaseToolModule` ABC — `name`, `description`, `initialize()`, `shutdown()`, `get_tools()`, `default_constraints()`, `health_check()` |
+| `src/harle/tools/registry.py` | `ToolRegistry` — `register_module()`, `get_agent_tools()`, `list_all_tools()`, `shutdown_all()`. Merges module `default_constraints()` with user config at registration. |
 | `src/harle/tools/permissions.py` | Permission checking logic — reads `fn.permission` and `fn.requires_approval` attributes, checks against module mode |
 
 **Verification:** Write a test module with a dummy tool function. Register it with the registry. Call `get_agent_tools()` and verify it returns a valid `FunctionTool` object that the OpenAI Agents SDK accepts.
@@ -1209,16 +1239,23 @@ Phases 2, 3, and 4 can be developed in parallel after Phase 1 — they are indep
 
 | File | Contents |
 |---|---|
-| `src/harle/tools/constraints.py` | Constraint engine — loads constraint config, validates tool inputs against `allowed_commands`, `blocked_patterns`, `allowed_paths`, `blocked_paths`, `allowed_hosts`, `max_input_length` |
+| `src/harle/tools/constraints.py` | Constraint engine — `ConstraintConfig` dataclass (with `from_dict()` and `merge()`), validates tool inputs against `allowed_commands`, `blocked_patterns`, `allowed_paths`, `blocked_paths`, `allowed_hosts`, `max_input_length` |
 | `src/harle/tools/sandbox.py` | Execution sandbox — wraps `subprocess.run()` with timeout, memory limits, output size cap, working directory restriction, subprocess count limit |
-| Updates to `registry.py` | Registry calls constraint engine before executing any tool. If validation fails, error is returned to the LLM without executing the function. |
+| Updates to `registry.py` | Registry merges `module.default_constraints()` with user config at registration. Calls constraint engine before executing any tool. If validation fails, error is returned to the LLM without executing the function. |
 
 **Constraint enforcement flow (added to registry):**
 
 ```
-registry.execute_tool(name, params)
+registry.register_module(module, constraints=user_config)
     │
-    ├── Load constraints from config for this tool's module
+    ├── Load module.default_constraints() → module defaults (safety floor)
+    ├── Merge: module_defaults.merge(user_config)
+    │     field-by-field: user value replaces default; unset fields keep default
+    └── Store merged ConstraintConfig for the module
+
+registry.validate_tool_inputs(name, params)
+    │
+    ├── Look up merged constraints for this tool's module
     ├── Run constraint checks (allowed_commands, blocked_patterns, paths, hosts)
     │     └── If any check fails → return error, do not execute
     ├── If tool spawns a process → use sandbox.py for resource limits

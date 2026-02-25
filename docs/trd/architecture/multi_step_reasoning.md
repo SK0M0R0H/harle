@@ -2,7 +2,7 @@
 title: "Multi-Step Reasoning — Design & Incremental Implementation Plan"
 tags: [orchestrator, multi-step-reasoning, agentic-loop, tool-use, planning, react, agents]
 context: global
-last_updated: 2026-02-24
+last_updated: 2026-02-25
 summary: "Describes multi-step reasoning patterns for the orchestrator, how leading AI companies implement them, and a step-by-step plan from simplest to most complex."
 ---
 
@@ -276,6 +276,99 @@ Harle does not reimplement the agentic loop. The OpenAI Agents SDK `Runner` hand
 - Run logging (persist every turn, tool call, and decision to the `runs` table and vault).
 - Cost tracking (token counting per turn, cumulative cost per run).
 
+**Why wrapping is feasible — what the SDK Runner does internally:**
+
+The `Runner` class (specifically the internal `AgentRunner.run()` method in the SDK) implements the entire agentic loop as a `while True` loop that repeatedly calls `run_single_turn()`. Each turn invokes the LLM, receives a response, and classifies the result into one of four `NextStep` types that determine what happens next:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  AgentRunner.run() — the while True loop                     │
+│                                                              │
+│  Each iteration:                                             │
+│    1. Enforce max_turns (raise MaxTurnsExceeded if exceeded)  │
+│    2. Resolve tools, handoffs, output schema for current agent│
+│    3. Call run_single_turn() → LLM invocation + tool execution│
+│    4. Classify response into NextStep:                        │
+│       ┌───────────────────────┐                               │
+│       │ NextStepRunAgain      │→ Tool calls executed, results │
+│       │                       │  appended to conversation.    │
+│       │                       │  Loop continues.              │
+│       ├───────────────────────┤                               │
+│       │ NextStepHandoff       │→ Swap current_agent to the    │
+│       │                       │  handoff target. Carry over   │
+│       │                       │  conversation. Loop continues.│
+│       ├───────────────────────┤                               │
+│       │ NextStepFinalOutput   │→ Run output guardrails.       │
+│       │                       │  Return RunResult.            │
+│       │                       │  Loop terminates.             │
+│       ├───────────────────────┤                               │
+│       │ NextStepInterruption  │→ A tool requires approval.    │
+│       │                       │  Pause loop, return RunResult │
+│       │                       │  with interruption data.      │
+│       │                       │  Caller can resume later.     │
+│       └───────────────────────┘                               │
+│    5. Append model response + tool results to generated_items │
+│    6. Persist session items if session is enabled              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+The SDK manages the following responsibilities entirely inside this loop — none of which Harle needs to reimplement:
+
+| Responsibility | What the SDK does |
+|---|---|
+| **Turn counting** | Increments a counter each iteration, raises `MaxTurnsExceeded` when `current_turn > max_turns` (or calls a custom error handler if provided). |
+| **Tool resolution and execution** | Calls `get_all_tools()` to resolve the agent's tool list, executes tool calls returned by the LLM, appends results as `tool_call_output_item` entries in the conversation. |
+| **Handoff mechanics** | When the LLM emits a handoff, swaps `current_agent`, optionally filters/nests the conversation history for the new agent, and continues the loop. |
+| **Input/output guardrails** | Runs input guardrails on the first turn (optionally in parallel with the model call), output guardrails when final output is produced. |
+| **Conversation state** | Three strategies — manual (`result.to_input_list()`), SDK sessions (`SQLiteSession`, etc.), or OpenAI server-managed (`conversation_id`/`previous_response_id`) — all handled transparently. |
+| **Tracing** | Creates trace and agent spans automatically. Every turn, tool call, and handoff is recorded. |
+| **Interruption and resume** | When a tool requires human approval, the loop pauses and returns a `RunResult` with interruption data. The same `RunState` can be passed back to `Runner.run()` to resume exactly where it left off. |
+| **Error recovery** | Retries `conversation_locked` errors with backoff, cleans up async resources on cancellation, disposes computer tools on exit. |
+
+**What the SDK does *not* manage — the wrapping surface:**
+
+The Runner is designed with clean input/output boundaries that make wrapping straightforward:
+
+- **Inputs:** An `Agent` object (instructions, tools, handoffs) + user input + `RunConfig`. Harle controls what goes into these before calling the Runner.
+- **Outputs:** A `RunResult` containing all generated items, model responses, guardrail results, and the final output. Harle can inspect and log everything after the Runner returns.
+- **Hooks:** The `RunHooks` interface provides lifecycle callbacks (`on_agent_start`, `on_agent_end`, `on_tool_start`, `on_tool_end`, `on_handoff`) that fire at each stage without modifying the loop itself.
+
+This means Harle's wrapper operates **exclusively at the boundaries** — it prepares the Agent and RunConfig before the loop, and processes the RunResult after:
+
+```python
+# Simplified view of how Harle wraps the SDK Runner
+
+class HarleAgentRunner:
+    async def run(self, request, context):
+        # --- BEFORE the loop (Harle's domain) ---
+        system_prompt = await self.context_assembler.assemble(request)
+        allowed_tools = self.tool_registry.get_tools_for_role(request.agent_role)
+        agent = Agent(
+            name=request.agent_role,
+            instructions=system_prompt,
+            tools=allowed_tools,
+            handoffs=self.get_handoff_targets(request.agent_role),
+        )
+        run_config = RunConfig(
+            model=self.config.model,
+            tracing_disabled=not self.config.tracing_enabled,
+        )
+
+        # --- THE loop (SDK's domain — untouched) ---
+        result = await Runner.run(
+            agent, request.message,
+            max_turns=self.config.max_iterations,
+            run_config=run_config,
+        )
+
+        # --- AFTER the loop (Harle's domain) ---
+        await self.run_logger.log_run(result)
+        self.cost_tracker.record(result.raw_responses)
+        return result.final_output
+```
+
+The SDK does not know or care about Harle's tool allowlists, cost budgets, vault logging, or context assembly. And Harle does not need to understand the SDK's internal turn management, conversation tracking, or guardrail execution. Each layer handles its own concerns. This is why wrapping — rather than reimplementing or forking — is the right approach.
+
 ### 2. Context Assembly Happens Once, Before the Loop
 
 The Context Assembler runs **before** the agentic loop starts. It produces the system prompt with P0 (prompts, policies) + P1 (search results) + P3 (memories) + P4 (conversation history). This system prompt becomes the agent's `instructions` parameter.
@@ -345,7 +438,7 @@ POST /run → ContextAssembler.assemble() → LLMProvider.generate() → Respons
 
 ---
 
-### Level 1: Basic Tool-Calling Loop
+### Step 1: Basic Tool-Calling Loop
 
 **Goal:** The LLM can call tools and see results. The simplest possible multi-step pattern.
 
