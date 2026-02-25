@@ -2,7 +2,7 @@
 title: "Harle Tool Module Layer — Architecture & Functionality"
 tags: [tools, architecture, registry, modules, skills, extensibility, mcp, openai-agents-sdk]
 context: global
-last_updated: 2026-02-25
+last_updated: 2026-02-26
 summary: "Describes the Tool Module Layer's internal architecture, the BaseToolModule interface, the Tool Registry, the tool skills system, and how modules connect to the Orchestrator and the OpenAI Agents SDK."
 ---
 
@@ -197,7 +197,7 @@ Request time:
 **Core interface:**
 
 ```python
-from agents import FunctionTool
+from agents import FunctionTool, function_tool
 
 
 class ToolRegistry:
@@ -207,18 +207,18 @@ class ToolRegistry:
         self._modules[module.name] = module
         for fn in module.get_tools():
             self._tools[fn.__name__] = (module, fn)
+            self._sdk_tools[fn.__name__] = function_tool(fn)
 
     def get_agent_tools(self, tool_names: list[str]) -> list[FunctionTool]:
-        """Convert selected tool functions into OpenAI SDK FunctionTool objects.
+        """Return cached FunctionTool objects for the requested names.
 
-        The SDK's FunctionTool introspects each function's signature,
-        type hints, and docstring to generate the JSON schema that the
-        LLM sees — the same way @function_tool works, without the decorator.
+        function_tool() introspects each function's signature, type
+        hints, and docstring to generate the JSON schema that the LLM
+        sees — the same way the @function_tool decorator works.
         """
         result = []
         for name in tool_names:
-            module, fn = self._tools[name]
-            result.append(FunctionTool(fn))
+            result.append(self._sdk_tools[name])
         return result
 
     def get_skills_for_tools(self, tool_names: list[str]) -> list[str]:
@@ -247,8 +247,8 @@ TrelloModule.get_tools()
     → returns [search_cards, ...]         (just pointers, no metadata)
               │
               ▼
-ToolRegistry.get_agent_tools(["search_cards"])
-    → FunctionTool(search_cards)          (SDK introspects the function)
+ToolRegistry.register_module(trello_module)
+    → function_tool(search_cards)         (introspects the function, caches result)
               │
               ▼
 Agent(tools=[FunctionTool(...)])
