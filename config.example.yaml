@@ -24,5 +24,13 @@ HARLE_LLM_MODEL: "gpt-4o-mini"
 # HARLE_DATASET_PATH: "/path/to/harle-vault"
 # DATABASE_URL: "postgresql+psycopg2://harle:harle@localhost:5432/harle"
 
+# --- Agentic loop ---
+HARLE_MAX_ITERATIONS: 10             # Max reasoning turns per request (tool-calling loop)
+
 # --- Run logging (vault logs/ directory) ---
 HARLE_RUN_LOG_STORE_CONTEXT: true   # Set true to save assembled prompt in logs/ (larger, for debugging)
+
+# --- Tool modules ---
+# Web search requires TAVILY_API_KEY env var.
+# Vault tools (dataset_search, dataset_read_file) are enabled automatically
+# when HARLE_DATASET_PATH is configured.

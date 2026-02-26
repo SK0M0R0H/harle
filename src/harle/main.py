@@ -22,11 +22,12 @@ def create_app() -> FastAPI:
     initialised.  The search engine and dataset reader are then wired
     into a :class:`~harle.context.assembler.ContextAssembler` so the
     orchestrator can pack dataset context into every LLM request.
+
+    Tool modules are registered when their dependencies are available:
+    vault tools require a dataset, web search requires ``TAVILY_API_KEY``.
     """
     settings = load_settings()
 
-    # Data layer is optional — only enabled when both DB and dataset
-    # paths are configured.
     db = None
     search_engine = None
     dataset_reader = None
@@ -52,7 +53,6 @@ def create_app() -> FastAPI:
                 settings.HARLE_DATASET_PATH,
             )
     elif settings.HARLE_DATASET_PATH:
-        # Dataset reader can work without the database (P0 loading).
         from harle.dataset.reader import DatasetReader
 
         dataset_reader = DatasetReader(settings.HARLE_DATASET_PATH)
@@ -63,8 +63,6 @@ def create_app() -> FastAPI:
     else:
         logger.info("DATABASE_URL not set — data layer endpoints disabled.")
 
-    # Context assembler — available when at least a dataset reader or
-    # search engine is configured.
     if search_engine is not None or dataset_reader is not None:
         from harle.context.assembler import ContextAssembler
 
@@ -74,13 +72,22 @@ def create_app() -> FastAPI:
         )
         logger.info("Context assembler configured.")
 
+    # ── Tool modules ─────────────────────────────────────────────────
+    from harle.tools import build_tool_registry
+
+    tool_registry = build_tool_registry(
+        search_engine=search_engine,
+        dataset_reader=dataset_reader,
+    )
+
     orchestrator = build_orchestrator(
         settings=settings,
         context_assembler=context_assembler,
         db=db,
+        tool_registry=tool_registry,
     )
 
-    app = FastAPI(title="Harle", version="0.2.0")
+    app = FastAPI(title="Harle", version="0.3.0")
     app.include_router(
         build_router(
             orchestrator=orchestrator,
@@ -101,4 +108,3 @@ def run() -> None:
         port=settings.HARLE_PORT,
         factory=True,
     )
-

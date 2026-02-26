@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+---
+
+While writing any code files (not docs or configs), follow the rules below:
+1. Keep code files under 500 lines. If the code files become bigger, split functionality to submodules. Do not just delete code or comments because of this rule -- split functionality into modules.

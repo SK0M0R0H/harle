@@ -2,7 +2,7 @@
 title: "Multi-Step Reasoning — Design & Incremental Implementation Plan"
 tags: [orchestrator, multi-step-reasoning, agentic-loop, tool-use, planning, react, agents]
 context: global
-last_updated: 2026-02-25
+last_updated: 2026-02-26
 summary: "Describes multi-step reasoning patterns for the orchestrator, how leading AI companies implement them, and a step-by-step plan from simplest to most complex."
 ---
 
@@ -438,7 +438,7 @@ POST /run → ContextAssembler.assemble() → LLMProvider.generate() → Respons
 
 ---
 
-### Step 1: Basic Tool-Calling Loop
+### Level 1: Basic Tool-Calling Loop ✅ IMPLEMENTED
 
 **Goal:** The LLM can call tools and see results. The simplest possible multi-step pattern.
 
@@ -476,7 +476,7 @@ POST /run → ContextAssembler.assemble()
 
 ---
 
-### Level 2: External Tools (Trello, Web Search)
+### Level 2: External Tools (Web Search) ✅ IMPLEMENTED
 
 **Goal:** The agent can interact with external services, with safety guardrails.
 

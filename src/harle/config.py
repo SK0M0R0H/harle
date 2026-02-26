@@ -49,6 +49,9 @@ class Settings:
     HARLE_DATASET_PATH: str | None = None
     DATABASE_URL: str | None = None
 
+    # Agentic loop
+    HARLE_MAX_ITERATIONS: int = 10  # Max turns for the Agents SDK Runner (tool-calling loop)
+
     # Run logging (vault logs/ directory)
     HARLE_RUN_LOG_STORE_CONTEXT: bool = False  # Store assembled context in logs (optional, for size/privacy)
 

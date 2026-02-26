@@ -1,14 +1,18 @@
 """Request orchestrator for Harle.
 
 Coordinates context assembly, conversation management, and LLM
-generation.  When a :class:`ContextAssembler` is available the
-orchestrator searches the user's dataset and packs relevant context
-before calling the LLM provider.  When a :class:`Database` is
-available the orchestrator manages multi-turn conversations via the
-``conversations`` CRUD layer.
+generation.  Supports two execution paths:
 
-Without these optional dependencies the orchestrator falls back to
-direct LLM calls (prototype behaviour).
+1. **Agent Runner** (Level 1+): Uses the OpenAI Agents SDK ``Runner``
+   for multi-step reasoning with tool calls.  Enabled when an OpenAI
+   API key is available.
+
+2. **Legacy provider** (fallback): Single LLM call via the
+   ``LLMProvider`` protocol.  Used when no API key is set (echo
+   provider).
+
+When a :class:`ToolRegistry` is provided, the agent receives
+SDK-compatible tool functions and can call them during reasoning.
 """
 
 from __future__ import annotations
@@ -24,11 +28,18 @@ from harle.config import PROVIDER_OPENAI, Settings
 from harle.context.assembler import ContextAssembler
 from harle.db.connection import Database
 from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
+from harle.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_AGENT_ROLE: str = "researcher"
 RESULT_SUMMARY_MAX_CHARS: int = 2000
+
+_TOOL_THINKING_INSTRUCTION: str = (
+    "\n\nBefore calling any tool, briefly state what you know so far, "
+    "what you still need, and why you are calling this specific tool. "
+    "This helps maintain reasoning coherence across multiple steps."
+)
 
 
 def _files_used_from_package(
@@ -44,33 +55,59 @@ def _files_used_from_package(
     return paths
 
 
+# ── Agent execution result ────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class _AgentResult:
+    """Internal result from either the Runner or the legacy provider."""
+
+    text: str
+    tools_called: list[str] = field(default_factory=list)
+    turns_used: int = 0
+
+
+def _extract_run_metadata(result: object) -> tuple[list[str], int]:
+    """Extract tool names and turn count from an Agents SDK RunResult.
+
+    Uses duck typing so the orchestrator does not import SDK item
+    types directly.
+    """
+    tools: list[str] = []
+    turns = 0
+    for item in getattr(result, "new_items", []):
+        item_type = getattr(item, "type", "")
+        if item_type == "tool_call_item":
+            raw = getattr(item, "raw_item", None)
+            name = getattr(raw, "name", None)
+            if name and name not in tools:
+                tools.append(name)
+        elif item_type == "message_output_item":
+            turns += 1
+    turns = max(turns, len(getattr(result, "raw_responses", [])))
+    return tools, turns
+
+
+# ── Orchestrator ──────────────────────────────────────────────────────
+
+
 @dataclass
 class OrchestratorService:
     """Orchestrator that assembles context and routes requests to an LLM.
 
-    When *context_assembler* is provided the :meth:`run` method will:
-    1. Assemble a context package (prompts, policies, search results).
-    2. Pass the assembled system prompt to the LLM provider.
-
-    When *db* is provided the :meth:`chat` method additionally manages
-    multi-turn conversations: creating or loading a conversation,
-    fetching recent history for context assembly, and persisting both
-    user and assistant messages.
-
-    When *dataset_path* is set, run and chat log each execution to the
-    vault ``logs/`` directory and (when *db* is set) to the ``runs``
-    table.
-
-    Without optional dependencies the provider receives only the raw
-    user message (backward-compatible prototype mode).
-
     Attributes:
-        llm_provider: The LLM generation backend.
+        llm_provider: The LLM generation backend (fallback path).
         context_assembler: Optional assembler for dataset-aware
             context packing.
         db: Optional database connection for conversation and runs.
         dataset_path: Optional vault root path for writing run logs.
-        run_log_store_context: Whether to store assembled context in logs.
+        run_log_store_context: Whether to store assembled context in
+            logs.
+        tool_registry: Optional tool registry providing agent tools.
+        model: LLM model name for the Agents SDK Agent.
+        max_iterations: Maximum turns for the agentic loop.
+        use_agent_runner: When ``True``, use the Agents SDK Runner
+            instead of the direct LLM provider.
     """
 
     llm_provider: LLMProvider
@@ -78,6 +115,129 @@ class OrchestratorService:
     db: Database | None = field(default=None)
     dataset_path: str | None = field(default=None)
     run_log_store_context: bool = field(default=False)
+    tool_registry: ToolRegistry | None = field(default=None)
+    model: str = field(default="gpt-4o-mini")
+    max_iterations: int = field(default=10)
+    use_agent_runner: bool = field(default=False)
+
+    # ── execution backends ────────────────────────────────────────────
+
+    def _build_instructions(self, system_prompt: str | None, has_tools: bool) -> str:
+        """Build agent instructions from the system prompt and tool metadata.
+
+        When tools are available, appends thinking instructions and
+        tool skills to encourage coherent multi-step reasoning.
+        """
+        base = system_prompt or (
+            "You are Harle, a concise assistant. "
+            "Answer directly and keep structure clear."
+        )
+
+        if not has_tools or self.tool_registry is None:
+            return base
+
+        parts = [base]
+
+        all_tool_names = self.tool_registry.list_all_tools()
+        skills = self.tool_registry.get_skills_for_tools(all_tool_names)
+        if skills:
+            skill_sections = [
+                f"## Tool Skill: {s.name}\n\n{s.content}" for s in skills
+            ]
+            parts.append("\n\n".join(skill_sections))
+
+        parts.append(_TOOL_THINKING_INSTRUCTION)
+        return "\n\n".join(parts)
+
+    def _execute_with_runner(
+        self,
+        *,
+        user_message: str,
+        system_prompt: str | None,
+    ) -> _AgentResult:
+        """Execute via the Agents SDK Runner with optional tool support.
+
+        Creates an Agent with instructions and tools, then runs the
+        agentic loop.  If ``MaxTurnsExceeded`` is raised the partial
+        result is returned with a note.
+        """
+        from agents import Agent, MaxTurnsExceeded, Runner
+
+        tools = []
+        if self.tool_registry:
+            all_tool_names = self.tool_registry.list_all_tools()
+            tools = self.tool_registry.get_agent_tools(all_tool_names)
+
+        instructions = self._build_instructions(system_prompt, bool(tools))
+
+        agent = Agent(
+            name=DEFAULT_AGENT_ROLE,
+            instructions=instructions,
+            tools=tools,
+            model=self.model,
+        )
+
+        try:
+            result = Runner.run_sync(
+                agent, user_message, max_turns=self.max_iterations,
+            )
+            tools_called, turns_used = _extract_run_metadata(result)
+            return _AgentResult(
+                text=result.final_output,
+                tools_called=tools_called,
+                turns_used=turns_used,
+            )
+        except MaxTurnsExceeded:
+            logger.warning(
+                "Agent exceeded max_turns=%d for message: %.80s",
+                self.max_iterations, user_message,
+            )
+            return _AgentResult(
+                text=(
+                    "I used all available reasoning steps but could not "
+                    "finish.  Please try a more specific request or "
+                    "increase the iteration limit."
+                ),
+                turns_used=self.max_iterations,
+            )
+
+    def _execute_with_provider(
+        self,
+        *,
+        user_message: str,
+        context: str,
+        conversation_id: str | None,
+        system_prompt: str | None,
+    ) -> _AgentResult:
+        """Execute via the legacy LLM provider (single call, no tools)."""
+        text = self.llm_provider.generate(
+            prompt=user_message,
+            context=context,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+        )
+        return _AgentResult(text=text)
+
+    def _execute(
+        self,
+        *,
+        user_message: str,
+        context: str,
+        conversation_id: str | None,
+        system_prompt: str | None,
+    ) -> _AgentResult:
+        """Route execution to the Runner or the legacy provider."""
+        if self.use_agent_runner:
+            return self._execute_with_runner(
+                user_message=user_message,
+                system_prompt=system_prompt,
+            )
+        return self._execute_with_provider(
+            user_message=user_message,
+            context=context,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+        )
 
     # ── one-shot execution ────────────────────────────────────────────
 
@@ -86,11 +246,9 @@ class OrchestratorService:
 
         Steps:
             1. If a context assembler is available, build a
-               :class:`ContextPackage` with prompts, policies, and
-               dataset search results.
-            2. Call the LLM provider with the assembled system prompt
-               (or fall back to the provider's default).
-            3. Log the run to the vault logs/ and (if db is set) to the
+               :class:`ContextPackage`.
+            2. Execute via the Runner or legacy provider.
+            3. Log the run to the vault and (if db is set) the
                ``runs`` table.
             4. Return the response.
 
@@ -121,12 +279,13 @@ class OrchestratorService:
                 package.budget_remaining,
             )
 
-        result_text = self.llm_provider.generate(
-            prompt=request.message,
+        agent_result = self._execute(
+            user_message=request.message,
             context=request.context,
             conversation_id=request.conversation_id,
             system_prompt=system_prompt,
         )
+        result_text = agent_result.text
 
         ended_at = datetime.now(timezone.utc)
         duration_ms = int((ended_at - started_at).total_seconds() * 1000)
@@ -171,14 +330,22 @@ class OrchestratorService:
                         agent=DEFAULT_AGENT_ROLE,
                         status="completed",
                         files_used=files_used,
+                        tools_called=agent_result.tools_called or None,
+                        model_used=self.model if self.use_agent_runner else None,
                         result_summary=result_summary,
                         result_path=result_path,
                         context_path=context_path,
                         conversation_id=request.conversation_id,
                         duration_ms=duration_ms,
                     )
-            except Exception as e:  # e.g. no such table: runs (SQLite test db)
+            except Exception as e:
                 logger.warning("Could not persist run record: %s", e)
+
+        if agent_result.tools_called:
+            logger.info(
+                "Run %s used %d turn(s), tools: %s",
+                run_id, agent_result.turns_used, agent_result.tools_called,
+            )
 
         return RunResponse(
             run_id=run_id,
@@ -186,6 +353,8 @@ class OrchestratorService:
             result=result_text,
             context=request.context,
             conversation_id=request.conversation_id,
+            tools_called=agent_result.tools_called or None,
+            turns_used=agent_result.turns_used or None,
         )
 
     # ── multi-turn chat ───────────────────────────────────────────────
@@ -278,13 +447,14 @@ class OrchestratorService:
                 package.budget_remaining,
             )
 
-        # ── LLM generation ───────────────────────────────────────────
-        result_text = self.llm_provider.generate(
-            prompt=request.message,
+        # ── execution ────────────────────────────────────────────────
+        agent_result = self._execute(
+            user_message=request.message,
             context=request.context,
             conversation_id=conv_id,
             system_prompt=system_prompt,
         )
+        result_text = agent_result.text
 
         ended_at = datetime.now(timezone.utc)
         duration_ms = int((ended_at - started_at).total_seconds() * 1000)
@@ -336,7 +506,7 @@ class OrchestratorService:
             )
             touch_conversation(session, conv_id)
 
-        # ── persist run (separate session so message commit is not affected)
+        # ── persist run ──────────────────────────────────────────────
         try:
             from harle.db.runs import create_run
             with self.db.session() as session:
@@ -349,13 +519,15 @@ class OrchestratorService:
                     agent=DEFAULT_AGENT_ROLE,
                     status="completed",
                     files_used=files_used,
+                    tools_called=agent_result.tools_called or None,
+                    model_used=self.model if self.use_agent_runner else None,
                     result_summary=result_summary,
                     result_path=result_path_v,
                     context_path=context_path_v,
                     conversation_id=conv_id,
                     duration_ms=duration_ms,
                 )
-        except Exception as e:  # e.g. no such table: runs (SQLite test db)
+        except Exception as e:
             logger.warning("Could not persist run record: %s", e)
             try:
                 with self.db.session() as session:
@@ -363,12 +535,20 @@ class OrchestratorService:
             except Exception:  # noqa: S110
                 pass
 
+        if agent_result.tools_called:
+            logger.info(
+                "Chat run %s used %d turn(s), tools: %s",
+                run_id, agent_result.turns_used, agent_result.tools_called,
+            )
+
         return RunResponse(
             run_id=run_id,
             status="completed",
             result=result_text,
             context=request.context,
             conversation_id=conv_id,
+            tools_called=agent_result.tools_called or None,
+            turns_used=agent_result.turns_used or None,
         )
 
 
@@ -377,16 +557,19 @@ def build_orchestrator(
     settings: Settings,
     context_assembler: ContextAssembler | None = None,
     db: Database | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> OrchestratorService:
     """Build a runtime orchestrator with provider fallback.
 
+    When an OpenAI API key is available the orchestrator uses the
+    Agents SDK Runner for multi-step reasoning.  Otherwise it falls
+    back to the echo provider for local development.
+
     Args:
         settings: Application settings (LLM provider, model, etc.).
-        context_assembler: Optional context assembler.  When provided
-            the orchestrator searches the dataset and packs context
-            before each LLM call.
-        db: Optional database connection.  When provided the
-            orchestrator can persist multi-turn conversations.
+        context_assembler: Optional context assembler.
+        db: Optional database connection.
+        tool_registry: Optional tool registry with registered modules.
 
     Returns:
         A fully configured :class:`OrchestratorService`.
@@ -405,6 +588,10 @@ def build_orchestrator(
             db=db,
             dataset_path=settings.HARLE_DATASET_PATH,
             run_log_store_context=settings.HARLE_RUN_LOG_STORE_CONTEXT,
+            tool_registry=tool_registry,
+            model=settings.HARLE_LLM_MODEL,
+            max_iterations=settings.HARLE_MAX_ITERATIONS,
+            use_agent_runner=True,
         )
 
     provider = EchoProvider()
@@ -414,5 +601,8 @@ def build_orchestrator(
         db=db,
         dataset_path=settings.HARLE_DATASET_PATH,
         run_log_store_context=settings.HARLE_RUN_LOG_STORE_CONTEXT,
+        tool_registry=tool_registry,
+        model=settings.HARLE_LLM_MODEL,
+        max_iterations=settings.HARLE_MAX_ITERATIONS,
+        use_agent_runner=False,
     )
-

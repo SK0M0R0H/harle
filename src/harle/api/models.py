@@ -20,13 +20,19 @@ class RunRequest(BaseModel):
 
 
 class RunResponse(BaseModel):
-    """Single-response result for the first prototype."""
+    """Response from a run or chat request.
+
+    When the Agents SDK Runner is active, ``tools_called`` and
+    ``turns_used`` provide visibility into multi-step reasoning.
+    """
 
     run_id: str
     status: StatusType
     result: str
     context: ContextType
     conversation_id: str | None = None
+    tools_called: list[str] | None = None
+    turns_used: int | None = None
 
 
 class RunDetail(BaseModel):

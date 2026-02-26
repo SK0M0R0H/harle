@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
@@ -217,3 +219,67 @@ class TestGetRunEndpoint:
         resp = client.get("/run/run_nonexistent")
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
+
+    def test_run_materialized_before_session_close(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        guarded_fields = {
+            "run_id",
+            "timestamp",
+            "user_request",
+            "context_scope",
+            "agent",
+            "status",
+            "routing_method",
+            "files_used",
+            "tools_called",
+            "result_summary",
+            "result_path",
+            "context_path",
+            "conversation_id",
+            "duration_ms",
+        }
+
+        class _Run:
+            def __init__(self) -> None:
+                self.detached = False
+                self.run_id = "run_guarded"
+                self.timestamp = datetime(2026, 2, 26, tzinfo=timezone.utc)
+                self.user_request = "hello"
+                self.context_scope = "work"
+                self.agent = "researcher"
+                self.status = "completed"
+                self.routing_method = None
+                self.files_used = None
+                self.tools_called = None
+                self.result_summary = "ok"
+                self.result_path = None
+                self.context_path = None
+                self.conversation_id = None
+                self.duration_ms = 12
+
+            def __getattribute__(self, name: str) -> object:
+                if (
+                    name in guarded_fields
+                    and object.__getattribute__(self, "detached")
+                ):
+                    raise RuntimeError("Detached instance access")
+                return object.__getattribute__(self, name)
+
+        run = _Run()
+
+        class _DbStub:
+            @contextmanager
+            def session(self):  # type: ignore[no-untyped-def]
+                try:
+                    yield object()
+                finally:
+                    run.detached = True
+
+        monkeypatch.setattr("harle.db.runs.get_run", lambda session, run_id: run)
+        client = _make_client(db=_DbStub())
+
+        resp = client.get("/run/run_guarded")
+        assert resp.status_code == 200
+        assert resp.json()["run_id"] == "run_guarded"

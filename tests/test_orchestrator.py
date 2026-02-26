@@ -146,6 +146,20 @@ class TestOrchestratorService:
         assert resp.status == "completed"
         assert "help me" in resp.result
 
+    def test_run_response_includes_optional_fields(self) -> None:
+        """RunResponse includes tools_called and turns_used (None for echo)."""
+        svc = OrchestratorService(llm_provider=EchoProvider())
+        req = RunRequest(message="hello", context="personal")
+        resp = svc.run(request=req)
+
+        assert resp.tools_called is None
+        assert resp.turns_used is None
+
+    def test_use_agent_runner_false_by_default(self) -> None:
+        """Without explicit flag, legacy provider path is used."""
+        svc = OrchestratorService(llm_provider=EchoProvider())
+        assert svc.use_agent_runner is False
+
 
 class TestBuildOrchestrator:
     def test_no_api_key_gives_echo(self) -> None:
@@ -154,12 +168,14 @@ class TestBuildOrchestrator:
             os.environ.pop("OPENAI_API_KEY", None)
             svc = build_orchestrator(settings=settings)
         assert isinstance(svc.llm_provider, EchoProvider)
+        assert svc.use_agent_runner is False
 
     def test_non_openai_provider_gives_echo(self) -> None:
         settings = Settings(HARLE_LLM_PROVIDER="local")
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False):
             svc = build_orchestrator(settings=settings)
         assert isinstance(svc.llm_provider, EchoProvider)
+        assert svc.use_agent_runner is False
 
     def test_openai_with_key_gives_openai_provider(self) -> None:
         from harle.llm.providers import OpenAIProvider
@@ -168,6 +184,7 @@ class TestBuildOrchestrator:
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False):
             svc = build_orchestrator(settings=settings)
         assert isinstance(svc.llm_provider, OpenAIProvider)
+        assert svc.use_agent_runner is True
 
     def test_build_with_context_assembler(self) -> None:
         """build_orchestrator passes context_assembler to the service."""
@@ -205,6 +222,33 @@ class TestBuildOrchestrator:
             os.environ.pop("OPENAI_API_KEY", None)
             svc = build_orchestrator(settings=settings)
         assert svc.db is None
+
+    def test_build_with_tool_registry(self) -> None:
+        """build_orchestrator passes tool_registry to the service."""
+        from harle.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        settings = Settings()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENAI_API_KEY", None)
+            svc = build_orchestrator(settings=settings, tool_registry=registry)
+        assert svc.tool_registry is registry
+
+    def test_build_max_iterations_from_settings(self) -> None:
+        """build_orchestrator reads max_iterations from settings."""
+        settings = Settings(HARLE_MAX_ITERATIONS=15)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENAI_API_KEY", None)
+            svc = build_orchestrator(settings=settings)
+        assert svc.max_iterations == 15
+
+    def test_build_model_from_settings(self) -> None:
+        """build_orchestrator reads model from settings."""
+        settings = Settings(HARLE_LLM_MODEL="gpt-4o")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENAI_API_KEY", None)
+            svc = build_orchestrator(settings=settings)
+        assert svc.model == "gpt-4o"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -342,3 +386,12 @@ class TestOrchestratorChat:
             for _ in range(5)
         }
         assert len(ids) == 5
+
+    def test_chat_response_includes_optional_fields(self) -> None:
+        """Chat response includes tools_called and turns_used."""
+        db = _make_test_db()
+        svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
+        req = RunRequest(message="hello", context="personal")
+        resp = svc.chat(request=req)
+        assert resp.tools_called is None
+        assert resp.turns_used is None
