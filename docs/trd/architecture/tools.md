@@ -1,9 +1,9 @@
 ---
 title: "Harle Tool Module Layer — Architecture & Functionality"
-tags: [tools, architecture, registry, modules, skills, extensibility, mcp, openai-agents-sdk]
+tags: [tools, architecture, registry, modules, skills, extensibility, mcp, openai-agents-sdk, connections]
 context: global
-last_updated: 2026-02-26
-summary: "Describes the Tool Module Layer's internal architecture, the BaseToolModule interface, the Tool Registry, the tool skills system, and how modules connect to the Orchestrator and the OpenAI Agents SDK."
+last_updated: 2026-03-01
+summary: "Describes the Tool Module Layer's internal architecture, the BaseToolModule interface, the Tool Registry, the tool skills system, how modules consume shared connections, and how they connect to the Orchestrator and the OpenAI Agents SDK."
 ---
 
 # Harle Tool Module Layer — Architecture & Functionality
@@ -14,6 +14,7 @@ This document describes the Tool Module Layer's internal architecture: how tool 
 
 For the overall system architecture, see [overview.md](./overview.md).
 For the Orchestrator (which consumes tools from this layer), see [orchestrator.md](./orchestrator.md).
+For the Connections Layer (shared API clients and credentials), see [connections.md](./connections.md).
 For the research behind this design, see [tool_module_architecture.md](../../research/tool_module_architecture.md).
 
 ---
@@ -71,7 +72,7 @@ An earlier Orchestrator design described tools as individual decorated functions
 | Problem with flat tool functions | How the Tool Module Layer solves it |
 |---|---|
 | **No grouping.** Trello's `list_cards`, `create_card`, and `move_card` are unrelated functions. | All Trello operations live in `TrelloModule` — one directory, one class, one config block. |
-| **No lifecycle.** Where do you initialize the API client? Where do you close connections? | `initialize()` and `shutdown()` are part of the base interface. |
+| **No lifecycle.** Where do you initialize the API client? Where do you close connections? | `initialize()` and `shutdown()` are part of the base interface. API clients are managed by the shared Connections Layer (see [connections.md](./connections.md)). |
 | **No health checks.** If the Trello API key is invalid, you find out when the agent tries to use it. | `health_check()` validates credentials at startup. |
 | **No configuration pattern.** Each tool reads env vars or globals differently. | Each module declares its config schema. All config lives in `config.yaml` under `tool_modules`. |
 | **No enable/disable.** Removing a tool means editing code. | Each module has an `enabled` flag in config. |
@@ -95,6 +96,7 @@ The Tool Module Layer consists of three components. Each has one job.
 from abc import ABC, abstractmethod
 from typing import Callable
 
+from harle.connections.registry import ConnectionRegistry
 from harle.tools.constraints import ConstraintConfig
 
 
@@ -113,13 +115,27 @@ class BaseToolModule(ABC):
         ...
 
     @abstractmethod
-    async def initialize(self, config: dict) -> None:
-        """Set up clients, validate credentials, prepare state."""
+    async def initialize(
+        self,
+        config: dict,
+        connections: ConnectionRegistry | None = None,
+    ) -> None:
+        """Set up clients, validate credentials, prepare state.
+
+        Modules that access external APIs should look up their
+        connection from the connections registry (see connections.md).
+        Modules that operate locally (vault, scripts) can ignore the
+        connections parameter.
+        """
         ...
 
     @abstractmethod
     async def shutdown(self) -> None:
-        """Clean up resources (close HTTP clients, flush buffers)."""
+        """Clean up resources (flush buffers, release local state).
+
+        HTTP client lifecycle is managed by the Connections Layer —
+        modules that use connections do not close the client here.
+        """
         ...
 
     @abstractmethod
@@ -159,6 +175,7 @@ class BaseToolModule(ABC):
 | Which skills are active | `config.yaml` → `tool_modules.<module>.skills` | Registry reads at startup |
 | Default security constraints | `BaseToolModule.default_constraints()` | Registry merges with user config at registration |
 | User security constraints | `config.yaml` → `tool_modules.<module>.constraints` | Registry merges on top of module defaults |
+| API connection | `connection: <name>` in config → looked up from Connection Registry at `initialize()` | Module receives authenticated client via `connections.get(<name>).get_client()` (see [connections.md](./connections.md)) |
 | Module identity | `BaseToolModule.name` | Orchestrator (for config, logging, routing) |
 | Module description | `BaseToolModule.description` | Orchestrator (for logging, not sent to LLM) |
 | Lifecycle | `initialize()` / `shutdown()` / `health_check()` | Orchestrator |
@@ -177,10 +194,12 @@ Manifest-driven plugin systems (see the research doc, Section 2.3) require a sep
 
 ```
 Startup:
+  Orchestrator initializes Connection Registry first (see connections.md)
   Orchestrator reads config.yaml → tool_modules section
   For each enabled module:
     1. Import the module class
-    2. Call initialize(config) — sets up API clients, validates credentials
+    2. Call initialize(config, connections=connection_registry)
+       → API-accessing modules look up their connection by name
     3. Call health_check() — verifies the module is operational
     4. Call get_tools() — gets the list of tool functions
     5. Index each function by name in the registry
@@ -292,11 +311,14 @@ This kind of knowledge does not belong in function docstrings (too long, changes
 Module directory (convention — every module has a skills/ subdirectory):
   src/harle/tools/trello/
   ├── module.py          # TrelloModule class
-  ├── client.py          # Trello API wrapper
   ├── tools.py           # Tool functions
   └── skills/            # Domain knowledge (Markdown files)
       ├── triage.md      # How to triage stalled tasks
       └── conventions.md # Card naming and labeling conventions
+
+  (The API client for Trello lives in the Connections Layer —
+   see connections.md. The module receives an authenticated
+   httpx client via connections.get("trello").get_client())
 
 Configuration selects which skills are active:
   # config.yaml
@@ -397,7 +419,7 @@ Skills consume context window tokens. The Context Assembler (see [orchestrator.m
 
 ## Tool Module Structure
 
-Every tool module follows the same directory layout:
+Every tool module follows the same directory layout. Modules that access external APIs no longer include their own `client.py` — API credentials, authenticated HTTP clients, and rate limiting live in the shared Connections Layer (see [connections.md](./connections.md)). Modules receive an authenticated client at `initialize()` via `connections.get("<name>").get_client()`.
 
 ```
 src/harle/tools/
@@ -407,8 +429,7 @@ src/harle/tools/
 │
 ├── trello/
 │   ├── __init__.py
-│   ├── module.py              # TrelloModule(BaseToolModule)
-│   ├── client.py              # Trello API wrapper (httpx)
+│   ├── module.py              # TrelloModule(BaseToolModule) — uses connections.get("trello")
 │   ├── tools.py               # search_cards, create_card, move_card, ...
 │   └── skills/
 │       ├── triage.md          # How to triage stalled tasks
@@ -416,22 +437,21 @@ src/harle/tools/
 │
 ├── web_search/
 │   ├── __init__.py
-│   ├── module.py              # WebSearchModule(BaseToolModule)
-│   ├── client.py              # Tavily / SearXNG wrapper
+│   ├── module.py              # WebSearchModule(BaseToolModule) — uses connections.get("tavily")
 │   ├── tools.py               # search_web, search_news, fetch_page, ...
 │   └── skills/
 │       └── research.md        # How to structure search queries, cross-reference results
 │
 ├── scripts/
 │   ├── __init__.py
-│   ├── module.py              # ScriptsModule(BaseToolModule)
+│   ├── module.py              # ScriptsModule(BaseToolModule) — no connection (local)
 │   ├── tools.py               # run_script, list_scripts, ...
 │   └── skills/
 │       └── safety.md          # Script execution safety rules
 │
 ├── vault/
 │   ├── __init__.py
-│   ├── module.py              # VaultModule(BaseToolModule)
+│   ├── module.py              # VaultModule(BaseToolModule) — no connection (local)
 │   ├── tools.py               # read_note, create_note, update_note, search_notes, ...
 │   └── skills/
 │       └── conventions.md     # File naming, frontmatter rules, directory layout
@@ -442,6 +462,8 @@ src/harle/tools/
 └── twitter/
     └── ...
 ```
+
+API clients that were previously in `client.py` per module are now centralized in `src/harle/connections/` (one file per external service). See [connections.md](./connections.md) for the full Connections Layer architecture.
 
 **User vault extension point:**
 
@@ -517,33 +539,34 @@ async def move_card(card_id: str, target_list: str) -> str:
 **`src/harle/tools/trello/module.py`** — the module class:
 
 ```python
+from harle.connections.registry import ConnectionRegistry
 from harle.tools.base import BaseToolModule
 from harle.tools.trello.tools import search_cards, create_card, move_card
-from harle.tools.trello.client import TrelloClient
 
 
 class TrelloModule(BaseToolModule):
     name = "trello"
     description = "Trello board management for task tracking"
 
-    async def initialize(self, config: dict) -> None:
-        self._client = TrelloClient(
-            api_key=config["api_key"],
-            api_token=config["api_token"],
-        )
+    async def initialize(
+        self, config: dict, connections: ConnectionRegistry | None = None
+    ) -> None:
+        self._conn = connections.get("trello")
+        self._client = self._conn.get_client()
         self._default_board = config.get("default_board")
 
     async def shutdown(self) -> None:
-        await self._client.close()
+        pass  # HTTP client lifecycle is managed by the connection
 
     def get_tools(self) -> list:
         return [search_cards, create_card, move_card]
-        # Skills are in src/harle/tools/trello/skills/ by convention.
-        # Which skills are active is controlled by config.yaml.
 
     async def health_check(self) -> bool:
-        return await self._client.verify_credentials()
+        status = await self._conn.health_check()
+        return status.healthy
 ```
+
+The module no longer creates its own API client or manages credentials. It receives an authenticated, rate-limited `httpx.AsyncClient` from the shared `TrelloConnection` (see [connections.md](./connections.md)). The same connection is reused by the Trello import source, ensuring a single set of credentials and a shared rate limiter.
 
 **`src/harle/tools/trello/skills/triage.md`** — a built-in skill:
 
@@ -573,10 +596,19 @@ a clear scope (e.g., "Draft the /run endpoint schema" instead of
 ### Startup
 
 ```
+0. Orchestrator initializes the Connection Registry (see connections.md):
+   → For each enabled connection in config.connections:
+     a. Instantiate and initialize the connection class
+     b. Run health_check() — log results, mark unhealthy connections
+   → Connection Registry is now ready and passed to module initialization
+
 1. Orchestrator reads config.yaml → tool_modules section
 2. For each enabled module:
    a. Import module class (e.g. TrelloModule from src/harle/tools/trello/)
-   b. Call module.initialize(config) → sets up API clients, validates credentials
+   b. Call module.initialize(config, connections=connection_registry)
+      → Modules that access external APIs look up their connection by name
+        (e.g. connections.get("trello")), receiving a shared authenticated client
+      → Modules that operate locally (vault, scripts) ignore the connections parameter
    c. Call module.health_check() → verifies the module is operational
       - If health check fails: log a warning, mark module as degraded,
         continue with other modules
@@ -613,8 +645,10 @@ a clear scope (e.g., "Draft the /run endpoint schema" instead of
 ```
 1. Orchestrator calls registry.shutdown_all()
 2. Registry iterates over all registered modules
-3. Each module's shutdown() is called → closes HTTP clients, flushes buffers
-4. Log: "Tool Module Layer shut down cleanly"
+3. Each module's shutdown() is called → flushes buffers, releases local state
+4. Orchestrator calls connection_registry.shutdown_all()
+   → Each connection's shutdown() closes its HTTP client
+5. Log: "Tool Module Layer shut down cleanly"
 ```
 
 ---
@@ -984,28 +1018,43 @@ The Tool Module Layer is designed with MCP (Model Context Protocol) in mind, but
 
 ## Configuration
 
-Tool module configuration lives in the Orchestrator's `config.yaml` under the `tool_modules` key. Each module has its own section.
+Tool module configuration lives in the Orchestrator's `config.yaml` under the `tool_modules` key. Each module has its own section. Modules that access external APIs reference a named connection from the `connections` section (see [connections.md](./connections.md)) — credentials and API client setup live there, not in the module config.
 
 ```yaml
-tool_modules:
+# Connections are configured once, shared across tool modules and import sources.
+# See connections.md for the full connections section.
+connections:
   trello:
     enabled: true
     api_key: ${TRELLO_API_KEY}
     api_token: ${TRELLO_API_TOKEN}
+  tavily:
+    enabled: true
+    api_key: ${TAVILY_API_KEY}
+  notion:
+    enabled: false
+    api_token: ${NOTION_API_TOKEN}
+
+# Tool modules reference connections by name — no credentials here
+tool_modules:
+  trello:
+    enabled: true
+    connection: trello               # ← references connections.trello
     default_board: "Work Tasks"
     mode: propose                    # read_only | propose | auto
     skills: [triage, conventions]    # .md filenames from skills/ dir
 
   web_search:
     enabled: true
+    connection: tavily               # ← references connections.tavily
     provider: tavily                 # tavily | bing | searxng
-    api_key: ${TAVILY_API_KEY}
     max_results: 5
     mode: auto                       # search is read-only, auto is safe
     skills: [research]
 
   scripts:
     enabled: true
+    # No connection — scripts execute locally
     scripts_dir: "${HARLE_VAULT_PATH}/scripts"
     allowed_extensions: [".py", ".sh"]
     timeout_seconds: 30
@@ -1014,14 +1063,15 @@ tool_modules:
 
   vault:
     enabled: true
+    # No connection — vault operates on local files
     vault_path: ${HARLE_VAULT_PATH}
     mode: propose
     skills: [conventions]
 
   notion:
     enabled: false
-    api_key: ${NOTION_API_KEY}
-    skills: []                       # No skills active (module disabled anyway)
+    connection: notion               # ← references connections.notion
+    skills: []
 
   twitter:
     enabled: false
@@ -1037,12 +1087,13 @@ tool_skills:
 
 | Priority | Source | Example |
 |---|---|---|
-| **1 (highest)** | Environment variables | `TRELLO_API_KEY=abc123` |
-| **2** | `config.yaml` values | `api_key: ${TRELLO_API_KEY}` |
+| **1 (highest)** | Environment variables | `TRELLO_API_KEY=abc123` (for connection credentials) |
+| **2** | `config.yaml` values | `connection: trello`, `mode: propose` |
 | **3 (lowest)** | Module defaults (in code) | `mode: "propose"` |
 
 **Key conventions:**
-- Secrets (API keys, tokens) are always referenced via environment variables (`${VAR_NAME}`), never hardcoded.
+- Secrets (API keys, tokens) live in the `connections` section of `config.yaml`, referenced via environment variables (`${VAR_NAME}`). They are never duplicated in the `tool_modules` section.
+- The `connection` field names the shared connection from the Connections Layer. Modules that operate locally (scripts, vault) omit this field.
 - The `enabled` flag lets you toggle modules without removing their config.
 - The `mode` flag controls the approval behavior per module — independent of the global approval setting.
 - The `skills` list controls which `.md` files from the module's `skills/` directory (or the user's `tool_skills/<module>/` override directory) are loaded and provided to the LLM. Filenames are listed without the `.md` extension. An empty list means no skills are active for that module.
@@ -1082,50 +1133,50 @@ src/harle/tools/                       ← Tool Module Layer code
 ├── skills.py                          # Skill loader (reads .md files, handles overrides)
 ├── permissions.py                     # Permission checking, approval flow integration
 │
-├── trello/                            # Trello module
+├── trello/                            # Trello module (uses connections.get("trello"))
 │   ├── __init__.py
 │   ├── module.py                      # TrelloModule(BaseToolModule)
-│   ├── client.py                      # Trello API wrapper (httpx)
 │   ├── tools.py                       # search_cards, create_card, move_card
 │   └── skills/                        # Built-in skills
 │       ├── triage.md
 │       └── conventions.md
 │
-├── web_search/                        # Web Search module
+├── web_search/                        # Web Search module (uses connections.get("tavily"))
 │   ├── __init__.py
 │   ├── module.py                      # WebSearchModule(BaseToolModule)
-│   ├── client.py                      # Tavily / Bing / SearXNG wrapper
 │   ├── tools.py                       # search_web, search_news, fetch_page
 │   └── skills/
 │       └── research.md
 │
-├── scripts/                           # Script execution module
+├── scripts/                           # Script execution module (no connection — local)
 │   ├── __init__.py
 │   ├── module.py                      # ScriptsModule(BaseToolModule)
 │   ├── tools.py                       # run_script, list_scripts
 │   └── skills/
 │       └── safety.md
 │
-├── vault/                             # Vault (dataset) operations module
+├── vault/                             # Vault (dataset) operations module (no connection — local)
 │   ├── __init__.py
 │   ├── module.py                      # VaultModule(BaseToolModule)
 │   ├── tools.py                       # read_note, create_note, update_note, search_notes
 │   └── skills/
 │       └── conventions.md
 │
-├── notion/                            # (future)
+├── notion/                            # (future — uses connections.get("notion"))
 │   └── ...
 │
 └── twitter/                           # (future)
     └── ...
 ```
 
+API client code that previously lived in per-module `client.py` files is now in the Connections Layer (`src/harle/connections/`). See [connections.md](./connections.md) for the full project structure.
+
 **Key dependencies (in addition to the Orchestrator's):**
 
 | Package | Purpose |
 |---|---|
 | `openai-agents` | `FunctionTool` class for converting functions to SDK-compatible tools |
-| `httpx` | Async HTTP client for external API calls (Trello, Tavily, Notion) |
+| `httpx` | Async HTTP client — used by the Connections Layer for external API calls; tool modules receive pre-configured clients |
 | `pyyaml` | Parsing skill file frontmatter |
 | `tiktoken` | Token counting for skill budget management |
 
@@ -1143,7 +1194,7 @@ src/harle/tools/                       ← Tool Module Layer code
 | **Skill override** | User vault `tool_skills/<module>/` | Customization without code changes |
 | **Internal protocol** | In-process Python calls | Fast, simple, debuggable |
 | **External protocol** | MCP (optional export/import layer) | Interoperability with Cursor, Claude, community MCP servers |
-| **API client** | httpx (async) | Non-blocking, modern, consistent across modules |
+| **API client** | Shared via Connections Layer (`connections.md`) | Single authenticated client per service, shared rate limiting, no duplicate code across tool and import modules |
 | **Permission model** | Function attributes (`fn.permission`, `fn.requires_approval`) | Metadata stays with the function, not in a separate config |
 | **Configuration** | `config.yaml` under `tool_modules` key | Centralized, per-module, supports env var substitution |
 
@@ -1214,11 +1265,12 @@ Phases 2, 3, and 4 can be developed in parallel after Phase 1 — they are indep
 | File | Contents |
 |---|---|
 | `src/harle/tools/web_search/__init__.py` | Package init |
-| `src/harle/tools/web_search/module.py` | `WebSearchModule(BaseToolModule)` — lifecycle, tool list, provider selection (Tavily/Bing/SearXNG) |
-| `src/harle/tools/web_search/client.py` | Search API wrapper using httpx — abstraction over Tavily, Bing, and SearXNG with a common response format |
+| `src/harle/tools/web_search/module.py` | `WebSearchModule(BaseToolModule)` — lifecycle, tool list, provider selection (Tavily/Bing/SearXNG). Uses `connections.get("tavily")` to obtain the authenticated HTTP client. |
 | `src/harle/tools/web_search/tools.py` | Tool functions: `search_web`, `search_news`, `fetch_page` |
 
-**What is NOT built yet:** Skills (Phase 4), security constraints (Phase 3), Orchestrator wiring (Phase 5). The module can be tested in isolation — import it, call `initialize()`, call tool functions directly.
+The module does not include a `client.py` — the API client is provided by the Tavily connection from the Connections Layer (see [connections.md](./connections.md)).
+
+**What is NOT built yet:** Skills (Phase 4), security constraints (Phase 3), Orchestrator wiring (Phase 5). The module can be tested in isolation — import it, call `initialize()` with a mock Connection Registry, call tool functions directly.
 
 **Verification:**
 - Unit tests with mocked Tavily API responses.
@@ -1323,10 +1375,10 @@ If total exceeds max_tokens_per_module → truncate, warn in log.
 
 | Component | Change |
 |---|---|
-| **Orchestrator startup** | Reads `tool_modules` from `config.yaml`. For each enabled module: imports class, calls `initialize(config)`, calls `health_check()`, registers with `ToolRegistry`. |
+| **Orchestrator startup** | First initializes the Connection Registry (see [connections.md](./connections.md)). Then reads `tool_modules` from `config.yaml`. For each enabled module: imports class, calls `initialize(config, connections=connection_registry)`, calls `health_check()`, registers with `ToolRegistry`. |
 | **Context Assembler** | Calls `registry.get_skills_for_tools(tool_names)` and includes skill content in the prompt at priority P1. |
 | **Agent Runner** | Calls `registry.get_agent_tools(tool_names)` to get `FunctionTool` objects instead of importing tool functions directly. |
-| **Orchestrator shutdown** | Calls `registry.shutdown_all()`. |
+| **Orchestrator shutdown** | Calls `registry.shutdown_all()`, then `connection_registry.shutdown_all()`. |
 | **Run Logger** | Logs module name alongside tool name for each tool call. Logs constraint check results for tools with constraints. |
 
 **What this replaces:** The Orchestrator's Section 6 ([orchestrator.md](./orchestrator.md)) now references this document for the full tool architecture. The Tool Module Layer owns the registry, approval flow, skills, and security constraints.
@@ -1353,10 +1405,10 @@ If total exceeds max_tokens_per_module → truncate, warn in log.
 **For each module, the work is the same:**
 
 1. Create the directory: `src/harle/tools/<name>/`
-2. Implement `module.py` (class extending `BaseToolModule`), `tools.py` (tool functions), and optionally `client.py` (API wrapper).
+2. Implement `module.py` (class extending `BaseToolModule`) and `tools.py` (tool functions). For modules that access external APIs, ensure the corresponding connection exists in the Connections Layer (see [connections.md](./connections.md)) — the module uses `connections.get("<name>")` instead of creating its own API client.
 3. Create `skills/` directory with 1–3 Markdown skill files.
-4. Add the module's config block to `config.example.yaml`, including `constraints` for modules with local system access.
-5. Write unit tests with mocked external dependencies.
+4. Add the module's config block to `config.example.yaml` with a `connection:` reference (for API modules), including `constraints` for modules with local system access.
+5. Write unit tests with mocked Connection Registry and external dependencies.
 
 **Important: the Scripts module must not be built before Phase 3 (security layer).** Unlike Web Search or Trello — where the damage surface is bounded by the external API — the scripts module executes commands on the host. It requires constraint validation (`allowed_commands`, `blocked_patterns`, `allowed_paths`) and the execution sandbox (timeout, memory limit) to be safe.
 

@@ -1,9 +1,9 @@
 ---
 title: "Harle Architecture Description"
-tags: [architecture, overview, components, deployment, infrastructure, technology-stack]
+tags: [architecture, overview, components, connections, import, deployment, infrastructure, technology-stack]
 context: global
-last_updated: 2026-02-24
-summary: "Describes the overall architecture of Harle, its six main components, technology choices, deployment strategy, and security approach."
+last_updated: 2026-03-01
+summary: "Describes the overall architecture of Harle, its main components (including the Connections Layer and Import Module Layer), technology choices, deployment strategy, and security approach."
 ---
 
 # Harle Architecture Description
@@ -16,37 +16,37 @@ This document describes the architecture of Harle, explains every component and 
 
 ## Architecture Overview
 
-The system consists of six main components connected in a pipeline. The diagram below mirrors the `scheme.png` reference architecture:
+The system consists of several main components connected in a pipeline. Inside the Orchestrator, a **Connections Layer** provides shared API clients and credentials for external services; both the **Tool Module Layer** and the **Import Module Layer** use it so that each external product (Notion, Trello, Miro, Tavily, etc.) is configured once. The diagram below mirrors the `scheme.png` reference architecture:
 
 ```
 ┌─────────────┐     ┌──────────────────────────┐     ┌────────────────┐     ┌──────────────────────────┐
 │  Interface   │────>│     Orchestrator          │────>│  Models/Agents │────>│  Tool Module Layer       │
-│  (CLI first) │     │  (scripts + agent logic)  │     │                │     │  (Web Search, Trello...) │
-└─────────────┘     └──────────┬───────────────┘     └───────┬────────┘     └────────────┬─────────────┘
-                               │                             │                           │
-                               │                             │                           │
-                    ┌──────────▼───────────┐                 │                           │
-                    │  Search Algorithm    │                 │                           │
-                    │  (not AI)            │                 │                           │
-                    └──────────┬───────────┘                 │                           │
-                               │                             │                           │
-                    ┌──────────▼───────────┐                 │                           │
-                    │  Indexer             │<────────────────┘                           │
-                    │  (main DB for search)│                                             │
-                    └──────────┬───────────┘                                             │
-                               │                                                         │
-                    ┌──────────▼───────────┐                                             │
-                    │  Files and Data      │<────────────────────────────────────────────┘
+│  (CLI first) │     │  (Connection Registry,   │     │                │     │  (Web Search, Trello...) │
+└─────────────┘     │   Tool + Import Registry) │     └───────┬────────┘     └────────────┬─────────────┘
+                    └──────────┬───────────────┘              │                           │
+                               │                              │     ┌─────────────────────┘
+                    ┌──────────▼───────────┐                   │     │
+                    │  Search Algorithm   │                   │     │  Import Module Layer
+                    │  (not AI)            │                   │     │  (Notion, Miro → vault)
+                    └──────────┬───────────┘                   │     │
+                               │                              │     │
+                    ┌──────────▼───────────┐                   │     │
+                    │  Indexer             │<─────────────────┘     │
+                    │  (main DB for search)│                         │
+                    └──────────┬───────────┘                         │
+                               │                                     │
+                    ┌──────────▼───────────┐                         │
+                    │  Files and Data      │<────────────────────────┴────
                     │  (your dataset)      │
                     └──────────────────────┘
 ```
 
 **Data flows:**
 - The **Interface** sends user requests to the **Orchestrator**.
-- The **Orchestrator** decides what to do: it may query the **Search Algorithm** to find relevant data, call **Models/Agents** for reasoning, or invoke tools through the **Tool Module Layer**.
+- The **Orchestrator** decides what to do: it may query the **Search Algorithm** to find relevant data, call **Models/Agents** for reasoning, or invoke tools through the **Tool Module Layer**. It also hosts the **Connection Registry** (shared API clients and credentials) and the **Import Module Layer** (bulk import from external sources into the vault).
 - The **Search Algorithm** uses the **Indexer** (database) to find relevant content from **Files and Data**.
 - **Models/Agents** can read from and write to both the **Indexer** and **Files and Data**.
-- **Tool Modules** (like Web Search, Trello) can also read from and write to **Files and Data**.
+- **Tool Modules** (e.g. Web Search, Trello) and **Import Sources** (e.g. Notion, Miro) obtain authenticated API clients from the **Connections Layer** — each external service is configured once and reused. Tool modules and import modules can read from and write to **Files and Data**.
 
 ---
 
@@ -184,6 +184,9 @@ It is an open-source Python library from OpenAI that lets you define "agents" �
 5. **Executes** — the chosen agent calls the LLM with all the context, possibly using tools.
 6. **Stores** — results are saved to your database and files.
 7. **Returns** — the final output goes back to the Interface.
+
+**Connections Layer (inside the Orchestrator):**  
+The Orchestrator owns a **Connection Registry** that holds configured, authenticated clients for every external service (Notion, Trello, Miro, Tavily, etc.). Credentials and API client setup live in a single `connections` section of `config.yaml`. The Tool Module Layer and the Import Module Layer look up connections by name instead of each defining their own API keys and clients. This avoids duplicate configuration, shared rate limiting across tools and import, and a single place to run health checks (e.g. `harle connections status`). For the full design, see **[connections.md](./connections.md)**.
 
 **Why not n8n, Dify, or other alternatives:**
 - **n8n** (Option B in the proposal) is great for recurring workflows with many connectors, but adds a dependency on a separate UI server and is harder to customize for complex agent logic.
@@ -338,8 +341,8 @@ For the full architecture — the `BaseToolModule` interface, the Tool Registry,
 
 **Key design principles:**
 - **Tool functions are the single source of truth.** Each tool is a plain Python function with type hints and a docstring. The registry introspects these to generate JSON schemas for the LLM — no separate schema files, no decorators, no duplication.
-- **Modules group related tools.** All Trello operations live in `TrelloModule`, all web search operations in `WebSearchModule`. Each module handles its own lifecycle (init, shutdown, health check) and configuration.
-- **Config-driven.** Each module is enabled/disabled and configured in `config.yaml`. Operation modes (`read_only`, `propose`, `auto`) control approval behavior per module. Security constraints (allowlists, blocklists, path restrictions) protect tools with local system access.
+- **Modules group related tools.** All Trello operations live in `TrelloModule`, all web search operations in `WebSearchModule`. Each module handles its own lifecycle (init, shutdown, health check) and configuration. Modules that access external APIs receive an authenticated client from the **Connections Layer** (see [connections.md](./connections.md)) instead of managing their own credentials or HTTP clients.
+- **Config-driven.** Each module is enabled/disabled and configured in `config.yaml`; API-accessing modules reference a connection by name (`connection: trello`), with credentials living in the shared `connections` section. Operation modes (`read_only`, `propose`, `auto`) control approval behavior per module. Security constraints (allowlists, blocklists, path restrictions) protect tools with local system access.
 - **Skills inject domain knowledge.** Each module can include Markdown files that teach the LLM *how* to use the tools effectively — usage patterns, conventions, safety rules. Which skills are active is controlled by config, and users can override built-in skills from their vault.
 - **MCP is an optional layer.** Internally, modules communicate with the Orchestrator through in-process Python calls (fast, simple). Modules can optionally be exported as MCP servers for use by Cursor, Claude, or other clients. External MCP servers can be imported through an adapter.
 
@@ -362,7 +365,22 @@ For the full architecture — the `BaseToolModule` interface, the Tool Registry,
 
 ---
 
-### 7. Files and Data (your dataset)
+### 7. Import Module Layer (external data into the vault)
+
+**What it does:** The Import Module Layer is how external knowledge enters Harle's awareness. When you import data from Notion, Miro, Trello, bookmarks, or other sources, the call goes through an import module. Data can be **fully materialized** into the vault as Markdown files or stored as **reference files** (lightweight metadata plus access instructions so the agent can fetch live data via a tool at runtime). Import is triggered from the CLI (`harle import notion ...`) or on a schedule, not during agent reasoning.
+
+**Technology: Python import sources with a central Import Registry, conversion pipeline, and Vault Writer. Shares the Connections Layer with the Tool Module Layer.**
+
+For the full architecture — the `BaseImportSource` interface, the Import Registry, full vs. reference materialization, the conversion pipeline, and configuration — see **[import_module.md](./import_module.md)**.
+
+**Key points:**
+- **Same connections as tools.** Import sources that use an API (e.g. Notion API mode, Miro) look up their connection from the same Connection Registry as the tool modules. Credentials are configured once in `config.yaml` under `connections`; both the Notion tool module and the Notion import source use the same `NotionConnection`.
+- **File-mode sources need no connection.** Notion ZIP export, bookmarks HTML, and similar file-based imports work without any API credentials — useful for onboarding before setting up tokens.
+- **Reference imports bridge to tools.** Large or dynamic sources (e.g. a Notion database with hundreds of rows) can be imported as reference files: the vault stores metadata and `access_via` / `access_params` so the agent knows which tool to call for live data.
+
+---
+
+### 8. Files and Data (your dataset)
 
 **What it does:** This is your personal knowledge base — the collection of Markdown files, notes, rules, prompts, and documents that Harle operates over. It is the "ground truth" that agents refer to when making decisions.
 
@@ -485,7 +503,9 @@ Tailscale creates a private network between your devices. Your Harle server, you
 | **Search** | Whoosh | Pure Python, no external services, fast |
 | **Database** | PostgreSQL + pgvector | One DB for everything, industry standard |
 | **Models** | OpenAI API (now), self-hosted (later) | Best quality today, clean migration path |
-| **Tool Module Layer** | Python tool modules + Tool Registry + OpenAI Agents SDK bridge | Modular, configurable, secure, MCP-compatible |
+| **Connections Layer** | Shared Connection Registry (credentials, httpx clients, rate limiters per service) | Single place for external API config; used by both Tool Module Layer and Import Module Layer (see [connections.md](./connections.md)) |
+| **Tool Module Layer** | Python tool modules + Tool Registry + OpenAI Agents SDK bridge | Modular, configurable, secure, MCP-compatible; API clients from Connections Layer |
+| **Import Module Layer** | Python import sources + Import Registry + conversion pipeline + Vault Writer | Bulk import from Notion, Miro, etc. into vault; shares Connections Layer with tools (see [import_module.md](./import_module.md)) |
 | **Web Search** | Tavily or Bing API (now), SearXNG (later) | Fast to integrate, AI-optimized, low cost at personal scale |
 | **Data storage** | Markdown files in a separate Git repo (external to this codebase) | Human-readable, version-controlled, per-user |
 | **Deployment** | Docker Compose | One command to start everything |
@@ -501,7 +521,7 @@ Harle follows a "secure enough, not paranoid" philosophy:
 1. **Data never in the code repository.** User datasets, database state, and runtime configuration live outside the Harle application repo. The `.gitignore` enforces this. The code repo is safe to share or make public without leaking personal data.
 2. **Separate contexts.** Work and personal data live in separate directories (or database schemas) with different access rules.
 3. **Read-first, write-later.** All tool modules start in read-only or propose mode. Write access is enabled explicitly, per module, with approval gates. Tools with local system access (scripts, vault) are additionally protected by input validation and execution sandboxing (see [tools.md](./tools.md)).
-4. **No secrets in the vault or the code repo.** API keys and tokens live in environment variables or a secrets manager (e.g. Docker secrets), never in Markdown files or committed configuration.
+4. **No secrets in the vault or the code repo.** API keys and tokens live in the `connections` section of config (referencing environment variables or a secrets manager), never in Markdown files or committed configuration. Each external service is configured once and reused by both tool modules and import sources (see [connections.md](./connections.md)).
 5. **Private network only.** Harle is only accessible over Tailscale — no public ports, no public URLs.
 6. **Audit log.** Every agent run is logged: what was asked, what was decided, what tools were called, what was returned. This is how you build trust.
 7. **Propose-only mode.** Agents draft results and suggest actions. You approve before anything is executed — especially for work-related tasks.
@@ -531,6 +551,7 @@ Here is a concrete example. You launch Harle and type: *"Find all stalled tasks 
          │
          ▼
 4. Orchestrator calls Trello module (Tool Module Layer)
+   → Module uses the shared Trello connection (Connections Layer)
    → Reads all cards from your Trello boards
    → Identifies cards with no activity in 14+ days
          │
@@ -560,14 +581,16 @@ This architecture is designed to grow. The first version focuses on:
 
 1. **CLI interface** — talk to Harle from the terminal
 2. **One agent role** (Secretary) — the most immediately useful
-3. **Tool Module Layer** — Web Search (first module) + Trello, with the registry, skills, and security layers (see [tools.md](./tools.md) for the incremental plan)
-4. **Markdown dataset** — your knowledge base
-5. **PostgreSQL** — logging and search index
-6. **OpenAI models** — for reasoning
+3. **Connections Layer** — shared API clients and credentials for external services (see [connections.md](./connections.md)); initialized before tools and import
+4. **Tool Module Layer** — Web Search (first module) + Trello, with the registry, skills, and security layers; modules obtain API clients from the Connections Layer (see [tools.md](./tools.md) for the incremental plan)
+5. **Import Module Layer** — bulk import from Notion, Miro, etc. into the vault, sharing the same connections as the tool modules (see [import_module.md](./import_module.md))
+6. **Markdown dataset** — your knowledge base
+7. **PostgreSQL** — logging and search index
+8. **OpenAI models** — for reasoning
 
 Once this loop works reliably, the next steps are:
 - Add Researcher and Specialist roles
-- Add more tool modules (vault, scripts, Notion) following the same pattern
+- Add more tool modules (vault, scripts, Notion) and import sources following the same pattern
 - Enable write tools with approval gates
 - Add semantic search (pgvector)
 - Deploy to a VPS for always-on access
