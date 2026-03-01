@@ -2,7 +2,7 @@
 title: "Harle Data Layer — Architecture & Functionality"
 tags: [data-layer, architecture, dataset, indexer, search, postgresql, whoosh]
 context: global
-last_updated: 2026-02-19
+last_updated: 2026-03-02
 summary: "Describes the three data components — User Dataset, Indexer, and Search Algorithm — their internal architecture, interactions, and technology choices."
 ---
 
@@ -576,11 +576,13 @@ The User Dataset (files) is the source of truth. The Indexer must stay in sync w
 
 ## 3. Search Algorithm
 
+> **Detailed design:** This section provides a high-level summary. For the full architecture — the complete pipeline, query expansion, Whoosh internals, chunking strategy, ranking formulas, semantic search roadmap, migration plan, and configuration — see **[search.md](./search.md)**.
+
 ### What it is
 
 The Search Algorithm is the query engine that sits between the Orchestrator and the data stores. When the Orchestrator needs relevant context for a request, it asks the Search Algorithm: "What in the dataset is relevant to this question?"
 
-The Search Algorithm does not store data — it **queries** both the Whoosh full-text index and the PostgreSQL Indexer to find and rank results.
+The Search Algorithm is **stateless** — it does not store data. It queries both the Whoosh full-text index and the PostgreSQL Indexer to find and rank results.
 
 ### The core problem it solves
 
@@ -601,183 +603,64 @@ Full dataset                    Search Algorithm              Agent sees
 └──────────────┘
 ```
 
+This is not a web search engine — it solves **context selection** for an LLM. The requirements differ: it must return file content (not links), pick the right results automatically (the user does not browse), and respect a hard token budget.
+
 ### Technology: [Whoosh](https://whoosh.readthedocs.io/) full-text search + PostgreSQL metadata queries
 
-### How a search query works (step by step)
+### Evolution plan (three phases)
 
-When the Context Assembler asks the Search Algorithm for relevant content, here is what happens:
+The Search Algorithm evolves in three phases. Each phase works on its own; later phases extend, not replace, earlier ones.
+
+| Phase | Engine | Status | When to use |
+|---|---|---|---|
+| **Phase 1** | Simple keyword search | **Implemented** | Datasets < 100 files. Scans all files, scores by case-insensitive term matching. |
+| **Phase 2** | Whoosh BM25 + metadata pre-filter | Target (next) | Datasets 100–1,000 files. Inverted index, field boosts, query expansion, sub-50ms queries. |
+| **Phase 3** | Hybrid: Whoosh + pgvector semantic | Future | Datasets > 500 files or when vocabulary mismatch becomes a problem. |
+
+The current Phase 1 implementation (`search/engine.py`) iterates all indexed files, loads content from disk, and scores by weighted term frequency (title 3x, tag 2x, content 0.5x capped at 3.0 per term). It has zero dependencies beyond PostgreSQL and works out of the box for small datasets, but degrades linearly with file count (O(n) disk I/O per query).
+
+**The migration to Phase 2 does not change the public interface.** `SearchEngine.search(query) → list[SearchResult]` remains stable — only the internal implementation evolves. See [search.md — Migration Path](./search.md#migration-path) for details.
+
+### How a search query works (Phase 2 pipeline)
 
 ```
 Input: user request + agent role + context scope
-
          │
-         ▼
-Step 1: QUERY EXPANSION
-    Take the user's request and extract search terms.
-    "Find stalled tasks in Trello and suggest reformulations"
-    → search terms: ["stalled", "tasks", "Trello", "reformulations", "triage"]
-
-    The agent role adds implicit terms:
-    → Secretary role adds: ["task-management", "workflow", "status"]
-
+Step 1: QUERY EXPANSION — extract terms, add role-specific terms, match tag vocabulary
+Step 2: METADATA PRE-FILTER — PostgreSQL narrows candidates by context, tags, priority
+Step 3: FULL-TEXT SEARCH — Whoosh BM25 scores candidates with field boosts (title 2x, tags 1.5x)
+Step 4: METADATA ENRICHMENT — load token_count, summary, recency for top results
+Step 5: MEMORY & HISTORY — search memories and past runs for relevant context
+Step 6: RANKING & FUSION — Reciprocal Rank Fusion combines all signals, deduplicates
          │
-         ▼
-Step 2: METADATA PRE-FILTER (PostgreSQL)
-    Query file_index to narrow the candidate set:
-    → Filter by context: WHERE context = 'work' (or 'personal')
-    → Filter by tags: WHERE tags && ARRAY['tasks', 'trello', 'triage']
-    → Result: candidate set of ~50 files (from 500+)
-
-         │
-         ▼
-Step 3: FULL-TEXT SEARCH (Whoosh)
-    Search the Whoosh index for the expanded terms,
-    limited to the candidate set from Step 2.
-    → Whoosh scores each file by relevance (term frequency,
-      position, field boosts)
-    → Result: ranked list of files with relevance scores
-
-         │
-         ▼
-Step 4: METADATA ENRICHMENT (PostgreSQL)
-    For the top results, load additional data from the Indexer:
-    → token_count (for budget planning)
-    → summary (for quick relevance check)
-    → last_modified (prefer recent files)
-
-         │
-         ▼
-Step 5: MEMORY AND HISTORY LOOKUP (PostgreSQL)
-    Search memories table for relevant preferences:
-    → "User prefers bullet-point format for task reports"
-    Search runs table for similar past requests:
-    → "Last Tuesday, user asked a similar question — here's what worked"
-
-         │
-         ▼
-Step 6: RANKING AND DEDUPLICATION
-    Combine all results and rank by:
-    1. Relevance score (from Whoosh)
-    2. Recency (newer files rank higher)
-    3. Source priority (prompts > policies > workflows > knowledge)
-    4. Confidence (for memories)
-    → Remove duplicates
-    → Return the top N results (configured, default 10)
-
-         │
-         ▼
-Output: ordered list of:
-    - file paths + content (for the Context Assembler to load)
-    - memory entries (for inclusion in context)
-    - prior run references (for inclusion if budget allows)
+Output: ranked file results + memories + prior run references
 ```
 
-### Whoosh internals
+Each step is a separate module with a clear interface. For the full details of each step — including SQL queries, Whoosh schema, scoring formulas, and the RRF algorithm — see [search.md](./search.md).
 
-**What is Whoosh?**  
-Whoosh is a pure-Python full-text search library. It builds an inverted index — a data structure that maps every word to the list of documents that contain it.
+### Key design decisions
 
-**How the index is built:**
-
-```
-Document: workflows/task-triage.md
-Content: "Identify stalled tasks by checking last activity date.
-          Move cards with no activity for 14+ days to a review list."
-
-Whoosh inverted index (simplified):
-    "stalled"    → [task-triage.md]
-    "tasks"      → [task-triage.md, weekly-status.md, ...]
-    "activity"   → [task-triage.md]
-    "cards"      → [task-triage.md, trello-guide.md]
-    "14"         → [task-triage.md]
-    "days"       → [task-triage.md, travel-planning.md]
-    "review"     → [task-triage.md, code-review.md]
-```
-
-When you search for "stalled tasks", Whoosh looks up both words in the index and returns documents that contain both — instantly, without reading any files.
-
-**Whoosh schema (how files are indexed):**
-
-```python
-from whoosh.fields import Schema, TEXT, ID, KEYWORD, DATETIME, STORED
-
-schema = Schema(
-    path=ID(stored=True, unique=True),        # File path (unique identifier)
-    title=TEXT(stored=True, field_boost=2.0),  # Title gets 2x relevance boost
-    tags=KEYWORD(stored=True, commas=True),    # Tags as keywords
-    content=TEXT(stored=False),                # Full text (not stored, only indexed)
-    context=ID(stored=True),                   # "work" or "personal"
-    modified=DATETIME(stored=True),            # Last modified timestamp
-)
-```
-
-**Key design decisions:**
-- **`title` has a 2x boost.** If the search term appears in the title, that file is twice as relevant as one where the term only appears in the body. This makes sense — a file titled "Task Triage Workflow" is more relevant to a triage request than a file that merely mentions triage once.
-- **`content` is not stored.** The index only tracks which words appear in which files — it does not store the full text. The actual content is loaded from the file system when needed. This keeps the index small.
-- **`context` as a filter field.** The search can efficiently exclude all personal files when in work context, without scanning them.
-
-### How search improves over time
-
-The Search Algorithm gets better without code changes:
-
-| Improvement | How it happens |
-|---|---|
-| **Better tags** | You (or the Specialist agent) add more specific tags to files → more precise tag-based filtering |
-| **Better titles** | Clearer file titles → title boost becomes more effective |
-| **More workflow templates** | New templates → more matches in Step 3 → better routing and context |
-| **Memories accumulate** | More preferences stored → less clarification needed, more personalized results |
-| **Semantic search (future)** | pgvector embeddings → finds conceptually related documents that keyword search misses |
+- **Query expansion is rule-based, not LLM-powered.** It must be fast (<5ms) and free. Role-specific terms and tag vocabulary matching provide sufficient enrichment for a personal dataset.
+- **Metadata pre-filtering uses PostgreSQL array operators.** The `tags && ARRAY[...]` overlap operator with a GIN index narrows 500+ files to ~30–100 candidates before Whoosh runs.
+- **Whoosh `content` field is not stored.** The index tracks which words appear in which files but does not duplicate the text. Content is loaded from vault files by the Context Assembler, keeping the index small (~5 MB for 500 files).
+- **Reciprocal Rank Fusion (RRF)** combines rankings from multiple sources. It is score-scale-independent, making it robust when combining BM25 scores with metadata signals and (later) semantic similarity scores.
+- **Chunking is section-level at H2 boundaries** for files exceeding ~2,500 tokens. Each chunk carries cascading metadata from the heading hierarchy (per HiQA research). Files under 2,000 tokens are retrieved whole — chunking adds overhead without benefit at this size.
 
 ### Performance characteristics
 
-| Metric | Value | Notes |
-|---|---|---|
-| **Index build time** | ~1 second for 500 files | One-time on startup or sync |
-| **Incremental update** | ~10ms per changed file | Only changed files are re-indexed |
-| **Query time** | <50ms | Full pipeline: expand → filter → search → rank |
-| **Index size** | ~5 MB for 500 files | Stored on disk, loaded into memory |
-| **Memory usage** | ~20 MB | Whoosh index + PostgreSQL connection pool |
+| Metric | Phase 1 (current) | Phase 2 (target) | Phase 3 (future) |
+|---|---|---|---|
+| **Query time (500 files)** | ~200ms | <50ms | <100ms (no rerank) |
+| **Index build time** | N/A | ~1s for 500 files | Same + embedding time |
+| **Incremental update** | N/A | ~10ms per file | ~10ms + embedding API call |
+| **Index size** | None | ~5 MB | ~5 MB + ~50 MB (pgvector) |
+| **Memory usage** | ~5 MB | ~20 MB | ~25 MB |
 
-For a personal dataset (hundreds to low thousands of files), these numbers are far more than sufficient. The entire search completes before a human could notice any delay.
+For a personal dataset, all phases complete well within acceptable latency. The bottleneck is always LLM inference, not search.
 
-### Future: adding semantic search (pgvector)
+### Future: semantic search (pgvector)
 
-Keyword search has a fundamental limitation: it only finds documents that contain the exact words you searched for. If you search for "data protection," it will not find a document titled "privacy compliance framework" — even though the topics are closely related.
-
-**Semantic search solves this.** It converts both the query and the documents into vector embeddings (lists of numbers representing meaning) and finds the closest matches by mathematical similarity.
-
-**How the two search methods will work together:**
-
-```
-User request: "How should we handle user data in our L2?"
-                │
-    ┌───────────┴───────────┐
-    │                       │
-    ▼                       ▼
-Keyword search            Semantic search
-(Whoosh)                  (pgvector)
-    │                       │
-    ▼                       ▼
-Finds files with          Finds files about
-"user data" and "L2"      data handling, privacy,
-in the text               compliance — even if
-    │                     exact words differ
-    │                       │
-    └───────────┬───────────┘
-                │
-                ▼
-         Merge and re-rank
-         (deduplicate, combine scores)
-                │
-                ▼
-         Top 10 most relevant files
-```
-
-**Why Whoosh stays even after pgvector is added:**
-- **Exact matches matter.** When you search for a specific term (like a project name or a file title), keyword search is more precise.
-- **No API cost.** Whoosh runs locally. Embedding-based search requires an API call to generate the query embedding (~$0.0001 per query, but still a dependency).
-- **Fallback.** If the embedding API is down, keyword search still works.
-- **Speed.** Whoosh is faster for simple queries. The two together are more accurate than either alone.
+Keyword search only finds documents containing the exact search terms. Semantic search (pgvector) finds documents by **meaning** — "data protection approaches" matches "privacy compliance framework" even though no keywords overlap. The two methods are complementary: BM25 catches exact terms that embeddings miss; embeddings catch conceptual matches that BM25 misses. Whoosh stays even after pgvector is added, and serves as a fallback when the embedding API is unavailable. See [search.md — Semantic Search](./search.md#semantic-search-with-pgvector-phase-3--design-notes) for the full design.
 
 ---
 
