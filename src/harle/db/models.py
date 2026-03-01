@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, JSON, Numeric, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -169,3 +169,53 @@ class Embedding(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+
+
+class CaptureRunRow(Base):
+    """One row per vault capture run (quick profile, interview, or refresh).
+
+    Stores run identity (run_id), mode, current state (created/active/
+    paused/completed/cancelled), scope (all/work/personal/goals), target tiers,
+    and optional conversation_id. Enables pause/resume across days and supplies
+    run history for the Health Checker's coverage and staleness analysis.
+    """
+
+    __tablename__ = "capture_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    target_tiers: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
+    conversation_id: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class CaptureRunTopicProgressRow(Base):
+    """One row per topic in a capture run: status, answers, and write result.
+
+    Links a run_id to a topic_id (unique per run). Tracks status
+    (pending/in_progress/completed/skipped), raw answers (JSON), generated
+    Markdown, the vault path written, and completed_at. Used to resume
+    runs and to compute per-topic staleness for refresh.
+    """
+
+    __tablename__ = "capture_run_topic_progress"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    topic_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    answers: Mapped[dict] = mapped_column(JSON, nullable=False)
+    generated_content: Mapped[str | None] = mapped_column(Text)
+    vault_path: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (UniqueConstraint("run_id", "topic_id", name="uq_capture_run_topic"),)

@@ -1188,12 +1188,12 @@ Phase 2 and Phase 3 can be developed in parallel after Phase 1. Phase 4 depends 
 | `src/harle/capture/__init__.py` | Package init, re-exports key classes |
 | `src/harle/capture/topics.py` | `Topic`, `TopicQuestion`, `Tier`, `Sensitivity` dataclasses; topic tree definition |
 | `src/harle/capture/registry.py` | `TopicRegistry` — loads topic definitions, queries by tier/scope/staleness |
-| `src/harle/capture/session.py` | `CaptureSession`, `SessionManager` — create, pause, resume, complete sessions |
+| `src/harle/capture/run.py` | `CaptureRun`, `CaptureRunManager` — create, pause, resume, complete runs (avoids "session" vs chat sessions) |
 | `src/harle/capture/writer.py` | `ProfileWriter` — write and merge vault files with frontmatter |
 
-**Verification:** Unit tests with a mock vault directory. Create a session, mark topics as completed, write vault files, verify merge behavior.
+**Verification:** Unit tests with a mock vault directory. Create a run, mark topics as completed, write vault files, verify merge behavior.
 
-**Dependencies:** PostgreSQL (for session tables). Database migration for `capture_sessions` and `capture_topic_progress`.
+**Dependencies:** PostgreSQL (for run tables). Database migration for `capture_runs` and `capture_run_topic_progress`.
 
 **Estimated size:** ~450 lines of production code, ~300 lines of tests.
 
@@ -1366,7 +1366,7 @@ src/harle/capture/                     ← Vault Capture Module code
 ├── __init__.py
 ├── topics.py                          # Topic, TopicQuestion, Tier, Sensitivity
 ├── registry.py                        # TopicRegistry — topic definitions and queries
-├── session.py                         # CaptureSession, SessionManager
+├── run.py                             # CaptureRun, CaptureRunManager
 ├── engine.py                          # CaptureEngine — interview/refresh orchestration
 ├── quick_profile.py                   # QuickProfileRunner — 5-min CLI questionnaire
 ├── writer.py                          # ProfileWriter — vault file writing and merging
