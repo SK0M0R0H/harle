@@ -35,7 +35,7 @@ src/harle/tools/trello/
 ├── client.py          ← Trello API wrapper (httpx, auth, retries)
 └── ...
 
-src/harle/imports/trello/
+src/harle/vault_imports/trello/
 ├── api_client.py      ← Another Trello API wrapper (same auth, same retries)
 └── ...
 
@@ -350,7 +350,7 @@ class BaseToolModule(ABC):
 Import sources follow the same pattern:
 
 ```python
-from harle.imports.base import BaseImportSource
+from harle.vault_imports.base import BaseImportSource
 from harle.connections.registry import ConnectionRegistry
 
 
@@ -839,12 +839,12 @@ Connections are flat files (one per service), not nested directories, because a 
 ```
 BEFORE:
   src/harle/tools/trello/client.py      ← API wrapper + credentials
-  src/harle/imports/trello/api_client.py ← Duplicate API wrapper + credentials
+  src/harle/vault_imports/trello/api_client.py ← Duplicate API wrapper + credentials
 
 AFTER:
   src/harle/connections/trello.py        ← Shared connection (credentials, client, rate limiter)
   src/harle/tools/trello/tools.py        ← Tool functions (use connection.get_client())
-  src/harle/imports/trello/source.py     ← Import source (use connection.get_client())
+  src/harle/vault_imports/trello/source.py     ← Import source (use connection.get_client())
 ```
 
 The `client.py` / `api_client.py` files in individual tool and import modules are replaced by the connection. Module-specific logic (tool functions, extraction pipelines) remains in the module.

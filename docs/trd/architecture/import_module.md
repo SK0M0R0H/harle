@@ -665,7 +665,7 @@ After writing, the Vault Writer optionally triggers a re-index of the affected f
 Every import source follows the same directory layout, mirroring the convention from the Tool Module Layer. Sources that access external APIs no longer include their own `api_client.py` — API credentials, authenticated HTTP clients, and rate limiting live in the shared Connections Layer (see [connections.md](./connections.md)). Sources receive an authenticated client at `initialize()` via `connections.get("<name>").get_client()`.
 
 ```
-src/harle/imports/
+src/harle/vault_imports/
 ├── __init__.py
 ├── base.py                    # BaseImportSource ABC, ImportItem, ImportResult
 ├── registry.py                # ImportRegistry class
@@ -711,16 +711,16 @@ Notion is the most common source for Harle users. It contains structured project
 | `file` | Notion export ZIP (`--zip <path>`) | Parses the ZIP containing Markdown + CSV files from Notion's native export. No connection needed. |
 | `api` | Shared `notion` connection (configured in `config.yaml`) | Queries the Notion API to fetch pages and databases directly using the authenticated client from the Connections Layer. |
 
-**`src/harle/imports/notion/source.py`:**
+**`src/harle/vault_imports/notion/source.py` (example):**
 
 ```python
 from harle.connections.registry import ConnectionRegistry
-from harle.imports.base import (
+from harle.vault_imports.base import (
     BaseImportSource,
     ContentType,
     ImportItem,
 )
-from harle.imports.notion.parser import NotionExportParser
+from harle.vault_imports.notion.parser import NotionExportParser
 
 
 class NotionImportSource(BaseImportSource):
@@ -862,11 +862,11 @@ Miro is a visual collaboration tool. Its content is primarily **image-based** �
 
 Miro does not offer a useful offline export format for automation (PDF/PNG exports lose structure). The API mode is the primary path.
 
-**`src/harle/imports/miro/source.py`:**
+**`src/harle/vault_imports/miro/source.py` (example):**
 
 ```python
 from harle.connections.registry import ConnectionRegistry
-from harle.imports.base import (
+from harle.vault_imports.base import (
     BaseImportSource,
     ContentType,
     ImportItem,
@@ -1217,9 +1217,9 @@ Alternatively, for offline/local imports (file-based sources like Notion ZIP or 
 
 Adding a new source requires three steps:
 
-1. **Create the source directory:** `src/harle/imports/<source_name>/`
+1. **Create the source directory:** `src/harle/vault_imports/<source_name>/`
 2. **Implement the source class:** Extend `BaseImportSource` in `source.py` — implement `name`, `description`, `initialize()`, `supported_modes()`, `validate_input()`, and `extract()`. For API-based sources, ensure the corresponding connection exists in the Connections Layer (see [connections.md](./connections.md)).
-3. **Register the source:** Add it to the registry in `src/harle/imports/__init__.py`.
+3. **Register the source:** Add it to the registry in `src/harle/vault_imports/__init__.py`.
 
 No changes to the pipeline, the Vault Writer, the CLI, or the config format are needed. The new source automatically appears in `harle import --list` and is invocable via `harle import <source_name>`.
 
@@ -1311,11 +1311,11 @@ Phases 2 and 3 can be developed in parallel after Phase 1.
 
 | File | Contents |
 |---|---|
-| `src/harle/imports/__init__.py` | Package init, re-exports `BaseImportSource` and `ImportRegistry` |
-| `src/harle/imports/base.py` | `BaseImportSource` ABC, `ImportItem`, `ImportResult`, `ContentType` |
-| `src/harle/imports/registry.py` | `ImportRegistry` — `register_source()`, `get_source()`, `list_sources()`, `run_import()` |
-| `src/harle/imports/pipeline.py` | Conversion pipeline — content normalization, frontmatter generation, path resolution, deduplication |
-| `src/harle/imports/writer.py` | `VaultWriter` — file writing, directory creation, conflict resolution |
+| `src/harle/vault_imports/__init__.py` | Package init, re-exports `BaseImportSource` and `ImportRegistry` |
+| `src/harle/vault_imports/base.py` | `BaseImportSource` ABC, `ImportItem`, `ImportResult`, `ContentType` |
+| `src/harle/vault_imports/registry.py` | `ImportRegistry` — `register_source()`, `get_source()`, `list_sources()`, `run_import()` |
+| `src/harle/vault_imports/pipeline.py` | Conversion pipeline — content normalization, frontmatter generation, path resolution, deduplication |
+| `src/harle/vault_imports/writer.py` | `VaultWriter` — file writing, directory creation, conflict resolution |
 
 **Verification:** Write a test source that produces hardcoded `ImportItem` objects. Run the full pipeline and verify vault files are created with correct frontmatter and content.
 
@@ -1333,9 +1333,9 @@ Phases 2 and 3 can be developed in parallel after Phase 1.
 
 | File | Contents |
 |---|---|
-| `src/harle/imports/notion/__init__.py` | Package init |
-| `src/harle/imports/notion/source.py` | `NotionImportSource(BaseImportSource)` — file mode extraction |
-| `src/harle/imports/notion/parser.py` | ZIP parser — extracts Markdown, CSV, and embedded images from Notion's export format |
+| `src/harle/vault_imports/notion/__init__.py` | Package init |
+| `src/harle/vault_imports/notion/source.py` | `NotionImportSource(BaseImportSource)` — file mode extraction |
+| `src/harle/vault_imports/notion/parser.py` | ZIP parser — extracts Markdown, CSV, and embedded images from Notion's export format |
 
 **Verification:**
 - Unit tests with a sample Notion export ZIP (fixture).
@@ -1357,9 +1357,9 @@ Phases 2 and 3 can be developed in parallel after Phase 1.
 
 | File | Contents |
 |---|---|
-| `src/harle/imports/image_processor.py` | `ImageProcessor` — sends images to vision API, returns Markdown |
-| `src/harle/imports/miro/__init__.py` | Package init |
-| `src/harle/imports/miro/source.py` | `MiroImportSource(BaseImportSource)` — API-based extraction using the shared `MiroConnection` from the Connections Layer |
+| `src/harle/vault_imports/image_processor.py` | `ImageProcessor` — sends images to vision API, returns Markdown |
+| `src/harle/vault_imports/miro/__init__.py` | Package init |
+| `src/harle/vault_imports/miro/source.py` | `MiroImportSource(BaseImportSource)` — API-based extraction using the shared `MiroConnection` from the Connections Layer |
 
 **Verification:**
 - Unit tests with mocked Miro API responses.
@@ -1409,7 +1409,7 @@ Phases 2 and 3 can be developed in parallel after Phase 1.
 | **Google Keep** | HTML via Takeout | Low — niche, HTML→Markdown conversion |
 
 **For each source, the work is:**
-1. Create `src/harle/imports/<source>/`
+1. Create `src/harle/vault_imports/<source>/`
 2. Implement `source.py` extending `BaseImportSource` (with `initialize()` for API sources)
 3. Add parser (for file-mode sources) or ensure the connection exists in the Connections Layer (for API sources)
 4. Add config block to `config.example.yaml` with `connection:` reference (for API sources)
@@ -1466,7 +1466,7 @@ Estimates assume a single developer working part-time. The critical path is: Pha
 ## Project Structure Summary
 
 ```
-src/harle/imports/                     ← Import Module Layer code
+src/harle/vault_imports/                     ← Import Module Layer code
 ├── __init__.py
 ├── base.py                            # BaseImportSource ABC, ImportItem, ImportResult
 ├── registry.py                        # ImportRegistry class
