@@ -42,6 +42,8 @@ The pattern: **generate first, refine later.** Never present a blank canvas.
 
 ## 2. Data Migration from Existing Systems
 
+Migration is not only about text: **some information is stored as images** (e.g., diagrams, whiteboards, screenshots) and must be *read* — via vision-capable LLMs or OCR — before it can become usable Markdown in the vault. Section 2.3 below expands on this.
+
 ### 2.1 Current state
 
 Harle's `docs/trd/architecture/information_sources.md` documents five approaches for Notion integration, and the `2026-02-26_not_implemented.md` gap analysis lists ingestion pipelines (Trello exports, email summaries, bookmarks) as Priority 4. No migration tooling exists today.
@@ -52,6 +54,7 @@ Harle's `docs/trd/architecture/information_sources.md` documents five approaches
 |---|---|---|---|
 | **Notion** | Markdown + CSV (native export) | Medium — needs link cleanup, property conversion | High — often contains structured project notes, wikis |
 | **Trello** | JSON (native export) | Low — well-structured, predictable schema | Medium — task data, project context |
+| **Miro** | PDF, PNG, or API (JSON) | Medium–High — boards are visual; export yields images or structured objects | High — diagrams, process maps, architecture, brainstorming |
 | **Google Keep** | HTML (via Takeout) | Medium — needs HTML→Markdown conversion | Low–Medium — short notes, lists |
 | **Apple Notes** | No clean export; iCloud scraping or third-party tools | High — vendor lock-in | Medium — personal notes |
 | **Email (Gmail/Outlook)** | MBOX or API | High — noisy, needs filtering and summarization | Variable — depends on usage |
@@ -60,7 +63,11 @@ Harle's `docs/trd/architecture/information_sources.md` documents five approaches
 | **Calendar (Google/Outlook)** | ICS or API | Medium — recurring events, time zones | Medium — schedule context |
 | **Telegram saved messages** | JSON (via export) | Medium — mixed media, threaded | Variable |
 
-### 2.3 Proposed options
+### 2.3 Image-based content: diagrams and visuals
+
+A significant share of user knowledge lives in **images**, not text. Diagrams (architecture, process flows, org charts), whiteboard snapshots, screenshots, and hand-drawn sketches are common in Notion, Miro, Confluence, email attachments, and slide decks. To migrate this into the vault, the system must **read** the image — via a vision-capable LLM or OCR — and produce text or structured Markdown (e.g., a description, a Mermaid diagram, or bullet-point summary). Without that step, image-heavy exports become opaque assets in the vault (e.g., `diagram.png`) that Harle cannot use for search or context assembly. Any import path that touches Miro, Notion (embedded images/databases with cover images), or “dump of screenshots” should assume an **image-reading pipeline** (vision API or OCR) as part of the conversion flow.
+
+### 2.4 Proposed options
 
 #### Option A: CLI Import Commands (Recommended for V1)
 
@@ -69,6 +76,7 @@ A set of `harle import <source>` CLI commands that convert external data to vaul
 ```
 harle import notion --zip ~/Downloads/notion-export.zip
 harle import trello --board "Work Q1" --token <api-token>
+harle import miro --board <board-id> --token <api-token>
 harle import bookmarks --file ~/bookmarks.html
 harle import obsidian --vault ~/my-obsidian-vault
 ```
@@ -134,8 +142,8 @@ harle import smart --dir ~/Downloads/random-notes/
 
 **How it works:**
 
-1. User dumps any collection of files (text, HTML, PDFs, screenshots) into a staging directory
-2. Harle sends each file to an LLM for classification and conversion
+1. User dumps any collection of files (text, HTML, PDFs, screenshots, diagram images) into a staging directory
+2. Harle sends each file to an LLM for classification and conversion; **images (diagrams, screenshots) are read via a vision-capable model** and converted to text or structured Markdown (e.g., Mermaid, bullet summary)
 3. LLM generates:
    - Proper vault directory placement (work vs personal, which subdirectory)
    - YAML frontmatter (title, tags, context, summary)
@@ -156,9 +164,9 @@ harle import smart --dir ~/Downloads/random-notes/
 
 **Implementation priority:** Low-Medium. Compelling as a differentiator but depends on reliable LLM summarization (which is also a dependency for the auto-summary pipeline in `indexing/summarizer.py`).
 
-### 2.4 Recommendation
+### 2.5 Recommendation
 
-**Start with Option A (CLI Import Commands) for Notion and Trello.** These cover the two most common source systems based on the existing TRD. Add Option C (AI-Assisted Bulk Conversion) once the auto-summary pipeline is working — the same infrastructure handles both. Defer Option B (API-Based Live Import) until user demand justifies the OAuth/connector complexity.
+**Start with Option A (CLI Import Commands) for Notion and Trello.** These cover the two most common source systems based on the existing TRD. Add **Miro** to the import roadmap for users who rely on whiteboards and diagrams; Miro import should include an **image-reading step** (vision API or OCR) so board content becomes searchable Markdown, not just exported PNGs. Add Option C (AI-Assisted Bulk Conversion) once the auto-summary pipeline is working — the same infrastructure handles both, and Option C is the natural path for any source that yields images (diagrams, screenshots). Defer Option B (API-Based Live Import) until user demand justifies the OAuth/connector complexity.
 
 For all options, the critical UX principle is: **never leave the user with an empty vault after import.** Even if only 10 notes transfer cleanly, those 10 notes make Harle immediately useful.
 
