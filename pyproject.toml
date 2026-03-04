@@ -33,7 +33,10 @@ test = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit", "tests/integration"]
+markers = [
+  "integration: multi-component tests with real module wiring",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
