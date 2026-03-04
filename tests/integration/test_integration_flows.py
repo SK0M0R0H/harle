@@ -5,19 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
-from sqlalchemy.orm import sessionmaker
 
 from harle.api.models import RunRequest
 from harle.api.routes import build_router
 from harle.context.assembler import ContextAssembler
 from harle.dataset.reader import DatasetReader
 from harle.db.connection import Database
-from harle.db.models import Conversation, Message
+from harle.db.models import Message
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
 from harle.search.types import SearchQuery, SearchResult
@@ -62,24 +59,12 @@ def _write_vault_file(path: Path, content: str) -> None:
     path.write_text(dedent(content), encoding="utf-8")
 
 
-def _make_chat_db() -> Database:
-    """Create an in-memory DB with only chat tables."""
-    db = Database.__new__(Database)
-    db.engine = create_engine(
-        "sqlite://",
-        echo=False,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    db._session_factory = sessionmaker(bind=db.engine, expire_on_commit=False)
-    Conversation.__table__.create(db.engine, checkfirst=True)
-    Message.__table__.create(db.engine, checkfirst=True)
-    return db
-
-
 @pytest.mark.integration
 class TestApiPipelines:
+    """HTTP API flows: /run, /chat, /health, /search, /run/{run_id}."""
+
     def test_run_endpoint_pipeline_returns_completed(self) -> None:
+        """POST /run with valid payload returns 200, completed status, and echo in result."""
         app = FastAPI()
         app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
         client = TestClient(app)
@@ -90,15 +75,32 @@ class TestApiPipelines:
         data = response.json()
         assert data["status"] == "completed"
         assert data["run_id"].startswith("run_")
+        assert data["context"] == "work"
         assert "Find stalled tasks" in data["result"]
 
-    def test_chat_endpoint_persists_multi_turn_conversation(self) -> None:
-        db = _make_chat_db()
+    def test_run_validates_request(self) -> None:
+        """POST /run returns 422 for empty message or invalid context."""
+        app = FastAPI()
+        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        client = TestClient(app)
+
+        empty_message = client.post("/run", json={"message": "", "context": "work"})
+        assert empty_message.status_code == 422
+
+        invalid_context = client.post(
+            "/run", json={"message": "Hello", "context": "invalid_scope"}
+        )
+        assert invalid_context.status_code == 422
+
+    def test_chat_endpoint_persists_multi_turn_conversation(
+        self, chat_db: Database
+    ) -> None:
+        """POST /chat creates a conversation and persists user/assistant messages across turns."""
         app = FastAPI()
         app.include_router(
             build_router(
-                orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=db),
-                db=db,
+                orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=chat_db),
+                db=chat_db,
             )
         )
         client = TestClient(app)
@@ -115,16 +117,78 @@ class TestApiPipelines:
         assert second.status_code == 200
         assert second.json()["conversation_id"] == conv_id
 
-        with db.session() as session:
+        with chat_db.session() as session:
             messages = session.query(Message).filter_by(conversation_id=conv_id).all()
         assert len(messages) == 4
         assert [m.role for m in messages] == ["user", "assistant", "user", "assistant"]
+
+    def test_chat_requires_database(self) -> None:
+        """POST /chat returns 503 when database is not configured."""
+        app = FastAPI()
+        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        client = TestClient(app)
+
+        response = client.post("/chat", json={"message": "Hi", "context": "personal"})
+        assert response.status_code == 503
+        assert "Database" in response.json()["detail"]
+
+    def test_health_returns_ok(self) -> None:
+        """GET /health returns 200 and status ok."""
+        app = FastAPI()
+        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        client = TestClient(app)
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    def test_search_requires_search_engine(self) -> None:
+        """GET /search returns 503 when search is not configured."""
+        app = FastAPI()
+        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        client = TestClient(app)
+
+        response = client.get("/search", params={"q": "roadmap"})
+        assert response.status_code == 503
+        assert "Search" in response.json()["detail"]
+
+    def test_search_returns_results_when_configured(self) -> None:
+        """GET /search returns 200 and results when search engine is wired."""
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                search_engine=_StaticSearchEngine(),
+            )
+        )
+        client = TestClient(app)
+
+        response = client.get("/search", params={"q": "roadmap", "context": "work"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["query"] == "roadmap"
+        assert data["context"] == "work"
+        assert data["total"] == 1
+        assert len(data["results"]) == 1
+        assert data["results"][0]["file_path"] == "knowledge/work/roadmap.md"
+        assert data["results"][0]["title"] == "Roadmap"
+
+    def test_get_run_requires_database(self) -> None:
+        """GET /run/{run_id} returns 503 when database is not configured."""
+        app = FastAPI()
+        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        client = TestClient(app)
+
+        response = client.get("/run/run_abc123")
+        assert response.status_code == 503
+        assert "Database" in response.json()["detail"]
 
     def test_context_assembly_is_wired_into_orchestrator_run(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Orchestrator run uses context assembler: role, policies, and dataset files in system prompt."""
         _write_vault_file(
             tmp_path / "prompts/researcher.md",
             """
