@@ -1,0 +1,60 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  e2e-emulated:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: harle
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: harle_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U harle -d harle_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install package and test deps
+        run: pip install -e '.[test]'
+
+      - name: Run emulated E2E tests
+        env:
+          DATABASE_URL: postgresql://harle:test@localhost:5432/harle_test
+        run: pytest -m "e2e" -v --tb=long
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies
+        run: |
+          pip install -e .
+          pip freeze > requirements-ci.txt
+          pip-audit -r requirements-ci.txt --fix --dry-run || true
