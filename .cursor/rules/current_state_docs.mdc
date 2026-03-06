@@ -16,6 +16,11 @@ When you **add, change, or remove** either (1) **implementation** in a module th
 |---------------------|-----|-------------------|
 | `src/harle/capture/` | `docs/trd/architecture/vault_capture_module.md` | `docs/current_state/architecture/vault_capture_module.md` |
 | `src/harle/tools/` | `docs/trd/architecture/tools.md` | `docs/current_state/architecture/tools.md` |
+| `src/harle/search/` | `docs/trd/architecture/search.md` (and data.md §3) | `docs/current_state/architecture/search.md` |
+| `src/harle/orchestrator/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/api/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/context/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/logging/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
 
 *(Add a row here when you add a current-state doc for another TRD module.)*
 
