@@ -1,0 +1,43 @@
+---
+description: When changing a module implementation or its TRD, update the corresponding current-state doc.
+globs: src/harle/**, docs/trd/**
+alwaysApply: false
+---
+
+# Update Current-State Docs After Module or TRD Changes
+
+When you **add, change, or remove** either (1) **implementation** in a module that has a TRD in docs, or (2) **any TRD** under `docs/trd/` or its subfolders, you **must** update the corresponding **current-state** document in the same work (or explicitly leave a follow-up to do it).
+
+**Convention:** For any TRD at `docs/trd/<path>/<name>.md` (with `<path>` possibly empty, e.g. `docs/trd/architecture/tools.md` or `docs/trd/testing_strategy.md`), the current-state doc (when it exists) is `docs/current_state/<path>/<name>.md`. If you create a new current-state doc for a TRD, add a row to the mapping below.
+
+## Module / TRD → current-state doc mapping
+
+| Implementation path | TRD | Current-state doc |
+|---------------------|-----|-------------------|
+| `src/harle/capture/` | `docs/trd/architecture/vault_capture_module.md` | `docs/current_state/architecture/vault_capture_module.md` |
+| `src/harle/tools/` | `docs/trd/architecture/tools.md` | `docs/current_state/architecture/tools.md` |
+
+*(Add a row here when you add a current-state doc for another TRD module.)*
+
+## What to update in the current-state doc
+
+1. **Implementation snapshot table** — Mark any new/removed/changed TRD area as implemented, partially implemented, or not implemented; adjust the notes column. If the **TRD** was updated, add or remove rows so the snapshot still reflects every TRD area.
+2. **What is implemented** — Add or remove sections so they match the code (e.g. new components, new modules).
+3. **What is only partially implemented** — Adjust if you’ve narrowed or expanded a gap.
+4. **What is not implemented yet** — Remove items you implemented; add new gaps if the TRD grew; keep “what this would unlock” brief for any new rows. When the **TRD** was updated, add “not implemented” entries for new TRD content and remove or rephrase entries for removed TRD content.
+5. **Key deviations** — Note any new intentional deviations from the TRD or drop ones that no longer apply.
+6. **Frontmatter** — Set `last_updated` to the current date (YYYY-MM-DD).
+
+## When this rule applies
+
+- You edit **implementation** under `src/harle/` in a package that has a TRD and (optionally) a current-state doc — see the mapping above. If the package is in the table, update the listed current-state doc. If the package is not in the table but has a TRD under `docs/trd/`, create or update the current-state doc at the mirrored path under `docs/current_state/` (same relative path and filename) and add a row to the mapping.
+- You edit **any TRD** under `docs/trd/` or its subfolders. If a current-state doc exists at the mirrored path under `docs/current_state/` (same relative path and filename as under `docs/trd/`), update it. If it doesn’t exist yet, create it when the TRD describes a module with implementation (and add the mapping).
+
+If you only touch tests or comments and **behavior** is unchanged, a short note or a `last_updated` bump is enough. If in doubt, update the snapshot and “What is implemented” sections.
+
+## Adding a new module with a current-state doc
+
+When a new TRD module gets a current-state doc:
+
+1. Add a row to the **Module → current-state doc mapping** in this rule file.
+2. Create the doc under `docs/current_state/architecture/` following the structure of existing current-state docs (snapshot table, implemented / partial / not implemented, unlocks, deviations, assessment).
