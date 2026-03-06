@@ -98,7 +98,42 @@ The loop is bounded by `HARLE_MAX_ITERATIONS` (default: 10 turns). All tool call
 
 ## Quick start
 
-### 0. Requirements
+### 0. One-command setup (from zero)
+
+If you want a single command that prepares everything needed to launch Harle:
+
+```bash
+./scripts/setup.sh
+```
+
+For WSL2 setups where the PostgreSQL Docker container is started externally (outside WSL), run:
+
+```bash
+./scripts/setup.sh --db-provision-mode external
+```
+
+What it does:
+- Installs system dependencies (best effort via `apt`/`brew`, can be skipped with `HARLE_SETUP_SKIP_SYSTEM_DEPS=1`)
+- Creates and activates `.venv`
+- Installs the Python package (`pip install -e .`)
+- Provisions PostgreSQL according to `--db-provision-mode`:
+  - `docker` (default): starts/creates local Docker container (`harle-db`)
+  - `external`: assumes DB/container is already launched outside the script (useful in WSL2)
+  - `skip`: does not attempt DB provisioning
+- Creates `config.yaml` from `config.example.yaml` and fills `HARLE_DATASET_PATH` / `DATABASE_URL` if missing
+- Builds the Go CLI in `harle-cli/bin/harle`
+- Runs `harle-init` (create tables + seed vault + index files)
+
+You can customize defaults via environment variables before running the script:
+
+```bash
+HARLE_DATASET_PATH="$HOME/harle-vault" \
+HARLE_DB_CONTAINER="harle-db" \
+HARLE_DB_PORT="5432" \
+./scripts/setup.sh
+```
+
+### 1. Requirements
 
 **Python 3.10+**
 
@@ -140,7 +175,7 @@ psql --version        # verify: 16 or higher
 # Or skip native install and use Docker in step 2
 ```
 
-### 1. Install the Python orchestrator
+### 2. Install the Python orchestrator
 
 ```bash
 python3 -m venv .venv
@@ -148,7 +183,7 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-### 2. Set up PostgreSQL
+### 3. Set up PostgreSQL
 
 You need a running PostgreSQL 16+ instance. Example with Docker:
 
@@ -161,7 +196,7 @@ docker run -d --name harle-db \
   postgres:16
 ```
 
-### 3. Configure Harle
+### 4. Configure Harle
 
 Copy the example config and fill in your paths:
 
@@ -191,7 +226,7 @@ export TAVILY_API_KEY="tvly-..."       # optional: enables web search tools
 
 If `OPENAI_API_KEY` is not set, the app uses a local echo provider so you can still test the end-to-end flow. If `TAVILY_API_KEY` is not set, web search tools are simply not registered.
 
-### 4. Initialise the data layer
+### 5. Initialise the data layer
 
 **Option A** — standalone (no server needed):
 
@@ -213,7 +248,7 @@ Both options do the same thing:
 2. Write starter files to your vault (prompts, policies, examples)
 3. Index every `.md` file into the `file_index` table
 
-### 5. Re-index after adding files
+### 6. Re-index after adding files
 
 When you add new Markdown files to the vault, re-index so they become searchable:
 
@@ -225,7 +260,7 @@ harle-reindex
 curl -X POST http://127.0.0.1:8000/reindex
 ```
 
-### 6. Start the server and use the CLI
+### 7. Start the server and use the CLI
 
 ```bash
 harle-server
@@ -244,7 +279,7 @@ go build -o bin/harle ./cmd/harle
 ./bin/harle --context work
 ```
 
-### 7. Try the API with curl
+### 8. Try the API with curl
 
 With the server running, you can hit any endpoint directly:
 
@@ -275,7 +310,7 @@ curl -X POST "http://127.0.0.1:8000/chat" \
 curl "http://127.0.0.1:8000/run/<run_id>"
 ```
 
-### 8. Stopping services
+### 9. Stopping services
 
 Kill the harle-server process:
 
