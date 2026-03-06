@@ -17,7 +17,6 @@ harle-cli/harle
 # The vault, database, and runtime config are per-user and external
 harle-vault/
 data/
-vault/
 *.db
 *.sqlite
 *.sqlite3
@@ -30,4 +29,3 @@ config.yml
 .env
 .env.*
 !.env.example
-
