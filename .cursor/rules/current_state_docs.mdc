@@ -22,6 +22,11 @@ When you **add, change, or remove** either (1) **implementation** in a module th
 | `src/harle/context/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
 | `src/harle/logging/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
 | `src/harle/orchestrator/`, `src/harle/tools/` (multi-step levels) | `docs/trd/architecture/multi_step_reasoning.md` | `docs/current_state/architecture/multi_step_reasoning.md` |
+| `src/harle/vault_imports/` | `docs/trd/architecture/import_module.md` | `docs/current_state/architecture/import_module.md` |
+| `src/harle/connections/` | `docs/trd/architecture/connections.md` | `docs/current_state/architecture/connections.md` |
+| tests/, .github/, pyproject | `docs/trd/testing_strategy.md` | `docs/current_state/testing_strategy.md` |
+| `src/harle/dataset/`, `src/harle/db/`, `src/harle/indexing/`, `src/harle/search/` | `docs/trd/architecture/data.md` | `docs/current_state/architecture/data.md` |
+| (recommendations apply across data layer) | `docs/trd/architecture/data_layer_best_practices.md` | `docs/current_state/architecture/data_layer_best_practices.md` |
 
 *(Add a row here when you add a current-state doc for another TRD module.)*
 
