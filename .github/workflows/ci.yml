@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linters
+        run: pip install ruff
+
+      - name: Ruff check (informational until baseline cleanup)
+        run: ruff check src/ tests/ --exit-zero
+
+      - name: Ruff format check (informational until baseline cleanup)
+        run: ruff format --check src/ tests/ || true
+
+  test-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and test deps
+        run: pip install -e '.[test]'
+
+      - name: Run unit tests
+        run: pytest -v --tb=short tests/unit
+
+  test-integration:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: harle
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: harle_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U harle -d harle_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and test deps
+        run: pip install -e '.[test]'
+
+      - name: Run integration tests (skip cleanly when none exist)
+        env:
+          DATABASE_URL: postgresql://harle:test@localhost:5432/harle_test
+        run: |
+          if [ ! -d tests/integration ] || [ -z "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
+            echo "No integration tests directory/files found; skipping."
+            exit 0
+          fi
+          pytest -v --tb=short tests/integration
+
+  coverage:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and coverage deps
+        run: pip install -e '.[test]' pytest-cov
+
+      - name: Generate coverage report from unit tests
+        run: >-
+          pytest
+          --cov=harle
+          --cov-report=xml
+          --cov-fail-under=50
+          tests/unit
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  test-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Go tests
+        working-directory: harle-cli
+        run: go test ./...
+
+      - name: Go vet
+        working-directory: harle-cli
+        run: go vet ./...
