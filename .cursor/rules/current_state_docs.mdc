@@ -27,6 +27,7 @@ When you **add, change, or remove** either (1) **implementation** in a module th
 | tests/, .github/, pyproject | `docs/trd/testing_strategy.md` | `docs/current_state/testing_strategy.md` |
 | `src/harle/dataset/`, `src/harle/db/`, `src/harle/indexing/`, `src/harle/search/` | `docs/trd/architecture/data.md` | `docs/current_state/architecture/data.md` |
 | (recommendations apply across data layer) | `docs/trd/architecture/data_layer_best_practices.md` | `docs/current_state/architecture/data_layer_best_practices.md` |
+| `src/harle/debug/` | `docs/trd/debug_logging.md` | `docs/current_state/debug_logging.md` |
 
 *(Add a row here when you add a current-state doc for another TRD module.)*
 
