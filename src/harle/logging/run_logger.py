@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from harle.dataset.writer import log_dir_for, write_log_file
+from harle.debug import dtrace
 
 if TYPE_CHECKING:
     pass
@@ -127,6 +128,17 @@ def log_run_to_vault(
     )
     write_log_file(root, result_rel, result_content)
 
+    dtrace.step(
+        "Run logged to vault",
+        module="run_logger",
+        result_path=result_rel,
+    )
+    dtrace.detail(
+        "File paths written",
+        module="run_logger",
+        result_path=result_rel,
+    )
+
     context_path: str | None = None
     if store_context and context_body:
         context_rel = f"{log_dir}/{run_id}_context.md"
@@ -135,5 +147,10 @@ def log_run_to_vault(
         )
         write_log_file(root, context_rel, context_content)
         context_path = context_rel
+        dtrace.detail(
+            "Context file written",
+            module="run_logger",
+            context_path=context_rel,
+        )
 
     return result_rel, context_path

@@ -16,7 +16,7 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 
 ## Overall Status
 
-**Phases 1 and 2 are implemented.** The core debug logging infrastructure exists: the `dtrace` API, trace levels, TracerProvider setup, vault exporter, database exporter, and CLI SSE exporter. The orchestrator's `run()` and `chat()` methods are wrapped in root spans. Debug traces are written to vault Markdown files, stored as JSONB in PostgreSQL, and can be streamed to the CLI via SSE when debug mode is active. Phase 3 (subsystem instrumentation) and Phase 4 (query/analysis) are not yet implemented.
+**Phases 1, 2, and 3 are implemented.** The core debug logging infrastructure exists: the `dtrace` API, trace levels, TracerProvider setup, vault exporter, database exporter, and CLI SSE exporter. The orchestrator, context assembler, search engine, run logger, and tool registry are instrumented with STEP/DETAIL/TRACE entries so that each run produces a full hierarchical trace across the request pipeline. Phase 4 (query/analysis, API endpoint, CLI command) is not yet implemented.
 
 ---
 
@@ -40,7 +40,7 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 | Startup wiring (`main.py`) | Implemented | `configure_tracing()` called with vault, DB, and optional SSE queue parameters. |
 | Root spans in orchestrator | Implemented | `run()` and `chat()` wrapped in root spans with `run_id` attribute. |
 | CLI `--debug` flag | Not implemented | Go CLI work. The API-side SSE support is ready. |
-| Subsystem instrumentation | Not implemented | Phase 3. Orchestrator has root spans + basic step entries only. |
+| Subsystem instrumentation (Phase 3) | Implemented | Router (routed to agent), context assembler (P0/P1/P4, budget), search (query, result count, scores), run logger (paths written), tools (Tool: name span + invoked/completed). |
 | API endpoint for trace retrieval | Not implemented | Phase 4. |
 | CLI `harle debug <run_id>` command | Not implemented | Phase 4. |
 | Specialist agent trace analysis | Not implemented | Phase 4. |
@@ -77,8 +77,15 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 
 ### Orchestrator instrumentation
 
-- `OrchestratorService.run()` — root span `handle_request` with `run_id`; step entries for context assembly and agent execution.
-- `OrchestratorService.chat()` — root span `handle_chat` with `run_id`; step entries for context assembly and agent execution.
+- `OrchestratorService.run()` — root span `handle_request` with `run_id`; STEP "Routed to agent" (agent, routing_method); context assembly; STEP "Context assembled"; DETAIL "Agent execution started" (model, max_turns, has_tools); agent execution; STEP "Agent execution complete"; STEP "Run logged".
+- `OrchestratorService.chat()` — same pattern with root span `handle_chat`; conversation load/create; context assembly; execution; message persist; run persist; STEP "Run logged".
+
+### Subsystem instrumentation (Phase 3)
+
+- **Context assembler** (`context/assembler.py`) — DETAIL "P0 loaded" (files, tokens), "P1 loaded" (results_included, tokens), TRACE "Search result included" (file_path, score) for first 5, DETAIL "P4 loaded" (messages_included, tokens), STEP "Context assembly complete" (total_tokens, budget_remaining), DETAIL "Budget status" (total_used, budget, remaining).
+- **Search engine** (`search/engine.py`) — DETAIL "Search query" (query, context, max_results); DETAIL "Search skipped" when empty query; TRACE "Search result score" (file_path, score) for first 5; STEP "Search executed" (result_count, scoring).
+- **Run logger** (`logging/run_logger.py`) — STEP "Run logged to vault" (result_path), DETAIL "File paths written", DETAIL "Context file written" when store_context.
+- **Tool registry** (`tools/registry.py`) — each registered tool is wrapped with a span "Tool: {name}" (STEP, module=module_name); DETAIL "Tool invoked" and "Tool completed" per invocation. Supports both sync and async tools.
 
 ### Configuration
 
@@ -93,9 +100,9 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 
 ## What Is Only Partially Implemented
 
-### Orchestrator trace depth
+### Agent runner iteration-level detail
 
-The orchestrator emits root spans and a few STEP-level entries (context assembled, agent execution complete, run logged). The TRD's full orchestrator instrumentation (routing decision, clarifier check, each agent iteration, model selection) is not yet present — that is Phase 3 work.
+The orchestrator emits "Agent execution started" (model, max_turns, has_tools) and "Agent execution complete" (tools_called, turns_used). Per-iteration DETAIL (each tool call or final response within the agentic loop) is not emitted because the Agents SDK Runner does not expose hooks for each turn; tool invocations are traced via the tool registry wrapper instead.
 
 ### CLI `--debug` flag
 
@@ -109,12 +116,7 @@ The `DebugTrace` model exists in `db/models.py` and the table is created via `Ba
 
 ## What Is Not Implemented Yet
 
-### 1. Subsystem instrumentation (Phase 3)
-
-- **Missing:** `dtrace` calls in router, context assembler, agent runner, tool modules, search engine, capture module, connections, and run logger.
-- **Unlocks:** Full observability across the entire request pipeline — every decision, intermediate value, and branch taken.
-
-### 2. Query, analysis, and external export (Phase 4)
+### 1. Query, analysis, and external export (Phase 4)
 
 - **Missing:** API endpoint to retrieve debug traces by run ID, CLI `harle debug <run_id>` command, Specialist agent analysis of traces, optional OTLP exporter.
 - **Unlocks:** Post-hoc analysis, performance bottleneck identification, and integration with external observability platforms.
@@ -129,4 +131,4 @@ The `DebugTrace` model exists in `db/models.py` and the table is created via `Ba
 
 ## Assessment
 
-Phases 1 and 2 deliver the complete debug logging pipeline with three output channels (vault Markdown, PostgreSQL JSONB, and CLI SSE). The `dtrace` API, OTel integration, and all three exporters are production-ready. The main gap is breadth of instrumentation (only the orchestrator root spans are instrumented) — addressed by Phase 3.
+Phases 1–3 deliver the full debug logging pipeline: three output channels (vault, DB, CLI SSE) and instrumentation across the orchestrator, context assembler, search engine, run logger, and tool registry. Traces now capture routing, context tiers and budget, search query and results, vault write paths, and each tool invocation. The remaining work is Phase 4 (query API, CLI command, specialist analysis, optional OTLP).

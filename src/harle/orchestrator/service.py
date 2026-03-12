@@ -164,6 +164,14 @@ class OrchestratorService:
         """
         from agents import Agent, MaxTurnsExceeded, Runner
 
+        dtrace.detail(
+            "Agent execution started",
+            module="orchestrator",
+            model=self.model,
+            max_turns=self.max_iterations,
+            has_tools=bool(self.tool_registry),
+        )
+
         tools = []
         if self.tool_registry:
             all_tool_names = self.tool_registry.list_all_tools()
@@ -263,6 +271,12 @@ class OrchestratorService:
         started_at = datetime.now(timezone.utc)
 
         with dtrace.span("handle_request", level=dtrace.STEP, module="orchestrator", run_id=run_id):
+            dtrace.step(
+                "Routed to agent",
+                module="orchestrator",
+                agent=DEFAULT_AGENT_ROLE,
+                routing_method="default",
+            )
 
             system_prompt: str | None = None
             package = None
@@ -419,6 +433,12 @@ class OrchestratorService:
         started_at = datetime.now(timezone.utc)
 
         with dtrace.span("handle_chat", level=dtrace.STEP, module="orchestrator", run_id=run_id):
+            dtrace.step(
+                "Routed to agent",
+                module="orchestrator",
+                agent=DEFAULT_AGENT_ROLE,
+                routing_method="default",
+            )
 
             # ── load or create conversation ──────────────────────────
             conversation_history: list[dict[str, str]] | None = None

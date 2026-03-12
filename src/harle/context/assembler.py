@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from harle.context.tokenizer import count_tokens
 from harle.dataset.reader import DatasetFile, DatasetReader
+from harle.debug import dtrace
 from harle.search.engine import SearchEngine
 from harle.search.types import SearchQuery, SearchResult
 
@@ -173,6 +174,12 @@ class ContextAssembler:
         sections.append(p0_text)
         tokens_used += p0_tokens
         logger.debug("P0 (prompt + policies): %d tokens", p0_tokens)
+        dtrace.detail(
+            "P0 loaded",
+            module="context_assembler",
+            files=len(p0_files),
+            tokens=p0_tokens,
+        )
 
         # ── P1: dataset search results (critical) ────────────────────
         p0_paths = {f.relative_path for f in p0_files}
@@ -199,6 +206,19 @@ class ContextAssembler:
                     p1_tokens,
                     len(included_results),
                 )
+                dtrace.detail(
+                    "P1 loaded",
+                    module="context_assembler",
+                    results_included=len(included_results),
+                    tokens=p1_tokens,
+                )
+                for i, r in enumerate(included_results[:5]):
+                    dtrace.trace_entry(
+                        "Search result included",
+                        module="context_assembler",
+                        file_path=r.file_path,
+                        score=round(r.score, 2),
+                    )
 
         # ── P4: conversation history (background) ────────────────────
         conv_messages_included = 0
@@ -216,6 +236,27 @@ class ContextAssembler:
                     p4_tokens,
                     conv_messages_included,
                 )
+                dtrace.detail(
+                    "P4 loaded",
+                    module="context_assembler",
+                    messages_included=conv_messages_included,
+                    tokens=p4_tokens,
+                )
+
+        budget_remaining = budget - tokens_used
+        dtrace.step(
+            "Context assembly complete",
+            module="context_assembler",
+            total_tokens=tokens_used,
+            budget_remaining=budget_remaining,
+        )
+        dtrace.detail(
+            "Budget status",
+            module="context_assembler",
+            total_used=tokens_used,
+            budget=budget,
+            remaining=budget_remaining,
+        )
 
         system_prompt = "\n\n".join(sections)
         return ContextPackage(
@@ -223,7 +264,7 @@ class ContextAssembler:
             search_results=included_results,
             p0_files=[f.relative_path for f in p0_files],
             total_tokens=tokens_used,
-            budget_remaining=budget - tokens_used,
+            budget_remaining=budget_remaining,
             conversation_messages_included=conv_messages_included,
         )
 

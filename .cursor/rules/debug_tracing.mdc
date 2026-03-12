@@ -1,0 +1,57 @@
+---
+description: Debug tracing conventions for agent pipeline code
+globs: src/harle/**/*.py
+alwaysApply: false
+---
+# Debug tracing with dtrace
+
+All agent pipeline code must include `dtrace` instrumentation so every run produces a complete hierarchical trace.
+
+## Import
+
+```python
+from harle.debug import dtrace
+```
+
+## Level guide
+
+| Level | When to use | Example |
+|-------|-------------|---------|
+| `dtrace.step()` | Major stage boundaries visible to the user | "Context assembly complete", "Tool: search_web", "Search executed" |
+| `dtrace.detail()` | Decisions, parameters, intermediate results | "P0 loaded", "Model selected", "Budget status" |
+| `dtrace.trace_entry()` | Fine-grained internals for deep debugging | "Search result score", "File token count", "HTTP response" |
+| `dtrace.internal()` | Very low-level, rarely needed | "Cache hit", "Validation passed" |
+
+## Required pattern
+
+Every function that represents a pipeline stage must:
+
+1. Use `module=` kwarg matching the subsystem name (e.g. `"orchestrator"`, `"context_assembler"`, `"search"`, `"run_logger"`).
+2. Emit at least one STEP entry for the stage boundary.
+3. Add DETAIL entries for key decisions and parameters.
+4. Use structured kwargs — not formatted strings:
+
+```python
+# Good
+dtrace.detail("P1 loaded", module="context_assembler", results_included=5, tokens=320)
+
+# Bad
+dtrace.detail(f"P1: 5 results, 320 tokens", module="context_assembler")
+```
+
+## Wrapping long operations
+
+Use `dtrace.span()` for operations that have meaningful duration (tool calls, external API, agent execution):
+
+```python
+with dtrace.span("Tool: search_web", level=dtrace.STEP, module="web_search"):
+    dtrace.detail("Tool invoked", module="web_search", tool="search_web")
+    result = await do_search(query)
+    dtrace.detail("Tool completed", module="web_search", tool="search_web")
+```
+
+## What NOT to trace
+
+- Do not trace Python-logging-level concerns (startup, config, connection errors) — use `logger` for those.
+- Do not trace inside tight loops over large collections — trace summaries instead (e.g. first 5 results).
+- Do not duplicate information already in span attributes (level, module, run_id are set automatically).

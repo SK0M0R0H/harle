@@ -14,6 +14,7 @@ from pathlib import Path
 
 from harle.db.connection import Database
 from harle.db.file_index import get_all_entries
+from harle.debug import dtrace
 from harle.search.types import SearchQuery, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,20 @@ class SearchEngine:
         """
         terms = _tokenize(query.query)
         if not terms:
+            dtrace.detail(
+                "Search skipped",
+                module="search",
+                reason="empty_query",
+            )
             return []
+
+        dtrace.detail(
+            "Search query",
+            module="search",
+            query=query.query[:200],
+            context=query.context,
+            max_results=query.max_results,
+        )
 
         with self.db.session() as session:
             candidates = get_all_entries(session, context=query.context)
@@ -87,7 +101,22 @@ class SearchEngine:
                     )
 
         results.sort(key=lambda r: r.score, reverse=True)
-        return results[: query.max_results]
+        limited = results[: query.max_results]
+
+        for r in limited[:5]:
+            dtrace.trace_entry(
+                "Search result score",
+                module="search",
+                file_path=r.file_path,
+                score=round(r.score, 2),
+            )
+        dtrace.step(
+            "Search executed",
+            module="search",
+            result_count=len(limited),
+            scoring="keyword",
+        )
+        return limited
 
 
 def _tokenize(text: str) -> list[str]:
