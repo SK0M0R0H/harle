@@ -586,6 +586,28 @@ class TestRegistrySkillsIntegration:
         assert skills[0].source == "builtin"
         assert "dummy_read" in skills[0].content
 
+
+    def test_trello_skill_can_be_injected_into_agent_instructions(self) -> None:
+        """Trello skill text is available for instruction injection paths."""
+        from harle.llm.providers import EchoProvider
+        from harle.orchestrator.service import OrchestratorService
+        from harle.tools.trello.module import TrelloModule
+
+        registry = ToolRegistry()
+        trello_module = TrelloModule()
+        registry.register_module(trello_module, skill_names=["read_sequence"])
+
+        skills = registry.get_skills_for_tools(["trello_list_boards"])
+        assert len(skills) == 1
+        assert skills[0].module_name == "trello"
+        assert "Use Trello tools in a read-first sequence" in skills[0].content
+
+        svc = OrchestratorService(llm_provider=EchoProvider(), tool_registry=registry)
+        instructions = svc._build_instructions("System base prompt.", has_tools=True)
+
+        assert "Tool Skill: read_sequence" in instructions
+        assert "Use Trello tools in a read-first sequence" in instructions
+
     def test_get_module_skills_unregistered(self) -> None:
         registry = ToolRegistry()
         assert registry.get_module_skills("nonexistent") == []

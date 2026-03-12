@@ -16,6 +16,7 @@ from harle.connections import (
     RateLimitConfig,
     RateLimiter,
     TavilyConnection,
+    TrelloConnection,
 )
 from harle.connections.exceptions import ConnectionNotFound
 
@@ -142,6 +143,69 @@ class TestTavilyConnection:
 
         conn = TavilyConnection()
         _run(conn.initialize({"api_key": "k"}))
+        _run(conn.shutdown())
+
+        mock_client.aclose.assert_awaited_once()
+
+
+class TestTrelloConnection:
+    def test_initialize_requires_api_key(self) -> None:
+        conn = TrelloConnection()
+        with pytest.raises(ConnectionConfigError):
+            _run(conn.initialize({"api_token": "t"}))
+
+    def test_initialize_requires_api_token(self) -> None:
+        conn = TrelloConnection()
+        with pytest.raises(ConnectionConfigError):
+            _run(conn.initialize({"api_key": "k"}))
+
+    @patch("harle.connections.trello.httpx.AsyncClient")
+    def test_initialize_and_get_client(self, mock_client_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value = mock_client
+
+        conn = TrelloConnection()
+        _run(conn.initialize({"api_key": "k", "api_token": "t"}))
+
+        assert conn.get_client() is mock_client
+        mock_client_cls.assert_called_once()
+
+    @patch("harle.connections.trello.httpx.AsyncClient")
+    def test_health_check_success(self, mock_client_cls: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client_cls.return_value = mock_client
+
+        conn = TrelloConnection()
+        _run(conn.initialize({"api_key": "k", "api_token": "t"}))
+        status = _run(conn.health_check())
+
+        assert status.healthy is True
+        assert status.service_name == "Trello"
+
+    @patch("harle.connections.trello.httpx.AsyncClient")
+    def test_health_check_failure(self, mock_client_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = RuntimeError("boom")
+        mock_client_cls.return_value = mock_client
+
+        conn = TrelloConnection()
+        _run(conn.initialize({"api_key": "k", "api_token": "t"}))
+        status = _run(conn.health_check())
+
+        assert status.healthy is False
+        assert "boom" in status.message
+
+    @patch("harle.connections.trello.httpx.AsyncClient")
+    def test_shutdown_closes_client(self, mock_client_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value = mock_client
+
+        conn = TrelloConnection()
+        _run(conn.initialize({"api_key": "k", "api_token": "t"}))
         _run(conn.shutdown())
 
         mock_client.aclose.assert_awaited_once()

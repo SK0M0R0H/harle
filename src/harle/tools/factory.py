@@ -19,7 +19,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Awaitable, TypeVar
 
-from harle.connections import ConnectionRegistry, TavilyConnection
+from harle.connections import ConnectionRegistry, TavilyConnection, TrelloConnection
 from harle.tools.permissions import OperationMode
 from harle.tools.registry import ToolRegistry
 
@@ -66,6 +66,9 @@ def build_tool_registry(
     * **web_search** — when the ``TAVILY_API_KEY`` environment
       variable is set.  Exposes ``search_web``, ``search_news``,
       and ``fetch_page``.
+    * **trello** — when both ``TRELLO_API_KEY`` and
+      ``TRELLO_API_TOKEN`` are set. Exposes ``trello_list_boards``
+      and ``trello_list_cards``.
 
     Args:
         search_engine: Pre-configured search engine for dataset
@@ -88,6 +91,7 @@ def build_tool_registry(
         dataset_reader=dataset_reader,
     )
     has_modules |= _register_web_search(registry, connections=connections)
+    has_modules |= _register_trello(registry, connections=connections)
 
     if not has_modules:
         return None
@@ -105,12 +109,27 @@ def build_tool_registry(
 def _build_connections() -> ConnectionRegistry | None:
     """Build the shared connection registry for enabled services."""
     tavily_key = os.getenv("TAVILY_API_KEY", "")
-    if not tavily_key:
+    trello_key = os.getenv("TRELLO_API_KEY", "")
+    trello_token = os.getenv("TRELLO_API_TOKEN", "")
+
+    if not tavily_key and not (trello_key and trello_token):
         return None
 
     registry = ConnectionRegistry()
-    _run_coro_sync(registry.register(TavilyConnection(), {"api_key": tavily_key}))
-    logger.info("Connection registered: tavily")
+
+    if tavily_key:
+        _run_coro_sync(registry.register(TavilyConnection(), {"api_key": tavily_key}))
+        logger.info("Connection registered: tavily")
+
+    if trello_key and trello_token:
+        _run_coro_sync(
+            registry.register(
+                TrelloConnection(),
+                {"api_key": trello_key, "api_token": trello_token},
+            )
+        )
+        logger.info("Connection registered: trello")
+
     return registry
 
 # ── Per-module registration helpers ──────────────────────────────────
@@ -162,4 +181,30 @@ def _register_web_search(
         skill_names=["research"],
     )
     logger.info("Web Search tool module registered.")
+    return True
+
+
+def _register_trello(
+    registry: ToolRegistry,
+    *,
+    connections: ConnectionRegistry | None,
+) -> bool:
+    """Register the Trello module if Trello credentials are configured."""
+    if connections is None or not connections.has("trello"):
+        return False
+
+    from harle.tools.trello.module import TrelloModule
+
+    module = TrelloModule()
+    _run_coro_sync(
+        module.initialize({
+            "connection": "trello",
+        }, connections=connections)
+    )
+    registry.register_module(
+        module,
+        mode=OperationMode.AUTO,
+        skill_names=["read_sequence"],
+    )
+    logger.info("Trello tool module registered.")
     return True
