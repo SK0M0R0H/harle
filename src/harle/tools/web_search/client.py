@@ -35,9 +35,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
-_TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
-
 _SUPPORTED_PROVIDERS = frozenset({"tavily", "bing", "searxng"})
 
 
@@ -107,7 +104,9 @@ class WebSearchClient:
     api_key: str = ""
     max_results: int = 5
     timeout: float = 30.0
+    http_client: httpx.AsyncClient | None = None
     _http: httpx.AsyncClient = field(default=None, init=False, repr=False)  # type: ignore[assignment]
+    _owns_http: bool = field(default=True, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.provider not in _SUPPORTED_PROVIDERS:
@@ -117,14 +116,19 @@ class WebSearchClient:
             )
 
     async def open(self) -> None:
-        """Create the underlying ``httpx.AsyncClient``."""
-        self._http = httpx.AsyncClient(timeout=self.timeout)
+        """Attach the underlying ``httpx.AsyncClient`` from connections."""
+        if self.http_client is None:
+            raise RuntimeError(
+                "WebSearchClient requires a connection-managed HTTP client."
+            )
+        self._http = self.http_client
+        self._owns_http = False
 
     async def close(self) -> None:
-        """Close the HTTP client and release resources."""
-        if self._http is not None:
+        """Release local reference; connection lifecycle owns HTTP client."""
+        if self._http is not None and self._owns_http:
             await self._http.aclose()
-            self._http = None  # type: ignore[assignment]
+        self._http = None  # type: ignore[assignment]
 
     async def search(
         self,
@@ -222,12 +226,8 @@ class WebSearchClient:
             "topic": topic,
             "include_answer": True,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
         resp = await self._http.post(
-            _TAVILY_SEARCH_URL, json=payload, headers=headers,
+            "/search", json=payload,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -251,12 +251,8 @@ class WebSearchClient:
         payload: dict[str, Any] = {
             "urls": [url],
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
         resp = await self._http.post(
-            _TAVILY_EXTRACT_URL, json=payload, headers=headers,
+            "/extract", json=payload,
         )
         resp.raise_for_status()
         data = resp.json()
