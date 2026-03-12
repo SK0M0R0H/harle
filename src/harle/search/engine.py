@@ -14,7 +14,7 @@ from pathlib import Path
 
 from harle.db.connection import Database
 from harle.db.file_index import get_all_entries
-from harle.debug import dtrace
+from harle.debug import etrace
 from harle.search.types import SearchQuery, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -53,14 +53,14 @@ class SearchEngine:
         """
         terms = _tokenize(query.query)
         if not terms:
-            dtrace.detail(
+            etrace.detail(
                 "Search skipped",
                 module="search",
                 reason="empty_query",
             )
             return []
 
-        dtrace.detail(
+        etrace.detail(
             "Search query",
             module="search",
             query=query.query[:200],
@@ -104,13 +104,13 @@ class SearchEngine:
         limited = results[: query.max_results]
 
         for r in limited[:5]:
-            dtrace.trace_entry(
+            etrace.trace_entry(
                 "Search result score",
                 module="search",
                 file_path=r.file_path,
                 score=round(r.score, 2),
             )
-        dtrace.step(
+        etrace.step(
             "Search executed",
             module="search",
             result_count=len(limited),

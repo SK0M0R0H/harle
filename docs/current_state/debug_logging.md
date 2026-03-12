@@ -1,22 +1,22 @@
 ---
-title: "Harle Debug Logging — Current State"
-tags: [debug, logging, tracing, observability, opentelemetry, current-state, implementation-status]
+title: "Harle Execution Tracing — Current State"
+tags: [execution-tracing, tracing, observability, opentelemetry, current-state, implementation-status]
 context: global
 last_updated: 2026-03-12
-summary: "Tracks what the debug logging system implements vs the TRD, and what each missing part would unlock."
+summary: "Tracks what the execution tracing system implements vs the TRD, and what each missing part would unlock."
 ---
 
-# Harle Debug Logging — Current State
+# Harle Execution Tracing — Current State
 
-> This document compares the target design in the Debug Logging TRD with the codebase. It describes what is implemented, what is partial, and what is missing, and what each missing part would unlock.
+> This document compares the target design in the Execution Tracing TRD with the codebase. It describes what is implemented, what is partial, and what is missing, and what each missing part would unlock.
 
-Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/debug_logging.md).
+Reference TRD: [Harle Execution Tracing — Architecture & Functionality](../trd/execution_tracing.md).
 
 ---
 
 ## Overall Status
 
-**Phases 1, 2, and 3 are implemented.** The core debug logging infrastructure exists: the `dtrace` API, trace levels, TracerProvider setup, vault exporter, database exporter, and CLI SSE exporter. The orchestrator, context assembler, search engine, run logger, and tool registry are instrumented with STEP/DETAIL/TRACE entries so that each run produces a full hierarchical trace across the request pipeline. Phase 4 (query/analysis, API endpoint, CLI command) is not yet implemented.
+**Phases 1, 2, and 3 are implemented.** The core execution tracing infrastructure exists: the `etrace` API, trace levels, TracerProvider setup, vault exporter, database exporter, and CLI SSE exporter. The orchestrator, context assembler, search engine, run logger, and tool registry are instrumented with STEP/DETAIL/TRACE entries so that each run produces a full hierarchical trace across the request pipeline. Phase 4 (query/analysis, API endpoint, CLI command) is not yet implemented.
 
 ---
 
@@ -24,19 +24,19 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 
 | TRD area | Current status | Notes |
 |----------|----------------|-------|
-| `dtrace` API (`trace.py`) | Implemented | `span()`, `step()`, `detail()`, `trace_entry()`, `internal()`, `span_fn()` decorator. Uses OTel `get_tracer("harle")`. |
+| `etrace` API (`trace.py`) | Implemented | `span()`, `step()`, `detail()`, `trace_entry()`, `internal()`, `span_fn()` decorator. Uses OTel `get_tracer("harle")`. |
 | `TraceLevel` enum (`levels.py`) | Implemented | STEP=1, DETAIL=2, TRACE=3, INTERNAL=4 with `from_name()`. |
 | `configure_tracing()` (`setup.py`) | Implemented | Creates `TracerProvider`, wires vault, DB, and CLI SSE exporters based on config. |
-| `VaultExporter` (`exporters/vault.py`) | Implemented | Reconstructs span tree, renders Markdown, writes `_debug.md` to vault `logs/YYYY/MM/`. |
-| `PostgresExporter` (`exporters/db.py`) | Implemented | Serialises span tree to JSONB, inserts into `debug_traces` table. Uses lazy engine creation. |
+| `VaultExporter` (`exporters/vault.py`) | Implemented | Reconstructs span tree, renders Markdown, writes `_trace.md` to vault `logs/YYYY/MM/`. |
+| `PostgresExporter` (`exporters/db.py`) | Implemented | Serialises span tree to JSONB, inserts into `execution_traces` table. Uses lazy engine creation. |
 | `CliSseExporter` (`exporters/cli.py`) | Implemented | Pushes qualifying spans to a shared `Queue` for SSE streaming. Level-filtered. |
-| `DebugTrace` model (`db/models.py`) | Implemented | SQLAlchemy model with `run_id`, `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`. |
-| `debug_traces` CRUD (`db/debug_traces.py`) | Implemented | `create_debug_trace()` and `get_debug_trace()` helpers. |
+| `ExecutionTrace` model (`db/models.py`) | Implemented | SQLAlchemy model with `run_id`, `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`. |
+| `execution_traces` CRUD (`db/execution_traces.py`) | Implemented | `create_execution_trace()` and `get_execution_trace()` helpers. |
 | SSE `debug` event type in API | Implemented | `/run` and `/chat` accept `?debug=true` and return `EventSourceResponse` with `event: debug` and `event: result` events. |
 | Shared span helpers (`exporters/_spans.py`) | Implemented | Extracted from vault exporter: `group_by_trace`, `filter_by_level`, `find_root`, `extract_run_id`, `span_start_time`, `span_duration_ms`, `build_tree`. |
-| Debug queue (`debug/queue.py`) | Implemented | `init_debug_queue()` / `get_debug_queue()` for shared SSE event queue. |
+| Trace queue (`debug/queue.py`) | Implemented | `init_trace_queue()` / `get_trace_queue()` for shared SSE event queue. |
 | SSE streaming helpers (`api/streaming.py`) | Implemented | `drain_debug_events()` and `result_event()`. |
-| Config fields | Implemented | `HARLE_DEBUG_VAULT_ENABLED`, `HARLE_DEBUG_DB_ENABLED`, `HARLE_DEBUG_MIN_STORAGE_LEVEL` in `Settings`. |
+| Config fields | Implemented | `HARLE_TRACING_VAULT_ENABLED`, `HARLE_TRACING_DB_ENABLED`, `HARLE_TRACING_MIN_STORAGE_LEVEL` in `Settings`. |
 | Startup wiring (`main.py`) | Implemented | `configure_tracing()` called with vault, DB, and optional SSE queue parameters. |
 | Root spans in orchestrator | Implemented | `run()` and `chat()` wrapped in root spans with `run_id` attribute. |
 | CLI `--debug` flag | Not implemented | Go CLI work. The API-side SSE support is ready. |
@@ -53,22 +53,22 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 ### Core infrastructure (`src/harle/debug/`)
 
 - **`levels.py`** — `TraceLevel` enum with STEP, DETAIL, TRACE, INTERNAL values and `from_name()` class method for case-insensitive lookup.
-- **`trace.py`** — The `dtrace` API module providing `span()` context manager, `step()`, `detail()`, `trace_entry()`, `internal()` leaf-span emitters, and `span_fn()` decorator. All functions set `harle.level` and `harle.module` attributes. Uses `_serialize_attr()` to coerce non-primitive values to JSON strings.
+- **`trace.py`** — The `etrace` API module providing `span()` context manager, `step()`, `detail()`, `trace_entry()`, `internal()` leaf-span emitters, and `span_fn()` decorator. All functions set `harle.level` and `harle.module` attributes. Uses `_serialize_attr()` to coerce non-primitive values to JSON strings.
 - **`setup.py`** — `configure_tracing()` creates a `TracerProvider` and conditionally adds processors for vault (`BatchSpanProcessor`), DB (`BatchSpanProcessor`), and CLI SSE (`SimpleSpanProcessor`) exporters. Sets the global tracer provider.
-- **`queue.py`** — Shared debug event queue module with `init_debug_queue()` and `get_debug_queue()`.
-- **`__init__.py`** — Exports `dtrace`, `TraceLevel`, and `configure_tracing`.
+- **`queue.py`** — Shared trace event queue module with `init_trace_queue()` and `get_trace_queue()`.
+- **`__init__.py`** — Exports `etrace`, `TraceLevel`, and `configure_tracing`.
 
 ### Exporters (`src/harle/debug/exporters/`)
 
 - **`_spans.py`** — Shared span-processing helpers used by both vault and DB exporters: `group_by_trace`, `filter_by_level`, `find_root`, `extract_run_id`, `span_start_time`, `span_duration_ms`, `build_tree`.
 - **`vault.py`** — Groups spans by trace ID, filters by `min_level`, reconstructs the parent-child tree, and renders a Markdown document with YAML frontmatter. Writes to `logs/YYYY/MM/<run_id>_debug.md`.
-- **`db.py`** — `PostgresExporter` serialises the span tree to JSONB and inserts one row per trace into `debug_traces`. Uses lazy engine creation to avoid importing SQLAlchemy at module level.
+- **`db.py`** — `PostgresExporter` serialises the span tree to JSONB and inserts one row per trace into `execution_traces`. Uses lazy engine creation to avoid importing SQLAlchemy at module level.
 - **`cli.py`** — `CliSseExporter` pushes debug events onto a shared `Queue`. Each event is a dict with `type`, `level`, `name`, `duration_ms`, `module`, and optional `attributes`. Level filtering drops spans below the configured verbosity.
 
 ### Database layer
 
-- **`db/models.py`** — `DebugTrace` model with `id`, `run_id` (indexed), `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`.
-- **`db/debug_traces.py`** — `create_debug_trace()` and `get_debug_trace()` CRUD helpers.
+- **`db/models.py`** — `ExecutionTrace` model with `id`, `run_id` (indexed), `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`.
+- **`db/execution_traces.py`** — `create_execution_trace()` and `get_execution_trace()` CRUD helpers.
 
 ### API SSE support
 
@@ -89,7 +89,7 @@ Reference TRD: [Harle Debug Logging — Architecture & Functionality](../trd/deb
 
 ### Configuration
 
-- Three `Settings` fields: `HARLE_DEBUG_VAULT_ENABLED` (default `True`), `HARLE_DEBUG_DB_ENABLED` (default `True`), `HARLE_DEBUG_MIN_STORAGE_LEVEL` (default `"TRACE"`).
+- Three `Settings` fields: `HARLE_TRACING_VAULT_ENABLED` (default `True`), `HARLE_TRACING_DB_ENABLED` (default `True`), `HARLE_TRACING_MIN_STORAGE_LEVEL` (default `"TRACE"`).
 - Corresponding entries in `config.yaml`.
 
 ### Dependencies
@@ -110,7 +110,7 @@ The API-side SSE support is ready (`?debug=true` returns an `EventSourceResponse
 
 ### Database migration
 
-The `DebugTrace` model exists in `db/models.py` and the table is created via `Base.metadata.create_all()`. No Alembic migration script has been generated yet.
+The `ExecutionTrace` model exists in `db/models.py` and the table is created via `Base.metadata.create_all()`. No Alembic migration script has been generated yet.
 
 ---
 
@@ -118,17 +118,17 @@ The `DebugTrace` model exists in `db/models.py` and the table is created via `Ba
 
 ### 1. Query, analysis, and external export (Phase 4)
 
-- **Missing:** API endpoint to retrieve debug traces by run ID, CLI `harle debug <run_id>` command, Specialist agent analysis of traces, optional OTLP exporter.
+- **Missing:** API endpoint to retrieve execution traces by run ID, CLI `harle debug <run_id>` command, Specialist agent analysis of traces, optional OTLP exporter.
 - **Unlocks:** Post-hoc analysis, performance bottleneck identification, and integration with external observability platforms.
 
 ---
 
 ## Key Deviations from TRD
 
-1. **`trace_entry()` instead of `trace()`** — The TRD shows `dtrace.trace()` but the implementation uses `dtrace.trace_entry()` to avoid shadowing the `opentelemetry.trace` module and the Python `trace` builtin. The functionality is identical.
+1. **`trace_entry()` instead of `trace()`** — The TRD shows `etrace.trace()` but the implementation uses `etrace.trace_entry()` to avoid shadowing the `opentelemetry.trace` module and the Python `trace` builtin. The functionality is identical.
 
 ---
 
 ## Assessment
 
-Phases 1–3 deliver the full debug logging pipeline: three output channels (vault, DB, CLI SSE) and instrumentation across the orchestrator, context assembler, search engine, run logger, and tool registry. Traces now capture routing, context tiers and budget, search query and results, vault write paths, and each tool invocation. The remaining work is Phase 4 (query API, CLI command, specialist analysis, optional OTLP).
+Phases 1–3 deliver the full execution tracing pipeline: three output channels (vault, DB, CLI SSE) and instrumentation across the orchestrator, context assembler, search engine, run logger, and tool registry. Traces now capture routing, context tiers and budget, search query and results, vault write paths, and each tool invocation. The remaining work is Phase 4 (query API, CLI command, specialist analysis, optional OTLP).

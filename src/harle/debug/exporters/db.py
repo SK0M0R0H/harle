@@ -1,8 +1,8 @@
-"""PostgreSQL exporter — write span trees as JSONB to the debug_traces table.
+"""PostgreSQL exporter — write span trees as JSONB to the execution_traces table.
 
 Receives completed spans from the OTel ``BatchSpanProcessor``,
 reconstructs the span tree, serialises it to JSON, and inserts one
-row per trace into the ``debug_traces`` table.
+row per trace into the ``execution_traces`` table.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class PostgresExporter(SpanExporter):
-    """Write debug traces as JSONB rows to the ``debug_traces`` table.
+    """Write execution traces as JSONB rows to the ``execution_traces`` table.
 
     Each trace (identified by ``trace_id``) produces one row.  Spans
     are filtered by ``min_level`` before serialisation.
@@ -55,7 +55,7 @@ class PostgresExporter(SpanExporter):
             try:
                 self._write_trace(trace_spans)
             except Exception:
-                logger.exception("Failed to write debug trace to DB for trace %s", trace_id)
+                logger.exception("Failed to write execution trace to DB for trace %s", trace_id)
 
         return SpanExportResult.SUCCESS
 
@@ -83,13 +83,13 @@ class PostgresExporter(SpanExporter):
         trace_json = _serialise_tree(root, tree)
 
         from sqlalchemy.orm import Session, sessionmaker
-        from harle.db.debug_traces import create_debug_trace
+        from harle.db.execution_traces import create_execution_trace
 
         engine = self._get_engine()
         session_factory = sessionmaker(bind=engine)
         session: Session = session_factory()
         try:
-            create_debug_trace(
+            create_execution_trace(
                 session,
                 run_id=run_id,
                 trace_json=trace_json,

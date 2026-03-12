@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from harle.context.tokenizer import count_tokens
 from harle.dataset.reader import DatasetFile, DatasetReader
-from harle.debug import dtrace
+from harle.debug import etrace
 from harle.search.engine import SearchEngine
 from harle.search.types import SearchQuery, SearchResult
 
@@ -174,7 +174,7 @@ class ContextAssembler:
         sections.append(p0_text)
         tokens_used += p0_tokens
         logger.debug("P0 (prompt + policies): %d tokens", p0_tokens)
-        dtrace.detail(
+        etrace.detail(
             "P0 loaded",
             module="context_assembler",
             files=len(p0_files),
@@ -206,14 +206,14 @@ class ContextAssembler:
                     p1_tokens,
                     len(included_results),
                 )
-                dtrace.detail(
+                etrace.detail(
                     "P1 loaded",
                     module="context_assembler",
                     results_included=len(included_results),
                     tokens=p1_tokens,
                 )
                 for i, r in enumerate(included_results[:5]):
-                    dtrace.trace_entry(
+                    etrace.trace_entry(
                         "Search result included",
                         module="context_assembler",
                         file_path=r.file_path,
@@ -236,7 +236,7 @@ class ContextAssembler:
                     p4_tokens,
                     conv_messages_included,
                 )
-                dtrace.detail(
+                etrace.detail(
                     "P4 loaded",
                     module="context_assembler",
                     messages_included=conv_messages_included,
@@ -244,13 +244,13 @@ class ContextAssembler:
                 )
 
         budget_remaining = budget - tokens_used
-        dtrace.step(
+        etrace.step(
             "Context assembly complete",
             module="context_assembler",
             total_tokens=tokens_used,
             budget_remaining=budget_remaining,
         )
-        dtrace.detail(
+        etrace.detail(
             "Budget status",
             module="context_assembler",
             total_used=tokens_used,

@@ -1,4 +1,4 @@
-"""Unit tests for harle.debug — trace levels, dtrace API, setup, vault/DB/CLI exporters, SSE."""
+"""Unit tests for harle.debug — trace levels, etrace API, setup, vault/DB/CLI exporters, SSE."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from opentelemetry.sdk.trace.export import SpanExportResult
 
-from harle.debug import dtrace
+from harle.debug import etrace
 from harle.debug.levels import TraceLevel
 from harle.debug.setup import configure_tracing
 from harle.debug.exporters._spans import (
@@ -58,38 +58,38 @@ class TestTraceLevel:
 
 
 # ---------------------------------------------------------------------------
-# dtrace API (trace.py) — NoOp mode (no TracerProvider) and with provider
+# etrace API (trace.py) — NoOp mode (no TracerProvider) and with provider
 # ---------------------------------------------------------------------------
 
 
 class TestDtraceNoOp:
-    """Tests for dtrace API when no TracerProvider is set (NoOp spans)."""
+    """Tests for etrace API when no TracerProvider is set (NoOp spans)."""
 
     def test_step_does_not_raise(self) -> None:
-        dtrace.step("test step", module="test")
+        etrace.step("test step", module="test")
 
     def test_detail_does_not_raise(self) -> None:
-        dtrace.detail("test detail", module="test", key="value")
+        etrace.detail("test detail", module="test", key="value")
 
     def test_trace_entry_does_not_raise(self) -> None:
-        dtrace.trace_entry("test trace", module="test")
+        etrace.trace_entry("test trace", module="test")
 
     def test_internal_does_not_raise(self) -> None:
-        dtrace.internal("test internal", module="test")
+        etrace.internal("test internal", module="test")
 
     def test_span_context_manager_does_not_raise(self) -> None:
-        with dtrace.span("test_span", level=dtrace.STEP, module="test"):
-            dtrace.detail("inside", count=3)
+        with etrace.span("test_span", level=etrace.STEP, module="test"):
+            etrace.detail("inside", count=3)
 
     def test_span_fn_sync_returns_value(self) -> None:
-        @dtrace.span_fn(level=dtrace.STEP, module="test")
+        @etrace.span_fn(level=etrace.STEP, module="test")
         def fn() -> int:
             return 42
 
         assert fn() == 42
 
     def test_span_fn_async_returns_value(self) -> None:
-        @dtrace.span_fn(level=dtrace.STEP, module="test")
+        @etrace.span_fn(level=etrace.STEP, module="test")
         async def fn() -> int:
             return 99
 
@@ -97,7 +97,7 @@ class TestDtraceNoOp:
 
 
 class TestDtraceWithProvider:
-    """Tests for dtrace API with a real TracerProvider and capturing exporter."""
+    """Tests for etrace API with a real TracerProvider and capturing exporter."""
 
     @pytest.fixture(autouse=True)
     def _configure_tracing_with_vault(self, tmp_path: Path) -> None:
@@ -109,21 +109,21 @@ class TestDtraceWithProvider:
         )
 
     def test_span_and_step_produce_vault_file(self, tmp_path: Path) -> None:
-        with dtrace.span(
+        with etrace.span(
             "handle_request",
-            level=dtrace.STEP,
+            level=etrace.STEP,
             module="orchestrator",
             run_id="run_unittest1",
         ):
-            dtrace.step("Context assembled", module="orchestrator", tokens=100)
-            dtrace.detail("Search query", module="search", query="test")
+            etrace.step("Context assembled", module="orchestrator", tokens=100)
+            etrace.detail("Search query", module="search", query="test")
 
         from opentelemetry import trace
 
         provider = trace.get_tracer_provider()
         provider.force_flush()
 
-        debug_files = list(tmp_path.rglob("*_debug.md"))
+        debug_files = list(tmp_path.rglob("*_trace.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
         assert "run_id: run_unittest1" in content
@@ -228,7 +228,7 @@ class TestVaultExporterIntegration:
         result = vault.export(exporter.spans)
         assert result == SpanExportResult.SUCCESS
 
-        debug_files = list(tmp_path.rglob("*_debug.md"))
+        debug_files = list(tmp_path.rglob("*_trace.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
         assert "run_id: run_vault_test" in content
@@ -265,7 +265,7 @@ class TestVaultExporterIntegration:
 
         vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
         vault.export(exporter.spans)
-        assert not list(tmp_path.rglob("*_debug.md"))
+        assert not list(tmp_path.rglob("*_trace.md"))
 
 
 # ---------------------------------------------------------------------------
@@ -523,15 +523,15 @@ class TestCliSseExporter:
 # ---------------------------------------------------------------------------
 
 
-class TestDebugQueue:
-    """Tests for the shared debug queue module."""
+class TestTraceQueue:
+    """Tests for the shared trace queue module."""
 
     def test_init_and_get(self) -> None:
-        from harle.debug.queue import init_debug_queue, get_debug_queue
+        from harle.debug.queue import init_trace_queue, get_trace_queue
 
-        q = init_debug_queue()
+        q = init_trace_queue()
         assert q is not None
-        assert get_debug_queue() is q
+        assert get_trace_queue() is q
 
 
 # ---------------------------------------------------------------------------

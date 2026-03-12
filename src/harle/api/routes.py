@@ -200,11 +200,11 @@ def build_router(
         )
 
     def _sse_response(response: RunResponse) -> EventSourceResponse:
-        """Wrap a completed run as an SSE stream with any pending debug events."""
-        from harle.debug.queue import get_debug_queue
+        """Wrap a completed run as an SSE stream with any pending trace events."""
+        from harle.debug.queue import get_trace_queue
 
         def _generate() -> Generator[dict[str, str], None, None]:
-            queue = get_debug_queue()
+            queue = get_trace_queue()
             if queue is not None:
                 yield from drain_debug_events(queue)
             yield result_event(response)

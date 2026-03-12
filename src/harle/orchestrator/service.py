@@ -27,7 +27,7 @@ from harle.api.models import RunRequest, RunResponse
 from harle.config import PROVIDER_OPENAI, Settings
 from harle.context.assembler import ContextAssembler
 from harle.db.connection import Database
-from harle.debug import dtrace
+from harle.debug import etrace
 from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
 from harle.tools.registry import ToolRegistry
 
@@ -164,7 +164,7 @@ class OrchestratorService:
         """
         from agents import Agent, MaxTurnsExceeded, Runner
 
-        dtrace.detail(
+        etrace.detail(
             "Agent execution started",
             module="orchestrator",
             model=self.model,
@@ -270,8 +270,8 @@ class OrchestratorService:
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         started_at = datetime.now(timezone.utc)
 
-        with dtrace.span("handle_request", level=dtrace.STEP, module="orchestrator", run_id=run_id):
-            dtrace.step(
+        with etrace.span("handle_request", level=etrace.STEP, module="orchestrator", run_id=run_id):
+            etrace.step(
                 "Routed to agent",
                 module="orchestrator",
                 agent=DEFAULT_AGENT_ROLE,
@@ -295,7 +295,7 @@ class OrchestratorService:
                     len(package.p0_files),
                     package.budget_remaining,
                 )
-                dtrace.step(
+                etrace.step(
                     "Context assembled",
                     module="orchestrator",
                     tokens=package.total_tokens,
@@ -311,7 +311,7 @@ class OrchestratorService:
                 system_prompt=system_prompt,
             )
             result_text = agent_result.text
-            dtrace.step(
+            etrace.step(
                 "Agent execution complete",
                 module="orchestrator",
                 tools_called=agent_result.tools_called,
@@ -372,7 +372,7 @@ class OrchestratorService:
                 except Exception as e:
                     logger.warning("Could not persist run record: %s", e)
 
-            dtrace.step("Run logged", module="orchestrator")
+            etrace.step("Run logged", module="orchestrator")
 
             if agent_result.tools_called:
                 logger.info(
@@ -432,8 +432,8 @@ class OrchestratorService:
         conv_id = request.conversation_id
         started_at = datetime.now(timezone.utc)
 
-        with dtrace.span("handle_chat", level=dtrace.STEP, module="orchestrator", run_id=run_id):
-            dtrace.step(
+        with etrace.span("handle_chat", level=etrace.STEP, module="orchestrator", run_id=run_id):
+            etrace.step(
                 "Routed to agent",
                 module="orchestrator",
                 agent=DEFAULT_AGENT_ROLE,
@@ -487,7 +487,7 @@ class OrchestratorService:
                     package.conversation_messages_included,
                     package.budget_remaining,
                 )
-                dtrace.step(
+                etrace.step(
                     "Context assembled",
                     module="orchestrator",
                     tokens=package.total_tokens,
@@ -503,7 +503,7 @@ class OrchestratorService:
                 system_prompt=system_prompt,
             )
             result_text = agent_result.text
-            dtrace.step(
+            etrace.step(
                 "Agent execution complete",
                 module="orchestrator",
                 tools_called=agent_result.tools_called,
@@ -589,7 +589,7 @@ class OrchestratorService:
                 except Exception:  # noqa: S110
                     pass
 
-            dtrace.step("Run logged", module="orchestrator")
+            etrace.step("Run logged", module="orchestrator")
 
             if agent_result.tools_called:
                 logger.info(

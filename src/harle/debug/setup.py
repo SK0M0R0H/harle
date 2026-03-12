@@ -3,7 +3,7 @@
 Registers custom span exporters with the OTel SDK.
 
 - **Vault exporter** (Phase 1): span tree → Markdown → vault logs/.
-- **DB exporter** (Phase 2): span tree → JSONB → ``debug_traces`` table.
+- **DB exporter** (Phase 2): span tree → JSONB → ``execution_traces`` table.
 - **CLI SSE exporter** (Phase 2): span → SSE queue for real-time debug output.
 """
 
@@ -37,7 +37,7 @@ def configure_tracing(
 
     Called once during ``create_app()`` in :mod:`harle.main`.  The
     provider is set globally via ``trace.set_tracer_provider`` so
-    every ``dtrace`` call automatically inherits it.
+    every ``etrace`` call automatically inherits it.
 
     Args:
         vault_path: Absolute path to the vault root.  When ``None``

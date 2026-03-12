@@ -86,7 +86,7 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ### 7. Debug tracing (Phase 1)
 
-- `run()` and `chat()` are wrapped in `dtrace.span` root spans (`handle_request` / `handle_chat`) with `run_id` attributes. STEP-level entries are emitted for context assembly and agent execution completion. See [debug logging current-state](../debug_logging.md) for the full debug module status.
+- `run()` and `chat()` are wrapped in `etrace.span` root spans (`handle_request` / `handle_chat`) with `run_id` attributes. STEP-level entries are emitted for context assembly and agent execution completion. See [execution tracing current-state](../execution_tracing.md) for the full execution tracing module status.
 
 ---
 

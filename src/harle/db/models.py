@@ -75,8 +75,8 @@ class Run(Base):
     )
 
 
-class DebugTrace(Base):
-    """Hierarchical debug trace stored as JSONB for a single run.
+class ExecutionTrace(Base):
+    """Hierarchical execution trace stored as JSONB for a single run.
 
     The ``trace_json`` column holds the full span tree serialised by
     :class:`~harle.debug.exporters.db.PostgresExporter`.  Using JSONB
@@ -84,7 +84,7 @@ class DebugTrace(Base):
     queries across traces (e.g. find runs where a tool was slow).
     """
 
-    __tablename__ = "debug_traces"
+    __tablename__ = "execution_traces"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)

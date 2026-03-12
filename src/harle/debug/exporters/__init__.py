@@ -1,7 +1,7 @@
-"""Custom OpenTelemetry span exporters for Harle debug logging.
+"""Custom OpenTelemetry span exporters for Harle execution tracing.
 
 - **VaultExporter**: span tree → Markdown → vault ``logs/`` directory.
-- **PostgresExporter**: span tree → JSONB → ``debug_traces`` table.
+- **PostgresExporter**: span tree → JSONB → ``execution_traces`` table.
 - **CliSseExporter**: span → SSE queue for real-time CLI streaming.
 """
 

@@ -1,4 +1,4 @@
-"""Trace-level enum for Harle debug logging.
+"""Trace-level enum for Harle execution tracing.
 
 Maps importance levels to span attributes. OpenTelemetry spans have no
 built-in "level" concept — Harle adds ``harle.level`` as a custom
@@ -11,7 +11,7 @@ from enum import IntEnum
 
 
 class TraceLevel(IntEnum):
-    """Importance tiers for debug trace entries.
+    """Importance tiers for execution trace entries.
 
     Lower numeric value = higher importance.  Exporters filter spans
     whose level exceeds the configured threshold.

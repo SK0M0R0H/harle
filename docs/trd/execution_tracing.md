@@ -1,18 +1,18 @@
 ---
-title: "Harle Debug Logging — Architecture & Functionality"
-tags: [debug, logging, tracing, observability, opentelemetry, cli, vault, architecture]
+title: "Harle Execution Tracing — Architecture & Functionality"
+tags: [execution-tracing, tracing, observability, opentelemetry, cli, vault, architecture]
 context: global
 last_updated: 2026-03-12
-summary: "Describes the debug logging system built on OpenTelemetry that captures hierarchical processing traces across all subsystems, stores them to DB and vault unconditionally, and surfaces them in the UI when debug mode is active."
+summary: "Describes the execution tracing system built on OpenTelemetry that captures hierarchical processing traces across all subsystems, stores them to DB and vault unconditionally, and surfaces them in the UI when debug mode is active."
 ---
 
-# Harle Debug Logging — Architecture & Functionality
+# Harle Execution Tracing — Architecture & Functionality
 
-> When you ask Harle a question, the result appears — but you cannot see what happened inside: which agent was chosen, what context was assembled, which tools were called, or why the model decided what it decided. Debug logging makes the invisible visible.
+> When you ask Harle a question, the result appears — but you cannot see what happened inside: which agent was chosen, what context was assembled, which tools were called, or why the model decided what it decided. Execution tracing makes the invisible visible.
 
-This document describes a **system-wide debug logging layer** that captures structured, hierarchical traces of every processing step across every Harle subsystem. The traces are **always written** to the database and vault (regardless of mode), and **displayed in the UI only when the user activates debug mode**.
+This document describes a **system-wide execution tracing layer** that captures structured, hierarchical traces of every processing step across every Harle subsystem. The traces are **always written** to the database and vault (regardless of mode), and **displayed in the UI only when the user activates debug mode**.
 
-The system is built on [OpenTelemetry](https://opentelemetry.io/) — the industry-standard observability framework — with a thin convenience API (`dtrace`) and three custom exporters for Harle's specific output targets.
+The system is built on [OpenTelemetry](https://opentelemetry.io/) — the industry-standard observability framework — with a thin convenience API (`etrace`) and three custom exporters for Harle's specific output targets.
 
 For the overall system architecture, see [overview.md](./overview.md).
 For the Run Logger (per-run result/context files), see [orchestrator.md](./orchestrator.md) §7.
@@ -29,11 +29,11 @@ Harle already has two kinds of logging:
 
 Neither of these answers the question: *"Why did Harle do that?"*
 
-Debug logging fills this gap. It captures the **internal reasoning chain** — every decision point, every intermediate value, every branch taken — in a hierarchical, human-readable format. Think of it as a flight recorder for every request.
+Execution tracing fills this gap. It captures the **internal reasoning chain** — every decision point, every intermediate value, every branch taken — in a hierarchical, human-readable format. Think of it as a flight recorder for every request.
 
-**What debug logging enables:**
+**What execution tracing enables:**
 
-| Scenario | Without debug logging | With debug logging |
+| Scenario | Without execution tracing | With execution tracing |
 |---|---|---|
 | Result seems wrong | "Something broke, no idea where" | Trace shows the router picked the wrong agent because keyword "research" matched |
 | Response is slow | "It took 12 seconds, I don't know why" | Trace shows web search tool timed out on the second query |
@@ -48,8 +48,8 @@ Debug logging fills this gap. It captures the **internal reasoning chain** — e
 1. **Always capture, conditionally display.** Traces are written to DB and vault on every run. The user controls visibility — not whether data is recorded.
 2. **Hierarchical, not flat.** Steps nest naturally: a request contains routing, which contains rule evaluation. A flat list of log lines is hard to follow; a tree is intuitive.
 3. **Human-readable first.** Traces must make sense to someone reading them in a terminal or in a Markdown file — not just to a machine.
-4. **Visually distinct in code.** A developer reading the source code must immediately tell debug logging calls apart from business logic. Debug logging is infrastructure, not behavior.
-5. **Zero overhead when not displayed.** Collection is lightweight (appending to an in-memory list). The user pays no latency cost for debug logging — only storage cost (which is negligible for text).
+4. **Visually distinct in code.** A developer reading the source code must immediately tell execution tracing calls apart from business logic. Execution tracing is infrastructure, not behavior.
+5. **Zero overhead when not displayed.** Collection is lightweight (appending to an in-memory list). The user pays no latency cost for execution tracing — only storage cost (which is negligible for text).
 6. **Any subsystem, no coupling.** The capture module, tools, orchestrator, context assembler, search, imports, connections — any current or future module can emit debug entries without importing heavy dependencies or knowing about other modules.
 7. **Build on proven infrastructure.** Span collection, context propagation, parallel-safe nesting, and thread safety are solved problems. OpenTelemetry handles all of this. Harle only builds what is unique to Harle: the three custom exporters and the convenience API.
 
@@ -100,7 +100,7 @@ Three components work together:
 
 1. **OpenTelemetry SDK** — the `TracerProvider`, `Tracer`, and `Span` types handle all span creation, context propagation, parent-child linking, and concurrency safety. This is the engine.
 2. **Custom `SpanExporter` implementations** — three adapters that receive completed spans from OTel and write them to Harle's specific destinations (vault Markdown files, PostgreSQL JSONB, CLI SSE stream).
-3. **`dtrace` API** — a thin convenience wrapper so subsystem code writes `dtrace.step(...)` instead of the verbose OTel API directly.
+3. **`etrace` API** — a thin convenience wrapper so subsystem code writes `etrace.step(...)` instead of the verbose OTel API directly.
 
 ---
 
@@ -118,7 +118,7 @@ Building a custom span collector, context propagation system, and parallel-safe 
 | Thread safety (`asyncio.to_thread`) | Built-in thread-safe span storage | `threading.Lock` on span list, explicit context copying |
 | Span attributes (key-value data) | `span.set_attribute()` | Custom `attributes: dict[str, Any]` |
 | Span status (ok/error) | `span.set_status()` | Custom `SpanStatus` enum |
-| Decorator for auto-spanning | `@tracer.start_as_current_span` | Custom `@dtrace.span_fn` decorator |
+| Decorator for auto-spanning | `@tracer.start_as_current_span` | Custom `@etrace.span_fn` decorator |
 | No-op when no provider configured | `NoOpTracer` (default) | Manual "check if collector exists" logic |
 | Export pipeline | `SpanProcessor` + `SpanExporter` interface | Custom sink architecture |
 
@@ -127,9 +127,9 @@ Building a custom span collector, context propagation system, and parallel-safe 
 | Capability | Why it's Harle-specific |
 |---|---|
 | Vault Markdown exporter | OTel has no concept of writing Markdown files to an Obsidian vault |
-| PostgreSQL JSONB exporter | OTel's standard exporters target OTLP, Jaeger, Zipkin — not our `debug_traces` table |
+| PostgreSQL JSONB exporter | OTel's standard exporters target OTLP, Jaeger, Zipkin — not our `execution_traces` table |
 | CLI SSE stream exporter | Real-time debug output interleaved with response streaming is a Harle UI feature |
-| `dtrace` convenience API | Maps Harle's trace levels (STEP/DETAIL/TRACE/INTERNAL) to OTel span attributes; provides a clean, minimal API |
+| `etrace` convenience API | Maps Harle's trace levels (STEP/DETAIL/TRACE/INTERNAL) to OTel span attributes; provides a clean, minimal API |
 | Trace level filtering | OTel spans don't have "levels" — we add `harle.level` as a custom attribute and filter in exporters |
 
 **Why not use OTel's standard exporters (OTLP, Jaeger)?**
@@ -174,19 +174,19 @@ Levels are stored as the span attribute `harle.level` (a string: `"STEP"`, `"DET
 
 ---
 
-## The `dtrace` API — How Subsystem Code Emits Entries
+## The `etrace` API — How Subsystem Code Emits Entries
 
-The `dtrace` module is a thin wrapper around the OpenTelemetry `Tracer`. It exists for two reasons: (1) to provide a clean, minimal API that is visually distinct in the codebase, and (2) to map Harle's trace levels to OTel span attributes automatically.
+The `etrace` module is a thin wrapper around the OpenTelemetry `Tracer`. It exists for two reasons: (1) to provide a clean, minimal API that is visually distinct in the codebase, and (2) to map Harle's trace levels to OTel span attributes automatically.
 
-### Naming convention: `dtrace`
+### Naming convention: `etrace`
 
-The module is called `dtrace` (short for "debug trace"). All calls in the codebase start with `dtrace.`:
+The module is called `etrace` (short for "execution trace"). All calls in the codebase start with `etrace.`:
 
 ```python
-from harle.debug import dtrace
+from harle.debug import etrace
 ```
 
-This prefix serves as a visual marker. When you read source code, every line starting with `dtrace.` is debug logging — not business logic. You can mentally skip it when reading for functionality, or focus on it when reading for observability.
+This prefix serves as a visual marker. When you read source code, every line starting with `etrace.` is execution tracing — not business logic. You can mentally skip it when reading for functionality, or focus on it when reading for observability.
 
 ### Core API
 
@@ -194,23 +194,23 @@ This prefix serves as a visual marker. When you read source code, every line sta
 # --- Span-based (hierarchical) ---
 
 # Open a span (context manager for automatic close)
-with dtrace.span("context_assembly", level=dtrace.STEP, module="context"):
+with etrace.span("context_assembly", level=etrace.STEP, module="context"):
     # ... do work ...
-    dtrace.detail("Loaded 3 policy files", policies=["a.md", "b.md", "c.md"])
-    dtrace.detail("Token budget: {used}/{total}", used=3420, total=4096)
+    etrace.detail("Loaded 3 policy files", policies=["a.md", "b.md", "c.md"])
+    etrace.detail("Token budget: {used}/{total}", used=3420, total=4096)
     # span is closed automatically at the end of the `with` block
 
 # --- Standalone entries (leaf spans, no nesting) ---
 
-dtrace.step("Router selected agent: secretary", method="keyword_match")
-dtrace.detail("Search returned 5 results", query="trello stalled", count=5)
-dtrace.trace("HTTP response", status=200, duration_ms=142, url="https://api.trello.com/...")
-dtrace.internal("Tokenizer cache hit", model="cl100k_base")
+etrace.step("Router selected agent: secretary", method="keyword_match")
+etrace.detail("Search returned 5 results", query="trello stalled", count=5)
+etrace.trace("HTTP response", status=200, duration_ms=142, url="https://api.trello.com/...")
+etrace.internal("Tokenizer cache hit", model="cl100k_base")
 ```
 
 ### What happens under the hood
 
-Each `dtrace` function is a thin translation to OTel:
+Each `etrace` function is a thin translation to OTel:
 
 ```python
 from opentelemetry import trace
@@ -245,11 +245,11 @@ def _emit_leaf_span(name: str, *, level: TraceLevel, **attrs):
 - It is thread-safe (OTel's SDK uses internal locking).
 - When no `TracerProvider` is configured (e.g. in tests), it returns a `NoOpSpan` that does nothing.
 
-The `dtrace` module adds exactly two things on top: the `harle.level` attribute and the `harle.module` attribute.
+The `etrace` module adds exactly two things on top: the `harle.level` attribute and the `harle.module` attribute.
 
 ### How it looks in real code
 
-Here is what an existing function looks like **before** and **after** adding debug logging. Notice how the debug lines are visually separate from the business logic:
+Here is what an existing function looks like **before** and **after** adding execution tracing. Notice how the debug lines are visually separate from the business logic:
 
 **Before (orchestrator `service.py`):**
 
@@ -266,30 +266,30 @@ async def handle_request(request: RunRequest) -> RunResult:
 
 ```python
 async def handle_request(request: RunRequest) -> RunResult:
-    with dtrace.span("handle_request", level=dtrace.STEP, module="orchestrator"):
+    with etrace.span("handle_request", level=etrace.STEP, module="orchestrator"):
 
         agent_role = await route(request)
-        dtrace.step("Routed to agent", agent=agent_role, method="keyword_match")
+        etrace.step("Routed to agent", agent=agent_role, method="keyword_match")
 
         context = await assemble_context(request, agent_role)
-        dtrace.step("Context assembled", tokens=context.total_tokens)
+        etrace.step("Context assembled", tokens=context.total_tokens)
 
         result = await execute_agent(agent_role, context, request)
-        dtrace.step("Agent execution complete", iterations=result.iterations)
+        etrace.step("Agent execution complete", iterations=result.iterations)
 
         await log_run(request, result)
 
     return result
 ```
 
-**Key observation:** the four lines of business logic (`route`, `assemble_context`, `execute_agent`, `log_run`) are unchanged. The `dtrace` calls are additions that do not alter control flow or return values. A developer can read the function by ignoring every `dtrace.` line and the behavior is identical.
+**Key observation:** the four lines of business logic (`route`, `assemble_context`, `execute_agent`, `log_run`) are unchanged. The `etrace` calls are additions that do not alter control flow or return values. A developer can read the function by ignoring every `etrace.` line and the behavior is identical.
 
 ### Decorator for automatic span wrapping
 
 For functions that represent a single logical step, a decorator avoids the `with` boilerplate:
 
 ```python
-@dtrace.span_fn(level=dtrace.STEP, module="orchestrator")
+@etrace.span_fn(level=etrace.STEP, module="orchestrator")
 async def route(request: RunRequest) -> str:
     # span is opened automatically with name "route"
     # and closed when the function returns
@@ -300,7 +300,7 @@ Under the hood, this uses OTel's `@_tracer.start_as_current_span("route")` with 
 
 ### No-op when tracing is not configured
 
-If no `TracerProvider` is configured (e.g. during startup, in unit tests, or in scripts that import Harle modules), OTel's default `NoOpTracer` handles all calls silently — zero cost, zero side effects. Subsystem code does not need to check whether tracing is active before calling `dtrace`.
+If no `TracerProvider` is configured (e.g. during startup, in unit tests, or in scripts that import Harle modules), OTel's default `NoOpTracer` handles all calls silently — zero cost, zero side effects. Subsystem code does not need to check whether tracing is active before calling `etrace`.
 
 ---
 
@@ -341,10 +341,10 @@ vault/
         └── 03/
             ├── run_abc123_result.md       ← Run Logger (existing)
             ├── run_abc123_context.md      ← Run Logger (existing, optional)
-            └── run_abc123_debug.md        ← Debug trace (new)
+            └── run_abc123_trace.md        ← Execution trace (new)
 ```
 
-**Example `run_abc123_debug.md`:**
+**Example `run_abc123_trace.md`:**
 
 ```markdown
 ---
@@ -392,20 +392,20 @@ This file is Markdown: you can open it in any editor, in Obsidian (since the vau
 Serializes the span tree to JSON and stores it in PostgreSQL. This enables querying across runs:
 
 ```sql
-CREATE TABLE debug_traces (
+CREATE TABLE execution_traces (
     id            SERIAL PRIMARY KEY,
     run_id        VARCHAR NOT NULL,
     trace_json    JSONB NOT NULL,
     total_spans   INTEGER NOT NULL DEFAULT 0,
     duration_ms   INTEGER,
     created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    CONSTRAINT fk_debug_traces_run
+    CONSTRAINT fk_execution_traces_run
         FOREIGN KEY (run_id) REFERENCES runs(run_id)
         ON DELETE CASCADE
 );
 
-CREATE INDEX idx_debug_traces_run_id ON debug_traces(run_id);
-CREATE INDEX idx_debug_traces_created ON debug_traces(created_at);
+CREATE INDEX idx_execution_traces_run_id ON execution_traces(run_id);
+CREATE INDEX idx_execution_traces_created ON execution_traces(created_at);
 ```
 
 **Why JSONB, not normalized tables?**
@@ -415,7 +415,7 @@ The span tree is hierarchical and variable-depth. Normalizing it into relational
 ```sql
 -- Find all runs where web_search took longer than 5 seconds
 SELECT run_id
-FROM debug_traces
+FROM execution_traces
 WHERE trace_json @? '$..children[*] ? (@.name == "web_search" && @.duration_ms > 5000)';
 ```
 
@@ -482,7 +482,7 @@ OTel's Python SDK uses `contextvars` internally to track the current span. When 
 
 ```python
 async def execute_iteration(tools_to_call: list[ToolCall]):
-    with dtrace.span("iteration_1", level=dtrace.DETAIL, module="orchestrator"):
+    with etrace.span("iteration_1", level=etrace.DETAIL, module="orchestrator"):
         results = await asyncio.gather(
             execute_tool(tools_to_call[0]),   # gets its own context copy
             execute_tool(tools_to_call[1]),   # gets its own context copy
@@ -510,15 +510,15 @@ Debug logging is a **cross-cutting concern**. Every subsystem adds its own entri
 | **Connections** | Connection established / failed | Service name, auth method | Connection pool stats, retry attempts |
 | **Run Logger** | Run logged to vault and DB | File paths written | Write duration, byte sizes |
 
-**Future subsystems** follow the same pattern: import `dtrace`, call `dtrace.step()` / `dtrace.detail()` / `dtrace.trace()` with a `module` parameter. No registration, no configuration, no changes to other modules.
+**Future subsystems** follow the same pattern: import `etrace`, call `etrace.step()` / `etrace.detail()` / `etrace.trace()` with a `module` parameter. No registration, no configuration, no changes to other modules.
 
 ---
 
 ## Relationship to Existing Logging
 
-Debug logging (`dtrace`) and Python standard logging (`logging`) serve **different purposes** and **coexist**:
+Execution tracing (`etrace`) and Python standard logging (`logging`) serve **different purposes** and **coexist**:
 
-| Aspect | Standard `logging` | Debug `dtrace` |
+| Aspect | Standard `logging` | Execution `etrace` |
 |---|---|---|
 | **Audience** | Developer / ops (server logs) | End user + developer (run traces) |
 | **Scope** | Application-wide, always on | Per-request, always captured |
@@ -529,8 +529,8 @@ Debug logging (`dtrace`) and Python standard logging (`logging`) serve **differe
 
 **Rule of thumb:**
 - If it matters for **server health** (connection errors, startup failures, config problems) → use `logger.warning()` / `logger.error()`.
-- If it matters for **understanding what happened during a user's request** → use `dtrace.step()` / `dtrace.detail()` / `dtrace.trace()`.
-- Some events may be logged to both (e.g. a tool failure is both a `logger.error` for ops and a `dtrace.step` with error status for the user's trace).
+- If it matters for **understanding what happened during a user's request** → use `etrace.step()` / `etrace.detail()` / `etrace.trace()`.
+- Some events may be logged to both (e.g. a tool failure is both a `logger.error` for ops and a `etrace.step` with error status for the user's trace).
 
 ---
 
@@ -574,11 +574,11 @@ Debug logging adds the following to `config.yaml`:
 
 ```yaml
 debug:
-  # Whether debug traces are written to the vault logs/ directory.
+  # Whether execution traces are written to the vault logs/ directory.
   # Default: true. Set to false only if vault disk space is a concern.
   vault_sink_enabled: true
 
-  # Whether debug traces are written to PostgreSQL.
+  # Whether execution traces are written to PostgreSQL.
   # Default: true. Set to false if DB storage is limited.
   db_sink_enabled: true
 
@@ -601,10 +601,10 @@ Trace entries use key-value attributes (OTel span attributes), not formatted str
 
 ```python
 # Good — structured, queryable
-dtrace.detail("Search completed", query="trello stalled", count=5, duration_ms=42)
+etrace.detail("Search completed", query="trello stalled", count=5, duration_ms=42)
 
 # Bad — formatted string, hard to parse
-dtrace.detail(f"Search for 'trello stalled' returned 5 results in 42ms")
+etrace.detail(f"Search for 'trello stalled' returned 5 results in 42ms")
 ```
 
 Structured data can be queried in PostgreSQL (`trace_json @> '{"query": "trello"}'`), filtered in the CLI, and formatted differently per exporter.
@@ -630,19 +630,19 @@ All spans are collected by OTel regardless of their `harle.level` attribute. Lev
 
 ```
 src/harle/debug/                     ← New package
-├── __init__.py                      # Public API: from harle.debug import dtrace
-├── trace.py                         # dtrace module: span(), step(), detail(), trace(), internal()
+├── __init__.py                      # Public API: from harle.debug import etrace
+├── trace.py                         # etrace module: span(), step(), detail(), trace_entry(), internal()
 │                                    #   Thin wrapper over opentelemetry.trace.get_tracer("harle")
 ├── levels.py                        # TraceLevel enum (STEP, DETAIL, TRACE, INTERNAL)
 ├── setup.py                         # configure_tracing(): TracerProvider + processor wiring
 └── exporters/
     ├── __init__.py
     ├── vault.py                     # VaultExporter(SpanExporter): span tree → Markdown → vault logs/
-    ├── db.py                        # PostgresExporter(SpanExporter): span tree → JSON → debug_traces table
+    ├── db.py                        # PostgresExporter(SpanExporter): span tree → JSON → execution_traces table
     └── cli.py                       # CliSseExporter(SpanExporter): span → SSE event for CLI streaming
 
 src/harle/db/
-└── models.py                        # Add DebugTrace SQLAlchemy model
+└── models.py                        # Add ExecutionTrace SQLAlchemy model
 
 src/harle/api/
 └── routes.py                        # Start root span per request; pass debug_mode to SSE
@@ -651,27 +651,27 @@ harle-cli/
 └── (Go source)                      # Add --debug flag, render debug SSE events
 ```
 
-Each exporter is ~50–100 lines. The `dtrace` module is ~30 lines. The setup function is ~20 lines. Total Harle-specific code: **~250–350 lines** (compared to ~600–800 for the previous from-scratch approach).
+Each exporter is ~50–100 lines. The `etrace` module is ~30 lines. The setup function is ~20 lines. Total Harle-specific code: **~250–350 lines** (compared to ~600–800 for the previous from-scratch approach).
 
 ### Database migration
 
-A new table `debug_traces` is added:
+A new table `execution_traces` is added:
 
 ```sql
-CREATE TABLE debug_traces (
+CREATE TABLE execution_traces (
     id            SERIAL PRIMARY KEY,
     run_id        VARCHAR NOT NULL,
     trace_json    JSONB NOT NULL,
     total_spans   INTEGER NOT NULL DEFAULT 0,
     duration_ms   INTEGER,
     created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    CONSTRAINT fk_debug_traces_run
+    CONSTRAINT fk_execution_traces_run
         FOREIGN KEY (run_id) REFERENCES runs(run_id)
         ON DELETE CASCADE
 );
 
-CREATE INDEX idx_debug_traces_run_id ON debug_traces(run_id);
-CREATE INDEX idx_debug_traces_created ON debug_traces(created_at);
+CREATE INDEX idx_execution_traces_run_id ON execution_traces(run_id);
+CREATE INDEX idx_execution_traces_created ON execution_traces(created_at);
 ```
 
 ### Dependencies
@@ -770,16 +770,16 @@ The system is implemented incrementally. Each phase is independently useful.
 ### Phase 1: Core infrastructure + vault exporter
 
 - Add `opentelemetry-api` and `opentelemetry-sdk` to dependencies.
-- Create `src/harle/debug/` package: `trace.py` (dtrace API), `levels.py`, `setup.py`.
+- Create `src/harle/debug/` package: `trace.py` (etrace API), `levels.py`, `setup.py`.
 - Implement `VaultExporter` (span tree → Markdown → vault `logs/` directory).
 - Wire `configure_tracing()` into application startup (`bootstrap.py`).
 - Add root span creation in the orchestrator request lifecycle.
 
-**Result:** Every run produces a `_debug.md` file in the vault. No CLI changes yet.
+**Result:** Every run produces a `_trace.md` file in the vault. No CLI changes yet.
 
 ### Phase 2: Database exporter and CLI streaming
 
-- `debug_traces` PostgreSQL table and SQLAlchemy model (migration).
+- `execution_traces` PostgreSQL table and SQLAlchemy model (migration).
 - Implement `PostgresExporter` (span tree → JSON → DB).
 - Implement `CliSseExporter` (span → SSE event, with level filtering).
 - SSE `debug` event type in the API routes.
@@ -789,16 +789,16 @@ The system is implemented incrementally. Each phase is independently useful.
 
 ### Phase 3: Subsystem instrumentation
 
-- Add `dtrace` calls to all existing subsystems (router, context assembler, agent runner, tools, search, capture, run logger).
+- Add `etrace` calls to all existing subsystems (router, context assembler, agent runner, tools, search, capture, run logger).
 - Establish conventions for module-specific trace entries (documented in the integration points table above).
 
 **Result:** Full observability across the entire request pipeline.
 
 ### Phase 4: Query, analysis, and external export
 
-- API endpoint to retrieve debug traces by run ID.
+- API endpoint to retrieve execution traces by run ID.
 - CLI command to view past traces: `harle debug run_abc123`.
-- Specialist agent integration: the Specialist can analyze debug traces to identify performance bottlenecks and error patterns.
+- Specialist agent integration: the Specialist can analyze execution traces to identify performance bottlenecks and error patterns.
 - (Optional) Add `opentelemetry-exporter-otlp` for external observability platforms — a one-line addition.
 
 **Result:** Debug data becomes actionable for system self-improvement, and external observability is available if needed.

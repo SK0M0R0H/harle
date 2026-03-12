@@ -2,7 +2,7 @@
 
 Receives completed spans from the OTel ``BatchSpanProcessor``,
 reconstructs the parent-child tree, and writes a human-readable
-``<run_id>_debug.md`` file alongside the Run Logger's output.
+``<run_id>_trace.md`` file alongside the Run Logger's output.
 
 The file is written once when all spans for a trace are flushed
 (at the end of a request or when the batch processor flushes).
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class VaultExporter(SpanExporter):
-    """Write debug traces as Markdown files to ``vault/logs/YYYY/MM/``.
+    """Write execution traces as Markdown files to ``vault/logs/YYYY/MM/``.
 
     Each trace (identified by ``trace_id``) produces one file.  Spans
     are filtered by ``min_level`` before rendering.
@@ -54,7 +54,7 @@ class VaultExporter(SpanExporter):
             try:
                 self._write_trace(trace_id, trace_spans)
             except Exception:
-                logger.exception("Failed to write debug trace %s", trace_id)
+                logger.exception("Failed to write execution trace %s", trace_id)
 
         return SpanExportResult.SUCCESS
 
@@ -67,7 +67,7 @@ class VaultExporter(SpanExporter):
     def _write_trace(self, trace_id: str, spans: list[ReadableSpan]) -> None:
         """Build tree, render Markdown, write to vault."""
         if not self._vault_path.exists():
-            logger.warning("Vault path does not exist: %s; skipping debug trace", self._vault_path)
+            logger.warning("Vault path does not exist: %s; skipping execution trace", self._vault_path)
             return
 
         filtered = filter_by_level(spans, self._min_level)
@@ -94,7 +94,7 @@ class VaultExporter(SpanExporter):
         )
 
         log_dir = log_dir_for(timestamp)
-        rel_path = f"{log_dir}/{run_id}_debug.md"
+        rel_path = f"{log_dir}/{run_id}_trace.md"
         write_log_file(self._vault_path, rel_path, content)
 
 

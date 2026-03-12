@@ -1,8 +1,8 @@
-"""``dtrace`` — thin convenience API over OpenTelemetry for Harle debug logging.
+"""``etrace`` — thin convenience API over OpenTelemetry for Harle execution tracing.
 
-Every ``dtrace.`` call in the codebase is debug instrumentation — not
+Every ``etrace.`` call in the codebase is execution-trace instrumentation — not
 business logic.  The prefix serves as a visual marker: you can skip
-all ``dtrace.*`` lines when reading for functionality, or focus on
+all ``etrace.*`` lines when reading for functionality, or focus on
 them when reading for observability.
 
 Under the hood each function translates directly to OTel span
@@ -62,12 +62,12 @@ def span(
     module: str = "",
     **attrs: Any,
 ) -> Generator[trace.Span, None, None]:
-    """Open a span that parents any ``dtrace`` calls made inside.
+    """Open a span that parents any ``etrace`` calls made inside.
 
     Usage::
 
-        with dtrace.span("context_assembly", level=dtrace.STEP, module="context"):
-            dtrace.detail("Loaded 3 policies", count=3)
+        with etrace.span("context_assembly", level=etrace.STEP, module="context"):
+            etrace.detail("Loaded 3 policies", count=3)
     """
     with _tracer.start_as_current_span(name) as otel_span:
         _set_attrs(otel_span, level, module, attrs)
@@ -114,7 +114,7 @@ def span_fn(
 
     Usage::
 
-        @dtrace.span_fn(level=dtrace.STEP, module="orchestrator")
+        @etrace.span_fn(level=etrace.STEP, module="orchestrator")
         async def route(request: RunRequest) -> str:
             ...
     """

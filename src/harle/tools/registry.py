@@ -30,7 +30,7 @@ from typing import Any, Callable
 
 from agents import FunctionTool, function_tool
 
-from harle.debug import dtrace
+from harle.debug import etrace
 from harle.tools.base import BaseToolModule
 from harle.tools.constraints import ConstraintConfig, ConstraintViolation, validate_inputs
 from harle.tools.permissions import OperationMode, check_permission
@@ -49,21 +49,21 @@ class ToolRegistryError(Exception):
 
 
 def _make_traced_tool(tool_name: str, fn: Callable[..., Any], module_name: str) -> Callable[..., Any]:
-    """Wrap a tool function so each invocation is traced with dtrace."""
+    """Wrap a tool function so each invocation is traced with etrace."""
     if asyncio.iscoroutinefunction(fn):
         async def traced_async(*args: Any, **kwargs: Any) -> Any:
-            with dtrace.span(
+            with etrace.span(
                 f"Tool: {tool_name}",
-                level=dtrace.STEP,
+                level=etrace.STEP,
                 module=module_name,
             ):
-                dtrace.detail(
+                etrace.detail(
                     "Tool invoked",
                     module=module_name,
                     tool=tool_name,
                 )
                 result = await fn(*args, **kwargs)
-                dtrace.detail(
+                etrace.detail(
                     "Tool completed",
                     module=module_name,
                     tool=tool_name,
@@ -72,18 +72,18 @@ def _make_traced_tool(tool_name: str, fn: Callable[..., Any], module_name: str) 
         return traced_async  # type: ignore[return-value]
 
     def traced_sync(*args: Any, **kwargs: Any) -> Any:
-        with dtrace.span(
+        with etrace.span(
             f"Tool: {tool_name}",
-            level=dtrace.STEP,
+            level=etrace.STEP,
             module=module_name,
         ):
-            dtrace.detail(
+            etrace.detail(
                 "Tool invoked",
                 module=module_name,
                 tool=tool_name,
             )
             result = fn(*args, **kwargs)
-            dtrace.detail(
+            etrace.detail(
                 "Tool completed",
                 module=module_name,
                 tool=tool_name,
