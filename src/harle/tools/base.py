@@ -50,11 +50,12 @@ class BaseToolModule(ABC):
         ...
 
     @abstractmethod
-    async def initialize(self, config: dict) -> None:
+    async def initialize(self, config: dict, connections: object | None = None) -> None:
         """Set up clients, validate credentials, prepare state.
 
         Args:
             config: Module-specific configuration from ``config.yaml``.
+            connections: Optional connection registry for shared API clients.
         """
         ...
 

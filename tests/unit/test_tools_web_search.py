@@ -199,14 +199,13 @@ class TestWebSearchClientLifecycle:
         with pytest.raises(RuntimeError, match="not open"):
             c._ensure_open()
 
-    def test_open_creates_http(self) -> None:
+    def test_open_requires_connection_managed_http_client(self) -> None:
         c = WebSearchClient(api_key="k")
-        _run(c.open())
-        assert c._http is not None
-        _run(c.close())
+        with pytest.raises(RuntimeError, match="connection-managed"):
+            _run(c.open())
 
     def test_close_clears_http(self) -> None:
-        c = WebSearchClient(api_key="k")
+        c = WebSearchClient(api_key="k", http_client=AsyncMock())
         _run(c.open())
         _run(c.close())
         assert c._http is None
@@ -273,7 +272,7 @@ class TestWebSearchClientTavilySearch:
         assert payload["topic"] == "news"
         assert payload["include_answer"] is True
 
-    def test_search_sends_auth_header(self) -> None:
+    def test_search_does_not_manage_auth_headers_directly(self) -> None:
         c = self._make_client()
         c._http.post = AsyncMock(return_value=_mock_http_response(
             _tavily_search_response(results=[]),
@@ -282,7 +281,7 @@ class TestWebSearchClientTavilySearch:
 
         call_args = c._http.post.call_args
         headers = call_args.kwargs.get("headers") or call_args[1].get("headers")
-        assert headers["Authorization"] == "Bearer tvly-test"
+        assert headers is None
 
     def test_search_uses_default_max_results(self) -> None:
         c = WebSearchClient(api_key="k", max_results=7)
@@ -574,6 +573,14 @@ class TestSearchWebTool:
         payload = c._http.post.call_args.kwargs.get("json") or c._http.post.call_args[1].get("json")
         assert payload["topic"] == "general"
 
+
+    def test_returns_error_when_connection_unavailable(self) -> None:
+        clear_client()
+        result = _run(search_web("python async"))
+        data = json.loads(result)
+        assert data["error"] is True
+        assert "connection error" in data["message"].lower()
+
     def test_permission_attribute(self) -> None:
         assert search_web.permission == "read"
         assert search_web.requires_approval is False
@@ -621,6 +628,14 @@ class TestSearchNewsTool:
     def test_clamps_days_high(self) -> None:
         self._setup_client(_tavily_search_response(results=[]))
         _run(search_news("q", days=9999))
+
+
+    def test_returns_error_when_connection_unavailable(self) -> None:
+        clear_client()
+        result = _run(search_news("AI news"))
+        data = json.loads(result)
+        assert data["error"] is True
+        assert "connection error" in data["message"].lower()
 
     def test_permission_attribute(self) -> None:
         assert search_news.permission == "read"
@@ -680,7 +695,7 @@ class TestFetchPageTool:
         result = _run(fetch_page("https://down.example.com"))
         data = json.loads(result)
         assert data["error"] is True
-        assert "Failed to fetch page" in data["content"]
+        assert "connection error" in data["content"].lower()
 
     def test_permission_attribute(self) -> None:
         assert fetch_page.permission == "read"
@@ -715,42 +730,35 @@ class TestWebSearchModule:
         assert m.default_constraints() is None
 
     @patch("harle.tools.web_search.module.WebSearchClient")
-    def test_initialize_creates_client(self, mock_cls: MagicMock) -> None:
-        mock_instance = MagicMock()
-        mock_instance.open = AsyncMock()
-        mock_cls.return_value = mock_instance
-
+    def test_initialize_requires_connections(self, mock_cls: MagicMock) -> None:
         m = WebSearchModule()
-        _run(m.initialize({
-            "provider": "tavily",
-            "api_key": "tvly-abc",
-            "max_results": 3,
-            "timeout_seconds": 15,
-        }))
-
-        mock_cls.assert_called_once_with(
-            provider="tavily",
-            api_key="tvly-abc",
-            max_results=3,
-            timeout=15.0,
-        )
-        mock_instance.open.assert_awaited_once()
+        with pytest.raises(RuntimeError, match="ConnectionRegistry"):
+            _run(m.initialize({}))
+        mock_cls.assert_not_called()
 
     @patch("harle.tools.web_search.module.WebSearchClient")
-    def test_initialize_default_config(self, mock_cls: MagicMock) -> None:
+    def test_initialize_uses_connection_client(self, mock_cls: MagicMock) -> None:
         mock_instance = MagicMock()
         mock_instance.open = AsyncMock()
         mock_cls.return_value = mock_instance
 
-        m = WebSearchModule()
-        _run(m.initialize({}))
+        mock_http = AsyncMock()
+        mock_connection = MagicMock()
+        mock_connection.get_client.return_value = mock_http
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_connection
 
+        m = WebSearchModule()
+        _run(m.initialize({"connection": "tavily", "max_results": 3}, connections=mock_registry))
+
+        mock_registry.get.assert_called_once_with("tavily")
+        mock_connection.get_client.assert_called_once_with()
         mock_cls.assert_called_once_with(
             provider="tavily",
-            api_key="",
-            max_results=5,
-            timeout=30.0,
+            max_results=3,
+            http_client=mock_http,
         )
+        mock_instance.open.assert_awaited_once()
 
     @patch("harle.tools.web_search.module.WebSearchClient")
     def test_initialize_sets_module_client(self, mock_cls: MagicMock) -> None:
@@ -758,8 +766,13 @@ class TestWebSearchModule:
         mock_instance.open = AsyncMock()
         mock_cls.return_value = mock_instance
 
+        mock_connection = MagicMock()
+        mock_connection.get_client.return_value = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_connection
+
         m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        _run(m.initialize({"connection": "tavily"}, connections=mock_registry))
 
         assert get_client() is mock_instance
 
@@ -770,8 +783,13 @@ class TestWebSearchModule:
         mock_instance.close = AsyncMock()
         mock_cls.return_value = mock_instance
 
+        mock_connection = MagicMock()
+        mock_connection.get_client.return_value = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_connection
+
         m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        _run(m.initialize({"connection": "tavily"}, connections=mock_registry))
         _run(m.shutdown())
 
         mock_instance.close.assert_awaited_once()
@@ -787,27 +805,25 @@ class TestWebSearchModule:
         assert _run(m.health_check()) is False
 
     @patch("harle.tools.web_search.module.WebSearchClient")
-    def test_health_check_delegates_to_client(self, mock_cls: MagicMock) -> None:
+    def test_health_check_delegates_to_connection(self, mock_cls: MagicMock) -> None:
         mock_instance = MagicMock()
         mock_instance.open = AsyncMock()
-        mock_instance.verify_credentials = AsyncMock(return_value=True)
         mock_cls.return_value = mock_instance
 
+        status = MagicMock()
+        status.healthy = True
+
+        mock_connection = MagicMock()
+        mock_connection.get_client.return_value = AsyncMock()
+        mock_connection.health_check = AsyncMock(return_value=status)
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_connection
+
         m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        _run(m.initialize({"connection": "tavily"}, connections=mock_registry))
+
         assert _run(m.health_check()) is True
-        mock_instance.verify_credentials.assert_awaited_once()
-
-    @patch("harle.tools.web_search.module.WebSearchClient")
-    def test_health_check_returns_false_on_bad_creds(self, mock_cls: MagicMock) -> None:
-        mock_instance = MagicMock()
-        mock_instance.open = AsyncMock()
-        mock_instance.verify_credentials = AsyncMock(return_value=False)
-        mock_cls.return_value = mock_instance
-
-        m = WebSearchModule()
-        _run(m.initialize({"api_key": "bad"}))
-        assert _run(m.health_check()) is False
+        mock_connection.health_check.assert_awaited_once()
 
 
 # ===================================================================
@@ -818,16 +834,25 @@ class TestWebSearchModule:
 class TestRegistryIntegration:
     """Tests for registering WebSearchModule with the ToolRegistry."""
 
-    @patch("harle.tools.web_search.module.WebSearchClient")
-    def test_register_and_list_tools(self, mock_cls: MagicMock) -> None:
-        from harle.tools.registry import ToolRegistry
-
+    def _setup_module(self, mock_cls: MagicMock) -> WebSearchModule:
         mock_instance = MagicMock()
         mock_instance.open = AsyncMock()
         mock_cls.return_value = mock_instance
 
+        mock_connection = MagicMock()
+        mock_connection.get_client.return_value = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_connection
+
         m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        _run(m.initialize({"connection": "tavily"}, connections=mock_registry))
+        return m
+
+    @patch("harle.tools.web_search.module.WebSearchClient")
+    def test_register_and_list_tools(self, mock_cls: MagicMock) -> None:
+        from harle.tools.registry import ToolRegistry
+
+        m = self._setup_module(mock_cls)
 
         registry = ToolRegistry()
         registry.register_module(m)
@@ -841,12 +866,7 @@ class TestRegistryIntegration:
     def test_get_agent_tools(self, mock_cls: MagicMock) -> None:
         from harle.tools.registry import ToolRegistry
 
-        mock_instance = MagicMock()
-        mock_instance.open = AsyncMock()
-        mock_cls.return_value = mock_instance
-
-        m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        m = self._setup_module(mock_cls)
 
         registry = ToolRegistry()
         registry.register_module(m)
@@ -858,12 +878,7 @@ class TestRegistryIntegration:
     def test_module_for_tool(self, mock_cls: MagicMock) -> None:
         from harle.tools.registry import ToolRegistry
 
-        mock_instance = MagicMock()
-        mock_instance.open = AsyncMock()
-        mock_cls.return_value = mock_instance
-
-        m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        m = self._setup_module(mock_cls)
 
         registry = ToolRegistry()
         registry.register_module(m)
@@ -876,12 +891,7 @@ class TestRegistryIntegration:
     def test_no_default_constraints_yields_empty(self, mock_cls: MagicMock) -> None:
         from harle.tools.registry import ToolRegistry
 
-        mock_instance = MagicMock()
-        mock_instance.open = AsyncMock()
-        mock_cls.return_value = mock_instance
-
-        m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        m = self._setup_module(mock_cls)
 
         registry = ToolRegistry()
         registry.register_module(m)
@@ -898,8 +908,13 @@ class TestRegistryIntegration:
         mock_instance.close = AsyncMock()
         mock_cls.return_value = mock_instance
 
+        mock_connection = MagicMock()
+        mock_connection.get_client.return_value = AsyncMock()
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = mock_connection
+
         m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        _run(m.initialize({"connection": "tavily"}, connections=mock_registry))
 
         registry = ToolRegistry()
         registry.register_module(m)
@@ -911,12 +926,7 @@ class TestRegistryIntegration:
     def test_builtin_skill_loads(self, mock_cls: MagicMock) -> None:
         from harle.tools.registry import ToolRegistry
 
-        mock_instance = MagicMock()
-        mock_instance.open = AsyncMock()
-        mock_cls.return_value = mock_instance
-
-        m = WebSearchModule()
-        _run(m.initialize({"api_key": "k"}))
+        m = self._setup_module(mock_cls)
 
         registry = ToolRegistry()
         registry.register_module(m, skill_names=["research"])
