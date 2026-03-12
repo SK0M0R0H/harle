@@ -28,7 +28,7 @@ Open **Settings → Secrets and variables → Actions → New repository secret*
 - `TRELLO_API_KEY` (live E2E for Trello module)
 - `TRELLO_API_TOKEN` (live E2E for Trello module)
 - `TAVILY_API_KEY` (live E2E for web search module)
-- `CODECOV_TOKEN` (coverage upload)
+- `CODECOV_TOKEN` (optional for Codecov, depending on repository visibility/settings)
 
 ### Optional: environment-scoped secrets
 
@@ -77,7 +77,7 @@ This repository now includes workflow files under `.github/workflows/` aligned w
 ## 5) Configure Codecov (recommended)
 
 1. Install/authorize Codecov for the repository.
-2. Ensure `CODECOV_TOKEN` is present in repository secrets.
+2. Add `CODECOV_TOKEN` if your Codecov setup requires it (commonly private repositories).
 3. In Codecov settings, enable PR comments and status checks.
 4. Set target coverage policy (initial recommendation from strategy: fail under 70% in CI).
 
