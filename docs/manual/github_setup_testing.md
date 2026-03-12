@@ -65,10 +65,11 @@ Add these checks as required once workflows exist:
 This repository now includes workflow files under `.github/workflows/` aligned with the testing strategy:
 
 - `ci.yml` for push/PR jobs:
-  - lint/type checks (`ruff`, `mypy`)
-  - unit tests
-  - integration tests on PR
-  - coverage + Codecov upload
+  - lint/format checks with `ruff` (currently informational while baseline lint debt is reduced)
+  - smoke unit tests (`test_config`, `test_models`, `test_search_engine`, `test_api`)
+  - integration tests on PR from `tests/integration` (cleanly skipped when directory/files are absent)
+  - smoke-suite coverage + Codecov upload
+  - Go CLI checks (`go test`, `go vet`)
 - `nightly.yml` for scheduled jobs:
   - emulated E2E tests
   - dependency audit (`pip-audit`)
@@ -91,9 +92,9 @@ After these workflow files are on your default branch, verify in **Actions** tab
 
 ## 7) Operating model (recommended)
 
-- **Every push:** lint + unit tests + security scan.
-- **Every PR to `main`:** all push checks + integration + coverage gate.
-- **Nightly:** emulated E2E + dependency audit.
-- **Pre-release/manual:** full E2E with live dependencies and release build steps.
+- **Every push:** lint/format visibility + smoke unit tests + CLI checks.
+- **Every PR to `main`:** all push checks + integration from `tests/integration` (or skip when absent) + smoke coverage upload.
+- **Nightly:** emulated E2E from `tests/e2e` (or skip when absent) + dependency audit.
+- **Pre-release/manual:** expand toward full E2E with live dependencies and stricter quality gates as test layers mature.
 
 This cadence matches the four-layer testing model and keeps fast feedback on PRs while reserving expensive checks for nightly/release windows.

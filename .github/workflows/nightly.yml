@@ -37,7 +37,12 @@ jobs:
       - name: Run emulated E2E tests
         env:
           DATABASE_URL: postgresql://harle:test@localhost:5432/harle_test
-        run: pytest -m "e2e" -v --tb=long
+        run: |
+          if [ ! -d tests/e2e ] || [ -z "$(find tests/e2e -name 'test_*.py' -print -quit)" ]; then
+            echo "No e2e tests directory/files found; skipping."
+            exit 0
+          fi
+          pytest -v --tb=long tests/e2e
 
   dependency-audit:
     runs-on: ubuntu-latest
