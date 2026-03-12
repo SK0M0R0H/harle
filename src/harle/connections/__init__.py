@@ -5,6 +5,7 @@ from harle.connections.exceptions import ConnectionConfigError, ConnectionNotFou
 from harle.connections.rate_limiter import RateLimitConfig, RateLimiter
 from harle.connections.registry import ConnectionRegistry
 from harle.connections.tavily import TavilyConnection
+from harle.connections.trello import TrelloConnection
 
 __all__ = [
     "BaseConnection",
@@ -15,4 +16,5 @@ __all__ = [
     "RateLimiter",
     "ConnectionRegistry",
     "TavilyConnection",
+    "TrelloConnection",
 ]

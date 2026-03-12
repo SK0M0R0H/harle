@@ -1033,3 +1033,42 @@ The Connections Layer is a small, focused piece of infrastructure. The bulk of t
 | **CLI** | The CLI gains a `connections` command group for inspecting connection status. This provides a unified view of all external service health. |
 | **Configuration** | The `connections` section in `config.yaml` becomes the single source of truth for external service credentials. `tool_modules` and `import_sources` sections reference connections by name, not by credential values. |
 | **Vault Capture Module** | Does not use connections. Vault capture interacts with the user and writes to the local vault — no external APIs. |
+
+---
+
+## As-Built: Trello Connection (`TrelloConnection`)
+
+Harle now includes a concrete Trello connection implementation at `src/harle/connections/trello.py` and exports it from `harle.connections`.
+
+### Config keys
+
+`TrelloConnection.initialize(config)` expects:
+
+- `api_key` (**required**) — Trello API key.
+- `api_token` (**required**) — Trello API token.
+- `timeout_seconds` (*optional*, default `30`) — HTTP timeout for the shared client.
+
+If `api_key` or `api_token` is missing/blank, initialization raises `ConnectionConfigError`.
+
+### Lifecycle and client ownership
+
+- **Initialize:** creates a shared `httpx.AsyncClient` with:
+  - `base_url="https://api.trello.com/1"`
+  - `params={"key": <api_key>, "token": <api_token>}`
+- **get_client():** returns the initialized authenticated client.
+- **shutdown():** closes the shared client with `aclose()` and clears local reference.
+
+This matches the Connections Layer contract used by other service connections (initialize → health check/use → shutdown).
+
+### Health check endpoint
+
+`health_check()` performs a lightweight authenticated read call:
+
+- `GET /members/me/boards?limit=1`
+
+On success, it returns `ConnectionStatus(healthy=True, service_name="Trello", ...)`; on exception, it returns `healthy=False` and includes the failure message/latency.
+
+### Integration points
+
+- Tool bootstrap: see [tools.md](./tools.md) for `TrelloModule` registration and read-only tools.
+- Multi-step reasoning skills: Trello module skills are injected into orchestration instructions when Trello tools are active; see [multi_step_reasoning.md](./multi_step_reasoning.md).
