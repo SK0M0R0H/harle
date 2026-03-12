@@ -65,7 +65,7 @@ class VaultModule(BaseToolModule):
     def description(self) -> str:
         return "Search and read files from the user's dataset"
 
-    async def initialize(self, config: dict) -> None:
+    async def initialize(self, config: dict, connections: object | None = None) -> None:
         """Expose search engine and dataset reader to tool functions.
 
         Args:

@@ -19,6 +19,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Awaitable, TypeVar
 
+from harle.connections import ConnectionRegistry, TavilyConnection
 from harle.tools.permissions import OperationMode
 from harle.tools.registry import ToolRegistry
 
@@ -79,12 +80,14 @@ def build_tool_registry(
     registry = ToolRegistry()
     has_modules = False
 
+    connections = _build_connections()
+
     has_modules |= _register_vault(
         registry,
         search_engine=search_engine,
         dataset_reader=dataset_reader,
     )
-    has_modules |= _register_web_search(registry)
+    has_modules |= _register_web_search(registry, connections=connections)
 
     if not has_modules:
         return None
@@ -97,6 +100,18 @@ def build_tool_registry(
     )
     return registry
 
+
+
+def _build_connections() -> ConnectionRegistry | None:
+    """Build the shared connection registry for enabled services."""
+    tavily_key = os.getenv("TAVILY_API_KEY", "")
+    if not tavily_key:
+        return None
+
+    registry = ConnectionRegistry()
+    _run_coro_sync(registry.register(TavilyConnection(), {"api_key": tavily_key}))
+    logger.info("Connection registered: tavily")
+    return registry
 
 # ── Per-module registration helpers ──────────────────────────────────
 
@@ -123,10 +138,13 @@ def _register_vault(
     return True
 
 
-def _register_web_search(registry: ToolRegistry) -> bool:
+def _register_web_search(
+    registry: ToolRegistry,
+    *,
+    connections: ConnectionRegistry | None,
+) -> bool:
     """Register the web search module if ``TAVILY_API_KEY`` is set."""
-    tavily_key = os.getenv("TAVILY_API_KEY", "")
-    if not tavily_key:
+    if connections is None or not connections.has("tavily"):
         return False
 
     from harle.tools.web_search.module import WebSearchModule
@@ -135,8 +153,8 @@ def _register_web_search(registry: ToolRegistry) -> bool:
     _run_coro_sync(
         module.initialize({
             "provider": "tavily",
-            "api_key": tavily_key,
-        })
+            "connection": "tavily",
+        }, connections=connections)
     )
     registry.register_module(
         module,
