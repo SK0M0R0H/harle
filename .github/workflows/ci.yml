@@ -103,12 +103,13 @@ jobs:
           pytest
           --cov=harle
           --cov-report=xml
-          --cov-fail-under=0
+          --cov-fail-under=50
           tests/unit
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml
           fail_ci_if_error: false
 
