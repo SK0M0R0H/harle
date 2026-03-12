@@ -15,19 +15,13 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from harle.dataset.writer import write_log_file
+from harle.dataset.writer import log_dir_for, write_log_file
+from harle.debug import etrace
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-LOGS_DIR = "logs"
-
-
-def _log_dir_for(timestamp: datetime) -> str:
-    """Return vault-relative directory logs/YYYY/MM for a given timestamp."""
-    return f"{LOGS_DIR}/{timestamp.year:04d}/{timestamp.month:02d}"
 
 
 def _frontmatter_yaml(
@@ -127,12 +121,23 @@ def log_run_to_vault(
         logger.warning("Dataset path does not exist: %s; skipping run log files", root)
         return None, None
 
-    log_dir = _log_dir_for(timestamp)
+    log_dir = log_dir_for(timestamp)
     result_rel = f"{log_dir}/{run_id}_result.md"
     result_content = _result_content(
         run_id, timestamp, agent, status, context_scope, result_body
     )
     write_log_file(root, result_rel, result_content)
+
+    etrace.step(
+        "Run logged to vault",
+        module="run_logger",
+        result_path=result_rel,
+    )
+    etrace.detail(
+        "File paths written",
+        module="run_logger",
+        result_path=result_rel,
+    )
 
     context_path: str | None = None
     if store_context and context_body:
@@ -142,5 +147,10 @@ def log_run_to_vault(
         )
         write_log_file(root, context_rel, context_content)
         context_path = context_rel
+        etrace.detail(
+            "Context file written",
+            module="run_logger",
+            context_path=context_rel,
+        )
 
     return result_rel, context_path

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from harle.debug import etrace
 from harle.tools.trello.client import TrelloClientError, get_client
 
 
@@ -17,6 +18,12 @@ async def trello_list_boards() -> str:
     try:
         client = get_client()
         boards = await client.list_boards()
+        etrace.detail(
+            "Trello boards listed",
+            module="trello",
+            tool="trello_list_boards",
+            boards_count=len(boards),
+        )
         return json.dumps({
             "boards": [
                 {
@@ -29,6 +36,12 @@ async def trello_list_boards() -> str:
             ],
         }, ensure_ascii=False)
     except (TrelloClientError, RuntimeError) as exc:
+        etrace.detail(
+            "Trello connection error",
+            module="trello",
+            tool="trello_list_boards",
+            error=str(exc),
+        )
         return json.dumps({
             "boards": [],
             "error": True,
@@ -51,6 +64,11 @@ async def trello_list_cards(board_id: str) -> str:
         ``id``, ``name``, ``url``, ``closed``, ``id_list``, and ``due``.
     """
     if not board_id.strip():
+        etrace.detail(
+            "board_id missing",
+            module="trello",
+            tool="trello_list_cards",
+        )
         return json.dumps({
             "board_id": board_id,
             "cards": [],
@@ -60,9 +78,17 @@ async def trello_list_cards(board_id: str) -> str:
 
     try:
         client = get_client()
-        cards = await client.list_cards(board_id.strip())
+        bid = board_id.strip()
+        cards = await client.list_cards(bid)
+        etrace.detail(
+            "Trello cards listed",
+            module="trello",
+            tool="trello_list_cards",
+            board_id=bid,
+            cards_count=len(cards),
+        )
         return json.dumps({
-            "board_id": board_id.strip(),
+            "board_id": bid,
             "cards": [
                 {
                     "id": c.id,
@@ -76,6 +102,13 @@ async def trello_list_cards(board_id: str) -> str:
             ],
         }, ensure_ascii=False)
     except (TrelloClientError, RuntimeError) as exc:
+        etrace.detail(
+            "Trello connection error",
+            module="trello",
+            tool="trello_list_cards",
+            board_id=board_id.strip(),
+            error=str(exc),
+        )
         return json.dumps({
             "board_id": board_id.strip(),
             "cards": [],

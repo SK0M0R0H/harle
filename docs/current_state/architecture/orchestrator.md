@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Current State"
 tags: [orchestrator, current-state, architecture, fastapi, context-assembly, implementation-status]
 context: global
-last_updated: 2026-03-07
+last_updated: 2026-03-12
 summary: "Tracks what the Orchestrator implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -83,6 +83,10 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 - The orchestrator receives a `ToolRegistry`; it calls `list_all_tools()`, `get_agent_tools(...)`, and `get_skills_for_tools(...)`.
 - Instructions include tool skills and a short “thinking before tools” instruction. Tools are passed to the SDK Agent; execution goes through the registry (constraints and permissions exist in the tools layer; see tools current-state doc).
+
+### 7. Debug tracing (Phase 1)
+
+- `run()` and `chat()` are wrapped in `etrace.span` root spans (`handle_request` / `handle_chat`) with `run_id` attributes. STEP-level entries are emitted for context assembly and agent execution completion. See [execution tracing current-state](../execution_tracing.md) for the full execution tracing module status.
 
 ---
 

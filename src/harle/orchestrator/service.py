@@ -27,6 +27,7 @@ from harle.api.models import RunRequest, RunResponse
 from harle.config import PROVIDER_OPENAI, Settings
 from harle.context.assembler import ContextAssembler
 from harle.db.connection import Database
+from harle.debug import etrace
 from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
 from harle.tools.registry import ToolRegistry
 
@@ -163,6 +164,14 @@ class OrchestratorService:
         """
         from agents import Agent, MaxTurnsExceeded, Runner
 
+        etrace.detail(
+            "Agent execution started",
+            module="orchestrator",
+            model=self.model,
+            max_turns=self.max_iterations,
+            has_tools=bool(self.tool_registry),
+        )
+
         tools = []
         if self.tool_registry:
             all_tool_names = self.tool_registry.list_all_tools()
@@ -261,91 +270,115 @@ class OrchestratorService:
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         started_at = datetime.now(timezone.utc)
 
-        system_prompt: str | None = None
-        package = None
-        if self.context_assembler is not None:
-            package = self.context_assembler.assemble(
-                message=request.message,
-                context=request.context,
-                agent_role=DEFAULT_AGENT_ROLE,
-            )
-            system_prompt = package.system_prompt
-            logger.info(
-                "Context assembled: %d tokens, %d search results, "
-                "%d P0 files, %d budget remaining",
-                package.total_tokens,
-                len(package.search_results),
-                len(package.p0_files),
-                package.budget_remaining,
-            )
-
-        agent_result = self._execute(
-            user_message=request.message,
-            context=request.context,
-            conversation_id=request.conversation_id,
-            system_prompt=system_prompt,
-        )
-        result_text = agent_result.text
-
-        ended_at = datetime.now(timezone.utc)
-        duration_ms = int((ended_at - started_at).total_seconds() * 1000)
-        result_summary = (
-            result_text[:RESULT_SUMMARY_MAX_CHARS] + "..."
-            if len(result_text) > RESULT_SUMMARY_MAX_CHARS
-            else result_text
-        ) if result_text else None
-        files_used = (
-            _files_used_from_package(package.p0_files, package.search_results)
-            if package
-            else None
-        )
-        result_path: str | None = None
-        context_path: str | None = None
-        if self.dataset_path:
-            from harle.logging.run_logger import log_run_to_vault
-            result_path, context_path = log_run_to_vault(
-                self.dataset_path,
-                run_id=run_id,
-                timestamp=ended_at,
+        with etrace.span("handle_request", level=etrace.STEP, module="orchestrator", run_id=run_id):
+            etrace.step(
+                "Routed to agent",
+                module="orchestrator",
                 agent=DEFAULT_AGENT_ROLE,
-                status="completed",
-                context_scope=request.context,
-                result_body=result_text,
-                context_body=system_prompt,
-                store_context=self.run_log_store_context,
+                routing_method="default",
             )
-            if not result_path:
-                result_path = None
 
-        if self.db is not None:
-            try:
-                from harle.db.runs import create_run
-                with self.db.session() as session:
-                    create_run(
-                        session,
-                        run_id=run_id,
-                        timestamp=ended_at,
-                        user_request=request.message,
-                        context_scope=request.context,
-                        agent=DEFAULT_AGENT_ROLE,
-                        status="completed",
-                        files_used=files_used,
-                        tools_called=agent_result.tools_called or None,
-                        model_used=self.model if self.use_agent_runner else None,
-                        result_summary=result_summary,
-                        result_path=result_path,
-                        context_path=context_path,
-                        conversation_id=request.conversation_id,
-                        duration_ms=duration_ms,
-                    )
-            except Exception as e:
-                logger.warning("Could not persist run record: %s", e)
+            system_prompt: str | None = None
+            package = None
+            if self.context_assembler is not None:
+                package = self.context_assembler.assemble(
+                    message=request.message,
+                    context=request.context,
+                    agent_role=DEFAULT_AGENT_ROLE,
+                )
+                system_prompt = package.system_prompt
+                logger.info(
+                    "Context assembled: %d tokens, %d search results, "
+                    "%d P0 files, %d budget remaining",
+                    package.total_tokens,
+                    len(package.search_results),
+                    len(package.p0_files),
+                    package.budget_remaining,
+                )
+                etrace.step(
+                    "Context assembled",
+                    module="orchestrator",
+                    tokens=package.total_tokens,
+                    search_results=len(package.search_results),
+                    p0_files=len(package.p0_files),
+                    budget_remaining=package.budget_remaining,
+                )
 
-        if agent_result.tools_called:
-            logger.info(
-                "Run %s used %d turn(s), tools: %s",
-                run_id, agent_result.turns_used, agent_result.tools_called,
+            agent_result = self._execute(
+                user_message=request.message,
+                context=request.context,
+                conversation_id=request.conversation_id,
+                system_prompt=system_prompt,
             )
+            result_text = agent_result.text
+            etrace.step(
+                "Agent execution complete",
+                module="orchestrator",
+                tools_called=agent_result.tools_called,
+                turns_used=agent_result.turns_used,
+            )
+
+            ended_at = datetime.now(timezone.utc)
+            duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+            result_summary = (
+                result_text[:RESULT_SUMMARY_MAX_CHARS] + "..."
+                if len(result_text) > RESULT_SUMMARY_MAX_CHARS
+                else result_text
+            ) if result_text else None
+            files_used = (
+                _files_used_from_package(package.p0_files, package.search_results)
+                if package
+                else None
+            )
+            result_path: str | None = None
+            context_path: str | None = None
+            if self.dataset_path:
+                from harle.logging.run_logger import log_run_to_vault
+                result_path, context_path = log_run_to_vault(
+                    self.dataset_path,
+                    run_id=run_id,
+                    timestamp=ended_at,
+                    agent=DEFAULT_AGENT_ROLE,
+                    status="completed",
+                    context_scope=request.context,
+                    result_body=result_text,
+                    context_body=system_prompt,
+                    store_context=self.run_log_store_context,
+                )
+                if not result_path:
+                    result_path = None
+
+            if self.db is not None:
+                try:
+                    from harle.db.runs import create_run
+                    with self.db.session() as session:
+                        create_run(
+                            session,
+                            run_id=run_id,
+                            timestamp=ended_at,
+                            user_request=request.message,
+                            context_scope=request.context,
+                            agent=DEFAULT_AGENT_ROLE,
+                            status="completed",
+                            files_used=files_used,
+                            tools_called=agent_result.tools_called or None,
+                            model_used=self.model if self.use_agent_runner else None,
+                            result_summary=result_summary,
+                            result_path=result_path,
+                            context_path=context_path,
+                            conversation_id=request.conversation_id,
+                            duration_ms=duration_ms,
+                        )
+                except Exception as e:
+                    logger.warning("Could not persist run record: %s", e)
+
+            etrace.step("Run logged", module="orchestrator")
+
+            if agent_result.tools_called:
+                logger.info(
+                    "Run %s used %d turn(s), tools: %s",
+                    run_id, agent_result.turns_used, agent_result.tools_called,
+                )
 
         return RunResponse(
             run_id=run_id,
@@ -399,147 +432,170 @@ class OrchestratorService:
         conv_id = request.conversation_id
         started_at = datetime.now(timezone.utc)
 
-        # ── load or create conversation ──────────────────────────────
-        conversation_history: list[dict[str, str]] | None = None
-
-        if conv_id is not None:
-            with self.db.session() as session:
-                conv = get_conversation(session, conv_id)
-            if conv is None:
-                raise ValueError(
-                    f"Conversation {conv_id!r} not found."
-                )
-            with self.db.session() as session:
-                messages = get_recent_messages(session, conv_id)
-                conversation_history = [
-                    {"role": m.role, "content": m.content}
-                    for m in messages
-                ]
-        else:
-            conv_id = f"conv_{uuid.uuid4().hex[:12]}"
-            with self.db.session() as session:
-                create_conversation(
-                    session,
-                    conversation_id=conv_id,
-                    context_scope=request.context,
-                    agent_role=DEFAULT_AGENT_ROLE,
-                )
-
-        # ── context assembly ─────────────────────────────────────────
-        system_prompt: str | None = None
-        package = None
-        if self.context_assembler is not None:
-            package = self.context_assembler.assemble(
-                message=request.message,
-                context=request.context,
-                agent_role=DEFAULT_AGENT_ROLE,
-                conversation_history=conversation_history,
-            )
-            system_prompt = package.system_prompt
-            logger.info(
-                "Context assembled: %d tokens, %d search results, "
-                "%d P0 files, %d conversation messages, "
-                "%d budget remaining",
-                package.total_tokens,
-                len(package.search_results),
-                len(package.p0_files),
-                package.conversation_messages_included,
-                package.budget_remaining,
-            )
-
-        # ── execution ────────────────────────────────────────────────
-        agent_result = self._execute(
-            user_message=request.message,
-            context=request.context,
-            conversation_id=conv_id,
-            system_prompt=system_prompt,
-        )
-        result_text = agent_result.text
-
-        ended_at = datetime.now(timezone.utc)
-        duration_ms = int((ended_at - started_at).total_seconds() * 1000)
-        result_summary = (
-            result_text[:RESULT_SUMMARY_MAX_CHARS] + "..."
-            if len(result_text) > RESULT_SUMMARY_MAX_CHARS
-            else result_text
-        ) if result_text else None
-        files_used = (
-            _files_used_from_package(package.p0_files, package.search_results)
-            if package
-            else None
-        )
-        result_path_v: str | None = None
-        context_path_v: str | None = None
-        if self.dataset_path:
-            from harle.logging.run_logger import log_run_to_vault
-            rp, cp = log_run_to_vault(
-                self.dataset_path,
-                run_id=run_id,
-                timestamp=ended_at,
+        with etrace.span("handle_chat", level=etrace.STEP, module="orchestrator", run_id=run_id):
+            etrace.step(
+                "Routed to agent",
+                module="orchestrator",
                 agent=DEFAULT_AGENT_ROLE,
-                status="completed",
-                context_scope=request.context,
-                result_body=result_text,
-                context_body=system_prompt,
-                store_context=self.run_log_store_context,
+                routing_method="default",
             )
-            if rp:
-                result_path_v = rp
-            if cp:
-                context_path_v = cp
 
-        # ── persist messages ────────────────────────────────────────
-        with self.db.session() as session:
-            add_message(
-                session,
-                conversation_id=conv_id,
-                role="user",
-                content=request.message,
-                run_id=run_id,
-            )
-            add_message(
-                session,
-                conversation_id=conv_id,
-                role="assistant",
-                content=result_text,
-                run_id=run_id,
-            )
-            touch_conversation(session, conv_id)
+            # ── load or create conversation ──────────────────────────
+            conversation_history: list[dict[str, str]] | None = None
 
-        # ── persist run ──────────────────────────────────────────────
-        try:
-            from harle.db.runs import create_run
-            with self.db.session() as session:
-                create_run(
-                    session,
+            if conv_id is not None:
+                with self.db.session() as session:
+                    conv = get_conversation(session, conv_id)
+                if conv is None:
+                    raise ValueError(
+                        f"Conversation {conv_id!r} not found."
+                    )
+                with self.db.session() as session:
+                    messages = get_recent_messages(session, conv_id)
+                    conversation_history = [
+                        {"role": m.role, "content": m.content}
+                        for m in messages
+                    ]
+            else:
+                conv_id = f"conv_{uuid.uuid4().hex[:12]}"
+                with self.db.session() as session:
+                    create_conversation(
+                        session,
+                        conversation_id=conv_id,
+                        context_scope=request.context,
+                        agent_role=DEFAULT_AGENT_ROLE,
+                    )
+
+            # ── context assembly ─────────────────────────────────────
+            system_prompt: str | None = None
+            package = None
+            if self.context_assembler is not None:
+                package = self.context_assembler.assemble(
+                    message=request.message,
+                    context=request.context,
+                    agent_role=DEFAULT_AGENT_ROLE,
+                    conversation_history=conversation_history,
+                )
+                system_prompt = package.system_prompt
+                logger.info(
+                    "Context assembled: %d tokens, %d search results, "
+                    "%d P0 files, %d conversation messages, "
+                    "%d budget remaining",
+                    package.total_tokens,
+                    len(package.search_results),
+                    len(package.p0_files),
+                    package.conversation_messages_included,
+                    package.budget_remaining,
+                )
+                etrace.step(
+                    "Context assembled",
+                    module="orchestrator",
+                    tokens=package.total_tokens,
+                    search_results=len(package.search_results),
+                    conversation_messages=package.conversation_messages_included,
+                )
+
+            # ── execution ────────────────────────────────────────────
+            agent_result = self._execute(
+                user_message=request.message,
+                context=request.context,
+                conversation_id=conv_id,
+                system_prompt=system_prompt,
+            )
+            result_text = agent_result.text
+            etrace.step(
+                "Agent execution complete",
+                module="orchestrator",
+                tools_called=agent_result.tools_called,
+                turns_used=agent_result.turns_used,
+            )
+
+            ended_at = datetime.now(timezone.utc)
+            duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+            result_summary = (
+                result_text[:RESULT_SUMMARY_MAX_CHARS] + "..."
+                if len(result_text) > RESULT_SUMMARY_MAX_CHARS
+                else result_text
+            ) if result_text else None
+            files_used = (
+                _files_used_from_package(package.p0_files, package.search_results)
+                if package
+                else None
+            )
+            result_path_v: str | None = None
+            context_path_v: str | None = None
+            if self.dataset_path:
+                from harle.logging.run_logger import log_run_to_vault
+                rp, cp = log_run_to_vault(
+                    self.dataset_path,
                     run_id=run_id,
                     timestamp=ended_at,
-                    user_request=request.message,
-                    context_scope=request.context,
                     agent=DEFAULT_AGENT_ROLE,
                     status="completed",
-                    files_used=files_used,
-                    tools_called=agent_result.tools_called or None,
-                    model_used=self.model if self.use_agent_runner else None,
-                    result_summary=result_summary,
-                    result_path=result_path_v,
-                    context_path=context_path_v,
-                    conversation_id=conv_id,
-                    duration_ms=duration_ms,
+                    context_scope=request.context,
+                    result_body=result_text,
+                    context_body=system_prompt,
+                    store_context=self.run_log_store_context,
                 )
-        except Exception as e:
-            logger.warning("Could not persist run record: %s", e)
-            try:
-                with self.db.session() as session:
-                    session.rollback()
-            except Exception:  # noqa: S110
-                pass
+                if rp:
+                    result_path_v = rp
+                if cp:
+                    context_path_v = cp
 
-        if agent_result.tools_called:
-            logger.info(
-                "Chat run %s used %d turn(s), tools: %s",
-                run_id, agent_result.turns_used, agent_result.tools_called,
-            )
+            # ── persist messages ────────────────────────────────────
+            with self.db.session() as session:
+                add_message(
+                    session,
+                    conversation_id=conv_id,
+                    role="user",
+                    content=request.message,
+                    run_id=run_id,
+                )
+                add_message(
+                    session,
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=result_text,
+                    run_id=run_id,
+                )
+                touch_conversation(session, conv_id)
+
+            # ── persist run ──────────────────────────────────────────
+            try:
+                from harle.db.runs import create_run
+                with self.db.session() as session:
+                    create_run(
+                        session,
+                        run_id=run_id,
+                        timestamp=ended_at,
+                        user_request=request.message,
+                        context_scope=request.context,
+                        agent=DEFAULT_AGENT_ROLE,
+                        status="completed",
+                        files_used=files_used,
+                        tools_called=agent_result.tools_called or None,
+                        model_used=self.model if self.use_agent_runner else None,
+                        result_summary=result_summary,
+                        result_path=result_path_v,
+                        context_path=context_path_v,
+                        conversation_id=conv_id,
+                        duration_ms=duration_ms,
+                    )
+            except Exception as e:
+                logger.warning("Could not persist run record: %s", e)
+                try:
+                    with self.db.session() as session:
+                        session.rollback()
+                except Exception:  # noqa: S110
+                    pass
+
+            etrace.step("Run logged", module="orchestrator")
+
+            if agent_result.tools_called:
+                logger.info(
+                    "Chat run %s used %d turn(s), tools: %s",
+                    run_id, agent_result.turns_used, agent_result.tools_called,
+                )
 
         return RunResponse(
             run_id=run_id,

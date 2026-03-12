@@ -24,11 +24,15 @@ Typical lifecycle::
 
 from __future__ import annotations
 
+import asyncio
+import functools
+import inspect
 import logging
 from typing import Any, Callable
 
 from agents import FunctionTool, function_tool
 
+from harle.debug import etrace
 from harle.tools.base import BaseToolModule
 from harle.tools.constraints import ConstraintConfig, ConstraintViolation, validate_inputs
 from harle.tools.permissions import OperationMode, check_permission
@@ -44,6 +48,64 @@ logger = logging.getLogger(__name__)
 
 class ToolRegistryError(Exception):
     """Raised for registry-level errors (e.g. naming conflicts)."""
+
+
+def _make_traced_tool(tool_name: str, fn: Callable[..., Any], module_name: str) -> Callable[..., Any]:
+    """Wrap a tool function so each invocation is traced with etrace.
+
+    The wrapper preserves fn's __name__, __doc__, and signature so that
+    the agents SDK can build the correct tool schema and description.
+    """
+    if asyncio.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def traced_async(*args: Any, **kwargs: Any) -> Any:
+            with etrace.span(
+                f"Tool: {tool_name}",
+                level=etrace.STEP,
+                module=module_name,
+            ):
+                etrace.detail(
+                    "Tool invoked",
+                    module=module_name,
+                    tool=tool_name,
+                )
+                result = await fn(*args, **kwargs)
+                etrace.detail(
+                    "Tool completed",
+                    module=module_name,
+                    tool=tool_name,
+                )
+                return result
+        try:
+            traced_async.__signature__ = inspect.signature(fn)
+        except (ValueError, TypeError):
+            pass
+        return traced_async  # type: ignore[return-value]
+
+    @functools.wraps(fn)
+    def traced_sync(*args: Any, **kwargs: Any) -> Any:
+        with etrace.span(
+            f"Tool: {tool_name}",
+            level=etrace.STEP,
+            module=module_name,
+        ):
+            etrace.detail(
+                "Tool invoked",
+                module=module_name,
+                tool=tool_name,
+            )
+            result = fn(*args, **kwargs)
+            etrace.detail(
+                "Tool completed",
+                module=module_name,
+                tool=tool_name,
+            )
+            return result
+    try:
+        traced_sync.__signature__ = inspect.signature(fn)
+    except (ValueError, TypeError):
+        pass
+    return traced_sync
 
 
 class ToolRegistry:
@@ -142,7 +204,8 @@ class ToolRegistry:
                     f"'{module.name}'."
                 )
             self._tools[fn_name] = (module, fn)
-            self._sdk_tools[fn_name] = function_tool(fn)
+            traced = _make_traced_tool(fn_name, fn, module.name)
+            self._sdk_tools[fn_name] = function_tool(traced, strict_mode=False)
 
         logger.info(
             "Registered module '%s' with %d tool(s): %s",

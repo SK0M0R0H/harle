@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
 
 from fastapi import APIRouter, HTTPException, Query
+from sse_starlette.sse import EventSourceResponse
 
 from harle.api.models import (
     HealthResponse,
@@ -16,6 +18,7 @@ from harle.api.models import (
     SearchResponse,
     SearchResultItem,
 )
+from harle.api.streaming import drain_debug_events, result_event
 from harle.config import Settings
 from harle.db.connection import Database
 from harle.orchestrator.service import OrchestratorService
@@ -46,8 +49,14 @@ def build_router(
         return HealthResponse()
 
     @router.post("/run", response_model=RunResponse)
-    def run_task(request: RunRequest) -> RunResponse:
-        return orchestrator.run(request=request)
+    def run_task(
+        request: RunRequest,
+        debug: bool = Query(default=False, description="Enable SSE debug event stream"),
+    ) -> RunResponse | EventSourceResponse:
+        response = orchestrator.run(request=request)
+        if debug:
+            return _sse_response(response)
+        return response
 
     @router.get("/run/{run_id}", response_model=RunDetail)
     def get_run(run_id: str) -> RunDetail:
@@ -80,7 +89,10 @@ def build_router(
             )
 
     @router.post("/chat", response_model=RunResponse)
-    def chat(request: RunRequest) -> RunResponse:
+    def chat(
+        request: RunRequest,
+        debug: bool = Query(default=False, description="Enable SSE debug event stream"),
+    ) -> RunResponse | EventSourceResponse:
         """Send a message in a multi-turn conversation.
 
         If ``conversation_id`` is ``null``, a new conversation is
@@ -95,9 +107,12 @@ def build_router(
                 detail="Database is not configured. Chat requires DATABASE_URL.",
             )
         try:
-            return orchestrator.chat(request=request)
+            response = orchestrator.chat(request=request)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if debug:
+            return _sse_response(response)
+        return response
 
     @router.post("/init", response_model=InitResponse)
     def init_system() -> InitResponse:
@@ -183,6 +198,18 @@ def build_router(
             ],
             total=len(results),
         )
+
+    def _sse_response(response: RunResponse) -> EventSourceResponse:
+        """Wrap a completed run as an SSE stream with any pending trace events."""
+        from harle.debug.queue import get_trace_queue
+
+        def _generate() -> Generator[dict[str, str], None, None]:
+            queue = get_trace_queue()
+            if queue is not None:
+                yield from drain_debug_events(queue)
+            yield result_event(response)
+
+        return EventSourceResponse(_generate())
 
     return router
 

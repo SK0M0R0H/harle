@@ -55,6 +55,14 @@ class Settings:
     # Run logging (vault logs/ directory)
     HARLE_RUN_LOG_STORE_CONTEXT: bool = False  # Store assembled context in logs (optional, for size/privacy)
 
+    # Execution tracing (OpenTelemetry-based)
+    HARLE_TRACING_VAULT_ENABLED: bool = True
+    HARLE_TRACING_DB_ENABLED: bool = True
+    HARLE_TRACING_MIN_STORAGE_LEVEL: str = "TRACE"
+    # SSE streaming of trace events for ?debug=true on /run and /chat
+    HARLE_TRACING_SSE_ENABLED: bool = False
+    HARLE_TRACING_DEBUG_LEVEL: str = "STEP"
+
 
 def _coerce(value: Any, target_type: type) -> Any:
     """Coerce *value* to *target_type* with basic ``str | None`` handling."""

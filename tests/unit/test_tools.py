@@ -29,7 +29,7 @@ from harle.tools.registry import ToolRegistry, ToolRegistryError
 
 def _run(coro):
     """Run an async coroutine synchronously (no pytest-asyncio needed)."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------

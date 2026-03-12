@@ -37,7 +37,7 @@ from harle.tools.web_search.tools import fetch_page, search_news, search_web
 
 def _run(coro):
     """Run an async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # -------------------------------------------------------------------

@@ -9,9 +9,21 @@ from fastapi import FastAPI
 
 from harle.api.routes import build_router
 from harle.config import load_settings
+from harle.debug.levels import TraceLevel
+from harle.debug.queue import init_trace_queue
+from harle.debug.setup import configure_tracing
 from harle.orchestrator.service import build_orchestrator
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_trace_level(name: str, default: str) -> TraceLevel:
+    """Resolve trace level by name; fall back to default if invalid."""
+    try:
+        return TraceLevel[name.upper()]
+    except KeyError:
+        logger.warning("Invalid trace level %r; using %s", name, default)
+        return TraceLevel[default]
 
 
 def create_app() -> FastAPI:
@@ -27,6 +39,22 @@ def create_app() -> FastAPI:
     vault tools require a dataset, web search requires ``TAVILY_API_KEY``.
     """
     settings = load_settings()
+
+    sse_queue = None
+    if settings.HARLE_TRACING_SSE_ENABLED:
+        sse_queue = init_trace_queue()
+    debug_level = _resolve_trace_level(settings.HARLE_TRACING_DEBUG_LEVEL, "STEP")
+
+    configure_tracing(
+        vault_path=settings.HARLE_DATASET_PATH,
+        vault_enabled=settings.HARLE_TRACING_VAULT_ENABLED,
+        db_url=settings.DATABASE_URL,
+        db_enabled=settings.HARLE_TRACING_DB_ENABLED,
+        min_storage_level=settings.HARLE_TRACING_MIN_STORAGE_LEVEL,
+        debug_mode=settings.HARLE_TRACING_SSE_ENABLED,
+        sse_queue=sse_queue,
+        debug_level=debug_level,
+    )
 
     db = None
     search_engine = None
