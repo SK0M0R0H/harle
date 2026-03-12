@@ -32,6 +32,8 @@ def create_app() -> FastAPI:
     configure_tracing(
         vault_path=settings.HARLE_DATASET_PATH,
         vault_enabled=settings.HARLE_DEBUG_VAULT_ENABLED,
+        db_url=settings.DATABASE_URL,
+        db_enabled=settings.HARLE_DEBUG_DB_ENABLED,
         min_storage_level=settings.HARLE_DEBUG_MIN_STORAGE_LEVEL,
     )
 

@@ -75,6 +75,27 @@ class Run(Base):
     )
 
 
+class DebugTrace(Base):
+    """Hierarchical debug trace stored as JSONB for a single run.
+
+    The ``trace_json`` column holds the full span tree serialised by
+    :class:`~harle.debug.exporters.db.PostgresExporter`.  Using JSONB
+    keeps writes simple (one row per run) and allows PostgreSQL jsonpath
+    queries across traces (e.g. find runs where a tool was slow).
+    """
+
+    __tablename__ = "debug_traces"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    trace_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    total_spans: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Artifact(Base):
     """Large agent outputs stored separately from run metadata."""
 

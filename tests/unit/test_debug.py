@@ -1,4 +1,4 @@
-"""Unit tests for harle.debug — trace levels, dtrace API, setup, vault exporter."""
+"""Unit tests for harle.debug — trace levels, dtrace API, setup, vault/DB/CLI exporters, SSE."""
 
 from __future__ import annotations
 
@@ -11,17 +11,16 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 from harle.debug import dtrace
 from harle.debug.levels import TraceLevel
 from harle.debug.setup import configure_tracing
-from harle.debug.exporters.vault import (
-    VaultExporter,
-    _build_tree,
-    _extract_run_id,
-    _filter_by_level,
-    _find_root,
-    _group_by_trace,
-    _render_attrs,
-    _span_duration_ms,
-    _span_start_time,
+from harle.debug.exporters._spans import (
+    build_tree,
+    extract_run_id,
+    filter_by_level,
+    find_root,
+    group_by_trace,
+    span_duration_ms,
+    span_start_time,
 )
+from harle.debug.exporters.vault import VaultExporter, _render_attrs
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +281,7 @@ class TestVaultHelpers:
         with tracer.start_as_current_span("a"):
             pass
         provider.force_flush()
-        groups = _group_by_trace(exporter.spans)
+        groups = group_by_trace(exporter.spans)
         assert len(groups) == 1
         assert len(list(groups.values())[0]) == 1
 
@@ -293,7 +292,7 @@ class TestVaultHelpers:
         with tracer.start_as_current_span("internal_span") as s:
             s.set_attribute("harle.level", "INTERNAL")
         provider.force_flush()
-        filtered = _filter_by_level(exporter.spans, TraceLevel.DETAIL)
+        filtered = filter_by_level(exporter.spans, TraceLevel.DETAIL)
         names = [sp.name for sp in filtered]
         assert "step_span" in names
         assert "internal_span" not in names
@@ -304,7 +303,7 @@ class TestVaultHelpers:
             with tracer.start_as_current_span("child"):
                 pass
         provider.force_flush()
-        root = _find_root(exporter.spans)
+        root = find_root(exporter.spans)
         assert root is not None
         assert root.parent is None
         assert root.name == "root"
@@ -314,18 +313,18 @@ class TestVaultHelpers:
         with tracer.start_as_current_span("handle_request") as s:
             s.set_attribute("run_id", "run_abc123")
         provider.force_flush()
-        root = _find_root(exporter.spans)
+        root = find_root(exporter.spans)
         assert root is not None
-        assert _extract_run_id(root) == "run_abc123"
+        assert extract_run_id(root) == "run_abc123"
 
     def test_extract_run_id_falls_back_to_name(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
         with tracer.start_as_current_span("run_xyz789"):
             pass
         provider.force_flush()
-        root = _find_root(exporter.spans)
+        root = find_root(exporter.spans)
         assert root is not None
-        assert _extract_run_id(root) == "run_xyz789"
+        assert extract_run_id(root) == "run_xyz789"
 
     def test_span_start_time_from_timestamp(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
@@ -333,7 +332,7 @@ class TestVaultHelpers:
             pass
         provider.force_flush()
         span = exporter.spans[0]
-        ts = _span_start_time(span)
+        ts = span_start_time(span)
         assert ts.tzinfo is not None
 
     def test_span_duration_ms(self) -> None:
@@ -342,7 +341,7 @@ class TestVaultHelpers:
             pass
         provider.force_flush()
         span = exporter.spans[0]
-        duration = _span_duration_ms(span)
+        duration = span_duration_ms(span)
         assert isinstance(duration, int)
         assert duration >= 0
 
@@ -352,7 +351,7 @@ class TestVaultHelpers:
             with tracer.start_as_current_span("child"):
                 pass
         provider.force_flush()
-        tree = _build_tree(exporter.spans)
+        tree = build_tree(exporter.spans)
         assert len(tree) >= 1
         total_children = sum(len(v) for v in tree.values())
         assert total_children == 1
@@ -386,3 +385,191 @@ class TestVaultExporterLifecycle:
     def test_force_flush_returns_true(self) -> None:
         exporter = VaultExporter("/tmp", min_level=TraceLevel.STEP)
         assert exporter.force_flush(timeout_millis=1000) is True
+
+
+# ---------------------------------------------------------------------------
+# PostgresExporter — JSON serialisation (no real DB)
+# ---------------------------------------------------------------------------
+
+
+class TestPostgresExporterSerialisation:
+    """Tests for PostgresExporter JSON tree serialisation."""
+
+    def test_serialise_tree_produces_valid_json(self) -> None:
+        from harle.debug.exporters.db import _serialise_tree
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("root") as root:
+            root.set_attribute("harle.level", "STEP")
+            root.set_attribute("run_id", "run_pg_test")
+            with tracer.start_as_current_span("child") as child:
+                child.set_attribute("harle.level", "DETAIL")
+                child.set_attribute("tokens", 42)
+        provider.force_flush()
+
+        root_span = find_root(collecting.spans)
+        assert root_span is not None
+        tree = build_tree(collecting.spans)
+        result = _serialise_tree(root_span, tree)
+
+        assert result["name"] == "root"
+        assert result["level"] == "STEP"
+        assert "children" in result
+        assert len(result["children"]) == 1
+        assert result["children"][0]["name"] == "child"
+        assert result["children"][0]["attributes"]["tokens"] == 42
+
+    def test_empty_spans_returns_success(self) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        exporter = PostgresExporter("sqlite:///:memory:", min_level=TraceLevel.TRACE)
+        result = exporter.export([])
+        assert result == SpanExportResult.SUCCESS
+
+    def test_force_flush_returns_true(self) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        exporter = PostgresExporter("sqlite:///:memory:", min_level=TraceLevel.TRACE)
+        assert exporter.force_flush() is True
+
+    def test_shutdown_disposes_engine(self) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        exporter = PostgresExporter("sqlite:///:memory:", min_level=TraceLevel.TRACE)
+        exporter.shutdown()
+        assert exporter._engine is None
+
+
+# ---------------------------------------------------------------------------
+# CliSseExporter
+# ---------------------------------------------------------------------------
+
+
+class TestCliSseExporter:
+    """Tests for the CLI SSE exporter."""
+
+    def test_export_puts_events_on_queue(self) -> None:
+        from queue import Queue
+        from harle.debug.exporters.cli import CliSseExporter
+
+        q: Queue = Queue()
+        exporter = CliSseExporter(q, min_level=TraceLevel.STEP)
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("step1") as s:
+            s.set_attribute("harle.level", "STEP")
+            s.set_attribute("harle.module", "orchestrator")
+        provider.force_flush()
+
+        result = exporter.export(collecting.spans)
+        assert result == SpanExportResult.SUCCESS
+        assert not q.empty()
+
+        event = q.get_nowait()
+        assert event["type"] == "debug"
+        assert event["level"] == "STEP"
+        assert event["name"] == "step1"
+
+    def test_export_filters_below_min_level(self) -> None:
+        from queue import Queue
+        from harle.debug.exporters.cli import CliSseExporter
+
+        q: Queue = Queue()
+        exporter = CliSseExporter(q, min_level=TraceLevel.STEP)
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("detail1") as s:
+            s.set_attribute("harle.level", "DETAIL")
+        provider.force_flush()
+
+        exporter.export(collecting.spans)
+        assert q.empty()
+
+    def test_export_includes_attributes(self) -> None:
+        from queue import Queue
+        from harle.debug.exporters.cli import CliSseExporter
+
+        q: Queue = Queue()
+        exporter = CliSseExporter(q, min_level=TraceLevel.DETAIL)
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("step2") as s:
+            s.set_attribute("harle.level", "DETAIL")
+            s.set_attribute("tokens", 99)
+        provider.force_flush()
+
+        exporter.export(collecting.spans)
+        event = q.get_nowait()
+        assert event["attributes"]["tokens"] == 99
+        assert "harle.level" not in event.get("attributes", {})
+
+    def test_force_flush_returns_true(self) -> None:
+        from queue import Queue
+        from harle.debug.exporters.cli import CliSseExporter
+
+        exporter = CliSseExporter(Queue(), min_level=TraceLevel.STEP)
+        assert exporter.force_flush() is True
+
+    def test_shutdown_does_not_raise(self) -> None:
+        from queue import Queue
+        from harle.debug.exporters.cli import CliSseExporter
+
+        exporter = CliSseExporter(Queue(), min_level=TraceLevel.STEP)
+        exporter.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Debug queue module
+# ---------------------------------------------------------------------------
+
+
+class TestDebugQueue:
+    """Tests for the shared debug queue module."""
+
+    def test_init_and_get(self) -> None:
+        from harle.debug.queue import init_debug_queue, get_debug_queue
+
+        q = init_debug_queue()
+        assert q is not None
+        assert get_debug_queue() is q
+
+
+# ---------------------------------------------------------------------------
+# SSE streaming helpers (require pydantic)
+# ---------------------------------------------------------------------------
+
+
+try:
+    import pydantic as _pydantic  # noqa: F401
+    _has_pydantic = True
+except ImportError:
+    _has_pydantic = False
+
+
+@pytest.mark.skipif(not _has_pydantic, reason="pydantic not installed")
+class TestSseStreaming:
+    """Tests for API SSE streaming helpers (requires pydantic)."""
+
+    def test_drain_debug_events_empties_queue(self) -> None:
+        from queue import Queue
+        from harle.api.streaming import drain_debug_events
+
+        q: Queue = Queue()
+        q.put({"type": "debug", "level": "STEP", "name": "test"})
+        q.put({"type": "debug", "level": "DETAIL", "name": "test2"})
+
+        events = list(drain_debug_events(q))
+        assert len(events) == 2
+        assert all(e["event"] == "debug" for e in events)
+        assert q.empty()
+
+    def test_result_event_format(self) -> None:
+        from harle.api.streaming import result_event
+        from harle.api.models import RunResponse
+
+        resp = RunResponse(
+            run_id="r1", status="completed", result="ok", context="personal"
+        )
+        event = result_event(resp)
+        assert event["event"] == "result"
+        assert "r1" in event["data"]
