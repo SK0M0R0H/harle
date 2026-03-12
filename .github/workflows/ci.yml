@@ -41,13 +41,8 @@ jobs:
       - name: Install package and test deps
         run: pip install -e '.[test]'
 
-      - name: Run smoke unit tests
-        run: >-
-          pytest -v --tb=short
-          tests/test_config.py
-          tests/test_models.py
-          tests/test_search_engine.py
-          tests/test_api.py
+      - name: Run unit tests
+        run: pytest -v --tb=short tests/unit
 
   test-integration:
     if: github.event_name == 'pull_request'
@@ -103,16 +98,13 @@ jobs:
       - name: Install package and coverage deps
         run: pip install -e '.[test]' pytest-cov
 
-      - name: Generate coverage report from smoke suite
+      - name: Generate coverage report from unit tests
         run: >-
           pytest
           --cov=harle
           --cov-report=xml
           --cov-fail-under=0
-          tests/test_config.py
-          tests/test_models.py
-          tests/test_search_engine.py
-          tests/test_api.py
+          tests/unit
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
