@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from harle.api.routes import build_router
 from harle.config import load_settings
+from harle.debug.setup import configure_tracing
 from harle.orchestrator.service import build_orchestrator
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,12 @@ def create_app() -> FastAPI:
     vault tools require a dataset, web search requires ``TAVILY_API_KEY``.
     """
     settings = load_settings()
+
+    configure_tracing(
+        vault_path=settings.HARLE_DATASET_PATH,
+        vault_enabled=settings.HARLE_DEBUG_VAULT_ENABLED,
+        min_storage_level=settings.HARLE_DEBUG_MIN_STORAGE_LEVEL,
+    )
 
     db = None
     search_engine = None

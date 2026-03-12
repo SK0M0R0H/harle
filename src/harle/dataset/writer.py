@@ -9,9 +9,17 @@ Agents writing to ``logs/`` may auto-approve; writes to
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+LOGS_DIR = "logs"
+
+
+def log_dir_for(timestamp: datetime) -> str:
+    """Return vault-relative log directory ``logs/YYYY/MM`` for *timestamp*."""
+    return f"{LOGS_DIR}/{timestamp.year:04d}/{timestamp.month:02d}"
 
 
 def write_log_file(

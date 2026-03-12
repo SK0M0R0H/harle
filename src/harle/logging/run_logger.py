@@ -15,19 +15,12 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from harle.dataset.writer import write_log_file
+from harle.dataset.writer import log_dir_for, write_log_file
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-LOGS_DIR = "logs"
-
-
-def _log_dir_for(timestamp: datetime) -> str:
-    """Return vault-relative directory logs/YYYY/MM for a given timestamp."""
-    return f"{LOGS_DIR}/{timestamp.year:04d}/{timestamp.month:02d}"
 
 
 def _frontmatter_yaml(
@@ -127,7 +120,7 @@ def log_run_to_vault(
         logger.warning("Dataset path does not exist: %s; skipping run log files", root)
         return None, None
 
-    log_dir = _log_dir_for(timestamp)
+    log_dir = log_dir_for(timestamp)
     result_rel = f"{log_dir}/{run_id}_result.md"
     result_content = _result_content(
         run_id, timestamp, agent, status, context_scope, result_body
