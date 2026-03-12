@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
@@ -159,6 +161,79 @@ class TestOrchestratorService:
         """Without explicit flag, legacy provider path is used."""
         svc = OrchestratorService(llm_provider=EchoProvider())
         assert svc.use_agent_runner is False
+
+
+class TestOrchestratorAgentRunnerTrello:
+    def test_run_with_trello_tools_exposes_and_tracks_tool_calls(self) -> None:
+        from harle.tools.registry import ToolRegistry
+        from harle.tools.trello.module import TrelloModule
+
+        registry = ToolRegistry()
+        trello_module = TrelloModule()
+        registry.register_module(trello_module, skill_names=["read_sequence"])
+
+        captured: dict[str, object] = {}
+
+        class _FakeAgent:
+            def __init__(self, **kwargs):
+                captured["agent_kwargs"] = kwargs
+
+        class _FakeRunner:
+            @staticmethod
+            def run_sync(agent, user_message, max_turns=10):
+                captured["agent"] = agent
+                captured["user_message"] = user_message
+                captured["max_turns"] = max_turns
+
+                class _RawItem:
+                    name = "trello_list_boards"
+
+                class _ToolCallItem:
+                    type = "tool_call_item"
+                    raw_item = _RawItem()
+
+                class _MessageOutputItem:
+                    type = "message_output_item"
+
+                class _Result:
+                    final_output = "Found boards and analyzed them."
+                    new_items = [_ToolCallItem(), _MessageOutputItem()]
+                    raw_responses = [object()]
+
+                return _Result()
+
+        fake_agents_module = types.SimpleNamespace(
+            Agent=_FakeAgent,
+            Runner=_FakeRunner,
+            MaxTurnsExceeded=RuntimeError,
+        )
+
+        svc = OrchestratorService(
+            llm_provider=EchoProvider(),
+            tool_registry=registry,
+            use_agent_runner=True,
+            max_iterations=4,
+        )
+
+        with patch.dict(sys.modules, {"agents": fake_agents_module}):
+            resp = svc.run(request=RunRequest(
+                message="List Trello boards and summarize priorities",
+                context="work",
+            ))
+
+        assert resp.status == "completed"
+        assert resp.tools_called == ["trello_list_boards"]
+        assert resp.turns_used == 1
+        assert captured["max_turns"] == 4
+
+        agent_kwargs = captured["agent_kwargs"]
+        assert "tools" in agent_kwargs
+        assert len(agent_kwargs["tools"]) >= 2
+
+        instructions = str(agent_kwargs["instructions"])
+        assert "Tool Skill: read_sequence" in instructions
+        assert "trello_list_boards" in registry.list_all_tools()
+
 
 
 class TestBuildOrchestrator:
