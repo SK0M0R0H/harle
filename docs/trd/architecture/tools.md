@@ -1510,3 +1510,60 @@ Neither is required for Harle to function. This phase is an interoperability enh
 | **Total (with parallelism)** | ~2–3 weeks | Phases 2+3+4 in parallel |
 
 Estimates assume a single developer working part-time. The critical path is: Phase 1 → Phase 2 → Phase 5 → Phase 6. Phases 3 and 4 can be built alongside Phase 2 to shorten the total timeline.
+
+---
+
+## As-Built: Trello Tool Module (`harle.tools.trello`)
+
+Harle includes a read-only Trello module under `src/harle/tools/trello/`:
+
+- `module.py` — `TrelloModule(BaseToolModule)`
+- `client.py` — normalized Trello API wrapper and shapes
+- `tools.py` — tool functions exposed to the agent
+- `skills/read_sequence.md` — Trello read workflow guidance
+
+### Module registration behavior
+
+In `harle.tools.factory`:
+
+1. `_build_connections()` registers `TrelloConnection` only when both env vars are present:
+   - `TRELLO_API_KEY`
+   - `TRELLO_API_TOKEN`
+2. `_register_trello(...)` checks `connections.has("trello")`.
+3. If available, `TrelloModule` is initialized with:
+   - `{"connection": "trello"}`
+4. The module is registered in `ToolRegistry` with:
+   - `mode=OperationMode.AUTO`
+   - `skill_names=["read_sequence"]`
+
+This preserves graceful partial availability: missing Trello credentials do **not** block vault/web search modules.
+
+### Trello read tools (concrete API)
+
+#### `trello_list_boards() -> str`
+
+- **Inputs:** none.
+- **Behavior:** reads boards visible to the authenticated member.
+- **Output JSON:**
+  - `boards`: array of `{id, name, url, closed}`
+  - on error: `{boards: [], error: true, message: "..."}`
+
+#### `trello_list_cards(board_id: str) -> str`
+
+- **Inputs:**
+  - `board_id` (required, non-empty Trello board ID)
+- **Behavior:** reads cards from `/boards/{board_id}/cards`.
+- **Output JSON:**
+  - `board_id`: requested board ID
+  - `cards`: array of `{id, name, url, closed, id_list, due}`
+  - on validation/error: `{cards: [], error: true, message: "..."}`
+
+Both tools are explicitly read-only (`permission="read"`, `requires_approval=False`).
+
+### Skills and multi-step reasoning
+
+When Trello tools are active, `read_sequence.md` can be injected into agent instructions via `ToolRegistry.get_skills_for_tools(...)` and orchestrator instruction assembly. This guides the model to use a stable read-first workflow (`trello_list_boards` → `trello_list_cards`).
+
+See also:
+- Connections details: [connections.md](./connections.md)
+- Orchestration reasoning loop: [multi_step_reasoning.md](./multi_step_reasoning.md)
