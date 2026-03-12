@@ -55,7 +55,14 @@ def configure_tracing(
         min_storage_level: Minimum trace level written to vault/DB.
     """
     provider = TracerProvider()
-    storage_level = TraceLevel.from_name(min_storage_level)
+    try:
+        storage_level = TraceLevel.from_name(min_storage_level)
+    except KeyError:
+        logger.warning(
+            "Invalid min_storage_level %r; using TRACE",
+            min_storage_level,
+        )
+        storage_level = TraceLevel.TRACE
 
     if vault_enabled and vault_path:
         from harle.debug.exporters.vault import VaultExporter

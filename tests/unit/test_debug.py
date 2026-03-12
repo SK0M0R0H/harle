@@ -164,13 +164,16 @@ class TestConfigureTracing:
 
         assert trace.get_tracer_provider() is not None
 
-    def test_invalid_min_storage_level_raises(self) -> None:
-        with pytest.raises(KeyError):
-            configure_tracing(
-                vault_path=None,
-                vault_enabled=False,
-                min_storage_level="INVALID",
-            )
+    def test_invalid_min_storage_level_uses_default(self) -> None:
+        """Invalid min_storage_level is logged and TRACE is used; no exception."""
+        configure_tracing(
+            vault_path=None,
+            vault_enabled=False,
+            min_storage_level="INVALID",
+        )
+        from opentelemetry import trace
+
+        assert trace.get_tracer_provider() is not None
 
 
 # ---------------------------------------------------------------------------

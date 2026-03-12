@@ -7,6 +7,7 @@ row per trace into the ``execution_traces`` table.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Sequence
 
@@ -137,9 +138,27 @@ def _get_level(span: ReadableSpan) -> str:
     return "STEP"
 
 
+def _json_safe(value: Any) -> Any:
+    """Coerce a value to a JSON-serializable type."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(x) for x in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    try:
+        return json.loads(json.dumps(value, default=str, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _get_attrs(span: ReadableSpan) -> dict[str, Any]:
-    """Extract non-internal attributes from a span."""
+    """Extract non-internal attributes from a span (JSON-serializable)."""
     if not span.attributes:
         return {}
     skip = {"harle.level", "harle.module", "run_id"}
-    return {k: v for k, v in span.attributes.items() if k not in skip}
+    return {
+        k: _json_safe(v)
+        for k, v in span.attributes.items()
+        if k not in skip
+    }

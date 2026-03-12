@@ -11,6 +11,7 @@ CLI's ``--debug`` / ``-dd`` / ``-ddd`` verbosity flags.
 
 from __future__ import annotations
 
+import json
 import logging
 from queue import Queue
 from typing import Any, Sequence
@@ -88,6 +89,7 @@ class CliSseExporter(SpanExporter):
 
     @staticmethod
     def _get_attrs(span: ReadableSpan) -> dict[str, Any]:
+        """Extract non-internal attributes (JSON-serializable for SSE)."""
         if not span.attributes:
             return {}
         skip = {"harle.level", "harle.module", "run_id"}
@@ -95,5 +97,19 @@ class CliSseExporter(SpanExporter):
         for k, v in span.attributes.items():
             if k in skip:
                 continue
-            result[k] = v
+            result[k] = CliSseExporter._json_safe(v)
         return result
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        """Coerce to JSON-serializable type for SSE payload."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [CliSseExporter._json_safe(x) for x in value]
+        if isinstance(value, dict):
+            return {str(k): CliSseExporter._json_safe(v) for k, v in value.items()}
+        try:
+            return json.loads(json.dumps(value, default=str, ensure_ascii=False))
+        except (TypeError, ValueError):
+            return str(value)
