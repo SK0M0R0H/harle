@@ -16,6 +16,17 @@ When you **add, change, or remove** either (1) **implementation** in a module th
 |---------------------|-----|-------------------|
 | `src/harle/capture/` | `docs/trd/architecture/vault_capture_module.md` | `docs/current_state/architecture/vault_capture_module.md` |
 | `src/harle/tools/` | `docs/trd/architecture/tools.md` | `docs/current_state/architecture/tools.md` |
+| `src/harle/search/` | `docs/trd/architecture/search.md` (and data.md §3) | `docs/current_state/architecture/search.md` |
+| `src/harle/orchestrator/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/api/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/context/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/logging/` | `docs/trd/architecture/orchestrator.md` | `docs/current_state/architecture/orchestrator.md` |
+| `src/harle/orchestrator/`, `src/harle/tools/` (multi-step levels) | `docs/trd/architecture/multi_step_reasoning.md` | `docs/current_state/architecture/multi_step_reasoning.md` |
+| `src/harle/vault_imports/` | `docs/trd/architecture/import_module.md` | `docs/current_state/architecture/import_module.md` |
+| `src/harle/connections/` | `docs/trd/architecture/connections.md` | `docs/current_state/architecture/connections.md` |
+| tests/, .github/, pyproject | `docs/trd/testing_strategy.md` | `docs/current_state/testing_strategy.md` |
+| `src/harle/dataset/`, `src/harle/db/`, `src/harle/indexing/`, `src/harle/search/` | `docs/trd/architecture/data.md` | `docs/current_state/architecture/data.md` |
+| (recommendations apply across data layer) | `docs/trd/architecture/data_layer_best_practices.md` | `docs/current_state/architecture/data_layer_best_practices.md` |
 
 *(Add a row here when you add a current-state doc for another TRD module.)*
 
@@ -30,7 +41,7 @@ When you **add, change, or remove** either (1) **implementation** in a module th
 
 ## When this rule applies
 
-- You edit **implementation** under `src/harle/` in a package that has a TRD and (optionally) a current-state doc — see the mapping above. If the package is in the table, update the listed current-state doc. If the package is not in the table but has a TRD under `docs/trd/`, create or update the current-state doc at the mirrored path under `docs/current_state/` (same relative path and filename) and add a row to the mapping.
+- You edit **implementation** under `src/harle/` in a package that has a TRD and (optionally) a current-state doc — see the mapping above. If the package is in the table, update **every** current-state doc listed for that path (e.g. editing `src/harle/orchestrator/` requires updating both `orchestrator.md` and `multi_step_reasoning.md`). If the package is not in the table but has a TRD under `docs/trd/`, create or update the current-state doc at the mirrored path under `docs/current_state/` (same relative path and filename) and add a row to the mapping.
 - You edit **any TRD** under `docs/trd/` or its subfolders. If a current-state doc exists at the mirrored path under `docs/current_state/` (same relative path and filename as under `docs/trd/`), update it. If it doesn’t exist yet, create it when the TRD describes a module with implementation (and add the mapping).
 
 If you only touch tests or comments and **behavior** is unchanged, a short note or a `last_updated` bump is enough. If in doubt, update the snapshot and “What is implemented” sections.
