@@ -32,7 +32,7 @@ class DummyModule(BaseToolModule):
     def description(self) -> str:
         return "Dummy module for testing the tool infrastructure"
 
-    async def initialize(self, config: dict) -> None:
+    async def initialize(self, config: dict, connections: object | None = None) -> None:
         logger.info("DummyModule initialised with config keys: %s", list(config.keys()))
         self._config = config
 

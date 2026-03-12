@@ -45,14 +45,22 @@ async def search_web(
         ``content``, and optionally ``score``.
     """
     max_results = max(1, min(max_results, 10))
-    client = get_client()
-    response = await client.search(
-        query,
-        max_results=max_results,
-        search_depth=search_depth,
-        topic="general",
-    )
-    return _format_results_as_json(response)
+    try:
+        client = get_client()
+        response = await client.search(
+            query,
+            max_results=max_results,
+            search_depth=search_depth,
+            topic="general",
+        )
+        return _format_results_as_json(response)
+    except Exception as exc:
+        return json.dumps({
+            "query": query,
+            "results": [],
+            "error": True,
+            "message": f"Web search connection error: {exc}",
+        }, ensure_ascii=False)
 
 
 search_web.permission = "read"  # type: ignore[attr-defined]
@@ -84,14 +92,22 @@ async def search_news(
     """
     max_results = max(1, min(max_results, 10))
     days = max(1, min(days, 365))
-    client = get_client()
-    response = await client.search(
-        query,
-        max_results=max_results,
-        search_depth="basic",
-        topic="news",
-    )
-    return _format_results_as_json(response)
+    try:
+        client = get_client()
+        response = await client.search(
+            query,
+            max_results=max_results,
+            search_depth="basic",
+            topic="news",
+        )
+        return _format_results_as_json(response)
+    except Exception as exc:
+        return json.dumps({
+            "query": query,
+            "results": [],
+            "error": True,
+            "message": f"Web search connection error: {exc}",
+        }, ensure_ascii=False)
 
 
 search_news.permission = "read"  # type: ignore[attr-defined]
@@ -131,7 +147,7 @@ async def fetch_page(url: str) -> str:
     except Exception as exc:
         return json.dumps({
             "url": url,
-            "content": f"Failed to fetch page: {exc}",
+            "content": f"Web search connection error: {exc}",
             "error": True,
         }, ensure_ascii=False)
 

@@ -327,6 +327,26 @@ kill $(pgrep -f harle-server)
 kill $(lsof -t -i:8000)
 ```
 
+**If the server reports "address already in use" (port 8000):** another process may still be holding the port. Find and free it:
+
+```bash
+# See what is using the port
+fuser -v 8000/tcp
+# or
+lsof -i :8000
+
+# Kill by PID (replace PID with the number from above)
+kill -9 <PID>
+```
+
+One-liner to free port 8000:
+
+```bash
+fuser -k 8000/tcp
+```
+
+Then start the server again with `harle-server`.
+
 Stop and remove the Docker container with the database:
 
 ```bash
