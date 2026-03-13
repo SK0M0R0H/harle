@@ -421,6 +421,27 @@ tests/
 - `/help` — list available commands
 - `/quit` or `/exit` — close the session
 
+## Execution tracing view mode (CLI)
+
+You can view execution traces (orchestrator steps, tool calls, context assembly, etc.) while running tasks:
+
+1. **Enable trace streaming on the server** — in `config.yaml` or via environment:
+   ```yaml
+   HARLE_TRACING_SSE_ENABLED: true
+   ```
+   Then restart the server. Traces are also written to the vault (`logs/YYYY/MM/<run_id>_trace.md`) and to the `execution_traces` table when the DB is configured.
+
+2. **Request the debug stream** — use `?debug=true` on `/run` or `/chat`. The response becomes an SSE stream: `event: debug` (trace spans) then `event: result` (final answer).
+
+   **Example with curl (single run):**
+   ```bash
+   curl -N -X POST "http://127.0.0.1:8000/run?debug=true" \
+     -H "Content-Type: application/json" \
+     -d '{"message": "Summarize my notes on privacy", "context": "work"}'
+   ```
+
+   The CLI can use the same `?debug=true` when calling the API to show trace events alongside the result (CLI support for a `--debug` flag may be added so you don’t need to call the API directly).
+
 ## API endpoints
 
 | Method | Path | Description |
@@ -445,6 +466,8 @@ tests/
 | `HARLE_DATASET_PATH` | — | Path to the Markdown vault |
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `HARLE_RUN_LOG_STORE_CONTEXT` | `false` | Store assembled prompt in vault logs |
+| `HARLE_TRACING_SSE_ENABLED` | `false` | Enable SSE trace stream for `?debug=true` on `/run` and `/chat` |
+| `HARLE_TRACING_DEBUG_LEVEL` | `STEP` | Minimum level for SSE trace events (`STEP`, `DETAIL`, `TRACE`, `INTERNAL`) |
 
 Environment variables (never in config file):
 
