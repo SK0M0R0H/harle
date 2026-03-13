@@ -124,6 +124,28 @@ def create_app() -> FastAPI:
             settings=settings,
         )
     )
+
+    # ── Capture interview routes ──────────────────────────────────────
+    if db is not None and settings.HARLE_DATASET_PATH:
+        from pathlib import Path
+
+        from harle.api.capture_routes import build_capture_router
+        from harle.capture import CaptureRunManager, TopicRegistry
+        from harle.capture.engine import CaptureEngine
+        from harle.capture.writer import ProfileWriter
+
+        registry = TopicRegistry()
+        run_manager = CaptureRunManager(registry)
+        writer = ProfileWriter(Path(settings.HARLE_DATASET_PATH))
+        capture_engine = CaptureEngine(
+            registry=registry,
+            run_manager=run_manager,
+            writer=writer,
+            model=settings.HARLE_LLM_MODEL,
+        )
+        app.include_router(build_capture_router(engine=capture_engine, db=db))
+        logger.info("Capture interview routes enabled.")
+
     return app
 
 
