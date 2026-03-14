@@ -128,9 +128,9 @@ harle import notion --db-mode table
 
 ### What Gets Imported
 
-**Standalone pages**: Pages not inside a database are saved to `knowledge/notion/pages/<title>.md`.
+**Standalone pages**: Pages not inside a database are saved to `knowledge/notion/pages/<title>-<id>.md`, where `<id>` is a short stable suffix from the Notion page ID so that two pages with the same title do not overwrite each other.
 
-**Databases**: Databases are saved to `knowledge/notion/databases/<database_name>/`. In `pages` mode, each row gets its own file; in `table` mode, the entire database is one file.
+**Databases**: Each database is saved under `knowledge/notion/databases/<database_name>-<id>/` (or one file `<database_name>-<id>.md` in table mode). In `pages` mode, each row gets its own file `<row_title>-<id>.md` in that folder. The `<id>` suffix prevents collisions when titles repeat.
 
 Each imported file includes:
 - YAML frontmatter with title, tags, import metadata, and Notion IDs.

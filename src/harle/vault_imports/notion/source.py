@@ -36,6 +36,15 @@ def _slugify(text: str, max_length: int = 80) -> str:
     return slug[:max_length] or "untitled"
 
 
+def _short_id(notion_id: str, length: int = 8) -> str:
+    """Stable short suffix from a Notion UUID for use in vault paths.
+
+    Prevents path collisions when two pages (or rows) have the same title.
+    """
+    clean = (notion_id or "").replace("-", "")[:length]
+    return clean.lower() if clean else "x"
+
+
 class NotionImportSource(BaseImportSource):
     """Import pages and databases from Notion via the API.
 
@@ -172,7 +181,7 @@ class NotionImportSource(BaseImportSource):
                         title=title,
                         content=body_md,
                         content_type=ContentType.MARKDOWN,
-                        suggested_path=f"notion/pages/{_slugify(title)}.md",
+                        suggested_path=f"notion/pages/{_slugify(title)}-{_short_id(page_id)}.md",
                         tags=["notion", "imported"],
                         context=context,
                         metadata={
@@ -249,7 +258,7 @@ class NotionImportSource(BaseImportSource):
                 title=db_title,
                 content=table_md,
                 content_type=ContentType.MARKDOWN,
-                suggested_path=f"notion/databases/{_slugify(db_title)}.md",
+                suggested_path=f"notion/databases/{_slugify(db_title)}-{_short_id(db_id)}.md",
                 tags=["notion", "imported", "database"],
                 context=context,
                 metadata={
@@ -271,7 +280,7 @@ class NotionImportSource(BaseImportSource):
         """One ImportItem per database row — properties in frontmatter."""
         assert self._client is not None
         items: list[ImportItem] = []
-        db_slug = _slugify(db_title)
+        db_dir = f"{_slugify(db_title)}-{_short_id(db_id)}"
 
         for row in rows:
             page_id = row.get("_page_id", "")
@@ -294,7 +303,7 @@ class NotionImportSource(BaseImportSource):
                     content=body_md,
                     content_type=ContentType.MARKDOWN,
                     suggested_path=(
-                        f"notion/databases/{db_slug}/{_slugify(row_title)}.md"
+                        f"notion/databases/{db_dir}/{_slugify(row_title)}-{_short_id(page_id)}.md"
                     ),
                     tags=["notion", "imported", "database-row"],
                     context=context,
