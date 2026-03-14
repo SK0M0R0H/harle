@@ -277,6 +277,9 @@ go build -o bin/harle ./cmd/harle
 
 # Interactive session
 ./bin/harle --context work
+
+# Conversational interview (capture knowledge into the vault)
+./bin/harle capture interview
 ```
 
 ### 8. Try the API with curl
