@@ -303,7 +303,7 @@ def build_router(
                 detail="Dataset path is not configured. Set HARLE_DATASET_PATH.",
             )
 
-        from harle.vault_imports.registry import ImportRegistry
+        from harle.vault_imports.registry import ImportRegistry, ImportSourceNotFound
 
         registry: ImportRegistry = import_registry  # type: ignore[assignment]
 
@@ -334,6 +334,8 @@ def build_router(
                             dry_run=request.dry_run,
                         ),
                     ).result()
+        except ImportSourceNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
         except Exception as e:
             logger.exception("Import failed: %s", e)
             raise HTTPException(status_code=500, detail=str(e)) from e
