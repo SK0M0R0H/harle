@@ -290,6 +290,9 @@ With the server running, you can hit any endpoint directly:
 # Health check
 curl "http://127.0.0.1:8000/health"
 
+# Health check for all connections (Notion, Trello, Tavily, etc.)
+curl "http://127.0.0.1:8000/health/connections"
+
 # Search the dataset
 curl "http://127.0.0.1:8000/search?q=privacy"
 curl "http://127.0.0.1:8000/search?q=researcher+agent&context=global&max_results=5"
@@ -449,7 +452,11 @@ You can view execution traces (orchestrator steps, tool calls, context assembly,
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Simple health check |
+| `GET` | `/health/connections` | Health check for all connections (Notion, Trello, Tavily) |
+| `GET` | `/health/tools` | Health check for all registered tool modules |
+| `GET` | `/health/all` | Combined health check for connections and tools |
+| `POST` | `/import` | Run an import from an external source (e.g. Notion) |
 | `POST` | `/run` | Send a message to the orchestrator (with multi-step reasoning) |
 | `GET` | `/run/{run_id}` | Get metadata for a specific run |
 | `POST` | `/chat` | Multi-turn conversation (requires database) |

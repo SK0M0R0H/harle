@@ -34,3 +34,10 @@ HARLE_RUN_LOG_STORE_CONTEXT: true   # Set true to save assembled prompt in logs/
 # Web search requires TAVILY_API_KEY env var.
 # Vault tools (dataset_search, dataset_read_file) are enabled automatically
 # when HARLE_DATASET_PATH is configured.
+
+# --- Vault imports ---
+# Options for import sources (harle import ...). Loaded from the vault_imports key.
+# vault_imports:
+#   notion:
+#     max_block_depth: 3    # Max recursion depth when fetching block children (default 3)
+#     page_size: 100       # Notion API page size for search/query/blocks (default 100)

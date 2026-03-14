@@ -19,7 +19,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Awaitable, TypeVar
 
-from harle.connections import ConnectionRegistry, TavilyConnection, TrelloConnection
+from harle.connections import ConnectionRegistry, NotionConnection, TavilyConnection, TrelloConnection
 from harle.tools.permissions import OperationMode
 from harle.tools.registry import ToolRegistry
 
@@ -54,6 +54,7 @@ def build_tool_registry(
     *,
     search_engine: SearchEngine | None = None,
     dataset_reader: DatasetReader | None = None,
+    connections: ConnectionRegistry | None = None,
 ) -> ToolRegistry | None:
     """Create and populate a :class:`ToolRegistry` with available modules.
 
@@ -69,12 +70,17 @@ def build_tool_registry(
     * **trello** — when both ``TRELLO_API_KEY`` and
       ``TRELLO_API_TOKEN`` are set. Exposes ``trello_list_boards``
       and ``trello_list_cards``.
+    * **notion** — when ``NOTION_API_TOKEN`` is set. Exposes
+      ``notion_search``, ``notion_read_page``,
+      ``notion_get_database``, and ``notion_query_database``.
 
     Args:
         search_engine: Pre-configured search engine for dataset
             queries (enables vault ``dataset_search``).
         dataset_reader: Pre-configured dataset reader for file
             access (enables vault ``dataset_read_file``).
+        connections: Optional pre-built ConnectionRegistry.
+            If ``None``, one is built from environment variables.
 
     Returns:
         A fully initialised :class:`ToolRegistry`, or ``None`` if
@@ -83,7 +89,8 @@ def build_tool_registry(
     registry = ToolRegistry()
     has_modules = False
 
-    connections = _build_connections()
+    if connections is None:
+        connections = build_connections()
 
     has_modules |= _register_vault(
         registry,
@@ -92,6 +99,7 @@ def build_tool_registry(
     )
     has_modules |= _register_web_search(registry, connections=connections)
     has_modules |= _register_trello(registry, connections=connections)
+    has_modules |= _register_notion(registry, connections=connections)
 
     if not has_modules:
         return None
@@ -106,13 +114,19 @@ def build_tool_registry(
 
 
 
-def _build_connections() -> ConnectionRegistry | None:
-    """Build the shared connection registry for enabled services."""
+def build_connections() -> ConnectionRegistry | None:
+    """Build the shared connection registry from environment variables.
+
+    Returns:
+        A populated :class:`ConnectionRegistry`, or ``None`` if no
+        service credentials are configured.
+    """
     tavily_key = os.getenv("TAVILY_API_KEY", "")
     trello_key = os.getenv("TRELLO_API_KEY", "")
     trello_token = os.getenv("TRELLO_API_TOKEN", "")
+    notion_token = os.getenv("NOTION_API_TOKEN", "")
 
-    if not tavily_key and not (trello_key and trello_token):
+    if not tavily_key and not (trello_key and trello_token) and not notion_token:
         return None
 
     registry = ConnectionRegistry()
@@ -129,6 +143,19 @@ def _build_connections() -> ConnectionRegistry | None:
             )
         )
         logger.info("Connection registered: trello")
+
+    if notion_token:
+        notion_config: dict = {"api_token": notion_token}
+        try:
+            timeout = int(os.getenv("NOTION_TIMEOUT_SECONDS", "120"))
+            if timeout > 0:
+                notion_config["timeout_seconds"] = timeout
+        except ValueError:
+            pass
+        _run_coro_sync(
+            registry.register(NotionConnection(), notion_config)
+        )
+        logger.info("Connection registered: notion")
 
     return registry
 
@@ -207,4 +234,30 @@ def _register_trello(
         skill_names=["read_sequence"],
     )
     logger.info("Trello tool module registered.")
+    return True
+
+
+def _register_notion(
+    registry: ToolRegistry,
+    *,
+    connections: ConnectionRegistry | None,
+) -> bool:
+    """Register the Notion module if a Notion connection is configured."""
+    if connections is None or not connections.has("notion"):
+        return False
+
+    from harle.tools.notion.module import NotionModule
+
+    module = NotionModule()
+    _run_coro_sync(
+        module.initialize({
+            "connection": "notion",
+        }, connections=connections)
+    )
+    registry.register_module(
+        module,
+        mode=OperationMode.AUTO,
+        skill_names=["usage"],
+    )
+    logger.info("Notion tool module registered.")
     return True

@@ -225,6 +225,20 @@ class ToolRegistry:
         """
         return self._modules.get(module_name)
 
+    async def health_check_all(self) -> dict[str, bool]:
+        """Run health_check() on each registered module.
+
+        Returns:
+            Mapping from module name to healthy (True/False).
+        """
+        result: dict[str, bool] = {}
+        for name, module in self._modules.items():
+            try:
+                result[name] = await module.health_check()
+            except Exception:
+                result[name] = False
+        return result
+
     def get_module_for_tool(self, tool_name: str) -> BaseToolModule | None:
         """Return the module that owns *tool_name*, or ``None``.
 

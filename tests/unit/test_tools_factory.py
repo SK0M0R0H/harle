@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from harle.tools.factory import _build_connections, build_tool_registry
+from harle.tools.factory import build_connections, build_tool_registry
 
 
 class TestBuildConnections:
@@ -26,9 +26,10 @@ class TestBuildConnections:
             "TAVILY_API_KEY": "",
             "TRELLO_API_KEY": "",
             "TRELLO_API_TOKEN": "",
+            "NOTION_API_TOKEN": "",
         }.get(key, default)
 
-        result = _build_connections()
+        result = build_connections()
 
         assert result is None
         mock_registry_cls.assert_not_called()
@@ -51,13 +52,14 @@ class TestBuildConnections:
             "TAVILY_API_KEY": "",
             "TRELLO_API_KEY": "trello-key",
             "TRELLO_API_TOKEN": "trello-token",
+            "NOTION_API_TOKEN": "",
         }.get(key, default)
 
         registry = MagicMock()
         mock_registry_cls.return_value = registry
         registry.register.return_value = "trello-register-coro"
 
-        result = _build_connections()
+        result = build_connections()
 
         assert result is registry
         mock_tavily_cls.assert_not_called()
@@ -85,13 +87,14 @@ class TestBuildConnections:
             "TAVILY_API_KEY": "tavily-key",
             "TRELLO_API_KEY": "trello-key",
             "TRELLO_API_TOKEN": "trello-token",
+            "NOTION_API_TOKEN": "",
         }.get(key, default)
 
         registry = MagicMock()
         mock_registry_cls.return_value = registry
         registry.register.side_effect = ["tavily-register-coro", "trello-register-coro"]
 
-        result = _build_connections()
+        result = build_connections()
 
         assert result is registry
         assert registry.register.call_count == 2
@@ -107,42 +110,48 @@ class TestBuildConnections:
 
 
 class TestBuildToolRegistry:
+    @patch("harle.tools.factory._register_notion")
     @patch("harle.tools.factory._register_trello")
     @patch("harle.tools.factory._register_web_search")
     @patch("harle.tools.factory._register_vault")
-    @patch("harle.tools.factory._build_connections")
+    @patch("harle.tools.factory.build_connections")
     def test_build_tool_registry_returns_none_when_no_modules_register(
         self,
         mock_build_connections: MagicMock,
         mock_register_vault: MagicMock,
         mock_register_web: MagicMock,
         mock_register_trello: MagicMock,
+        mock_register_notion: MagicMock,
     ) -> None:
         mock_build_connections.return_value = None
         mock_register_vault.return_value = False
         mock_register_web.return_value = False
         mock_register_trello.return_value = False
+        mock_register_notion.return_value = False
 
         registry = build_tool_registry(search_engine=None, dataset_reader=None)
 
         assert registry is None
 
+    @patch("harle.tools.factory._register_notion")
     @patch("harle.tools.factory._register_trello")
     @patch("harle.tools.factory._register_web_search")
     @patch("harle.tools.factory._register_vault")
-    @patch("harle.tools.factory._build_connections")
+    @patch("harle.tools.factory.build_connections")
     def test_build_tool_registry_keeps_partial_module_availability(
         self,
         mock_build_connections: MagicMock,
         mock_register_vault: MagicMock,
         mock_register_web: MagicMock,
         mock_register_trello: MagicMock,
+        mock_register_notion: MagicMock,
     ) -> None:
         connections = MagicMock()
         mock_build_connections.return_value = connections
         mock_register_vault.return_value = False
         mock_register_web.return_value = False
         mock_register_trello.return_value = True
+        mock_register_notion.return_value = False
 
         registry = build_tool_registry(search_engine=None, dataset_reader=None)
 

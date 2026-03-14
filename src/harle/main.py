@@ -111,13 +111,22 @@ def create_app() -> FastAPI:
         )
         logger.info("Context assembler configured.")
 
-    # ── Tool modules ─────────────────────────────────────────────────
-    from harle.tools import build_tool_registry
+    # ── Shared connections ────────────────────────────────────────────
+    from harle.tools import build_connections, build_tool_registry
 
+    connections = build_connections()
+
+    # ── Tool modules ─────────────────────────────────────────────────
     tool_registry = build_tool_registry(
         search_engine=search_engine,
         dataset_reader=dataset_reader,
+        connections=connections,
     )
+
+    # ── Import registry ──────────────────────────────────────────────
+    from harle.vault_imports import build_import_registry
+
+    import_registry = build_import_registry(connections=connections)
 
     orchestrator = build_orchestrator(
         settings=settings,
@@ -133,6 +142,9 @@ def create_app() -> FastAPI:
             db=db,
             search_engine=search_engine,
             settings=settings,
+            import_registry=import_registry,
+            connections=connections,
+            tool_registry=tool_registry,
         )
     )
 

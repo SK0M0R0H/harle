@@ -22,3 +22,21 @@ type InitResponse struct {
 	TotalFiles    int    `json:"total_files"`
 	DatasetPath   string `json:"dataset_path"`
 }
+
+type ImportRequest struct {
+	Source string            `json:"source"`
+	Config map[string]string `json:"config"`
+	DryRun bool              `json:"dry_run"`
+}
+
+type ImportResponse struct {
+	Status        string   `json:"status"`
+	Source        string   `json:"source"`
+	ItemsFound    int      `json:"items_found"`
+	ItemsImported int      `json:"items_imported"`
+	ItemsSkipped  int      `json:"items_skipped"`
+	ItemsFailed   int      `json:"items_failed"`
+	Errors        []string `json:"errors"`
+	CreatedPaths  []string `json:"created_paths"`
+	UpdatedPaths  []string `json:"updated_paths"`
+}

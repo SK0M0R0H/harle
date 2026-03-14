@@ -13,7 +13,7 @@ Public API::
 
 from harle.tools.base import BaseToolModule
 from harle.tools.constraints import ConstraintConfig, ConstraintViolation
-from harle.tools.factory import build_tool_registry
+from harle.tools.factory import build_connections, build_tool_registry
 from harle.tools.registry import ToolRegistry, ToolRegistryError
 from harle.tools.sandbox import SandboxConfig, SandboxError, SandboxResult
 from harle.tools.skills import LoadedSkill, SkillLoaderConfig
@@ -29,5 +29,6 @@ __all__ = [
     "SkillLoaderConfig",
     "ToolRegistry",
     "ToolRegistryError",
+    "build_connections",
     "build_tool_registry",
 ]

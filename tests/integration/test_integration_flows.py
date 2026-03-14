@@ -238,3 +238,36 @@ class TestApiPipelines:
         assert "## Active Policies" in provider.last_system_prompt
         assert "## Relevant Dataset Files" in provider.last_system_prompt
         assert "Q2 milestone is integration testing." in provider.last_system_prompt
+
+    def test_import_endpoint_full_pipeline_writes_vault(self, tmp_path: Path) -> None:
+        """POST /import with dummy source runs full pipeline and writes files to vault."""
+        from harle.config import Settings
+        from harle.vault_imports import build_import_registry
+
+        registry = build_import_registry()
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                import_registry=registry,
+                settings=Settings(HARLE_DATASET_PATH=str(tmp_path)),
+            )
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/import",
+            json={"source": "dummy", "config": {"context": "personal"}, "dry_run": False},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["source"] == "dummy"
+        assert data["items_found"] == 2
+        assert data["items_imported"] == 2
+        assert len(data["created_paths"]) == 2
+        for rel_path in data["created_paths"]:
+            assert (tmp_path / rel_path).exists()
+            content = (tmp_path / rel_path).read_text()
+            assert "import_source: dummy" in content or "dummy" in content

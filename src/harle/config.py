@@ -150,3 +150,18 @@ def load_settings() -> Settings:
         # 3. Built-in default (from the dataclass) — no action needed
 
     return Settings(**resolved)
+
+
+def get_vault_imports_config() -> dict[str, Any]:
+    """Return the ``vault_imports`` section from the config file.
+
+    Used by :func:`harle.vault_imports.build_import_registry` to pass
+    source-specific options (e.g. ``notion.max_block_depth``,
+    ``notion.page_size``). Returns an empty dict if the section is
+    missing or the config file is not loaded.
+    """
+    data = _load_yaml(_resolve_config_path())
+    vault_imports = data.get("vault_imports")
+    if isinstance(vault_imports, dict):
+        return vault_imports
+    return {}

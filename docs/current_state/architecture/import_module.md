@@ -2,7 +2,7 @@
 title: "Harle Import Module Layer — Current State"
 tags: [import, current-state, architecture, vault-imports, data-migration, implementation-status]
 context: global
-last_updated: 2026-03-10
+last_updated: 2026-03-14
 summary: "Tracks what the Import Module Layer implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Import Module Layer — Architecture & Functionality](../.
 
 ## Overall Status
 
-The Import Module Layer has **Phase 1 core infrastructure** in place: the base contract (`BaseImportSource`), data types (`ImportItem`, `ImportResult`, `ContentType`, `AccessInfo`), the Import Registry, the conversion pipeline (normalization, frontmatter, path resolution), and the Vault Writer. A dummy source exists to verify the pipeline end-to-end, and unit tests cover the registry and run_import flow. What is **not** implemented yet: real sources (Notion, Miro, bookmarks, Trello, Obsidian), the image processor (vision API), deduplication by `import_source_id`, reference-item `sync_summary` in frontmatter, source `initialize()` with the Connections Layer, CLI (`harle import ...`), Orchestrator `/import` endpoint, and config (`import_sources`, `import.image_processor`). In practice, the module is a **working framework** ready for sources and product wiring, but no user-facing import from external systems exists today.
+The Import Module Layer has **core infrastructure and the first real source (Notion)** implemented. The base contract (`BaseImportSource`), data types, Import Registry, conversion pipeline, and Vault Writer are in place from Phase 1. The **NotionImportSource** supports API mode with full materialization of standalone pages and databases (both per-page and table modes). A dummy source exists for testing. The CLI (`harle import notion`) and API (`POST /import`) are wired. `build_import_registry()` accepts a `ConnectionRegistry` and registers the Notion source when a Notion connection is available. What is **not** yet implemented: reference import mode (stubbed), Miro/bookmarks/Trello/Obsidian sources, image processor, deduplication by `import_source_id`, sync_summary, config-driven source registration, and post-write re-index.
 
 ---
 
@@ -34,12 +34,12 @@ The Import Module Layer has **Phase 1 core infrastructure** in place: the base c
 | Image processor (vision API) | Not implemented | No `image_processor.py`; pipeline passes IMAGE/STRUCTURED through without processing. |
 | Deduplication by import_source_id | Not implemented | Writer uses path existence + strategy only; no lookup of existing files by import_source_id. |
 | sync_summary in reference frontmatter | Not implemented | Pipeline does not add row_count, last_synced, schema for reference items. |
-| Source initialize() with connections | Not implemented | Registry does not call initialize(config, connections); API-mode sources cannot receive shared connections. |
-| Notion source (file + API) | Not implemented | No `notion/` package (source.py, parser.py). |
+| Source initialize() with connections | Implemented | `build_import_registry(connections=...)` passes ConnectionRegistry to API sources. |
+| Notion source (API) | Implemented | `vault_imports/notion/`: source.py, client.py, converter.py. API mode with pages and databases. Reference mode stubbed. |
 | Miro source | Not implemented | No `miro/` package. |
 | Bookmarks, Trello, Obsidian sources | Not implemented | Not present. |
-| CLI integration | Not implemented | No `harle import` command group or Go CLI wiring. |
-| Orchestrator /import endpoint | Not implemented | No HTTP endpoint for import; pipeline not exposed to product. |
+| CLI integration | Implemented | `harle import notion` Go CLI command with flags. |
+| Orchestrator /import endpoint | Implemented | `POST /import` accepts source, config, dry_run; returns ImportResponse. |
 | config import_sources / import | Not implemented | No `import_sources` or `import.image_processor` in config.example.yaml. |
 | Post-write re-index | Not implemented | Vault Writer does not trigger Indexer sync after writing. |
 | Cost estimation / --max-cost | Not implemented | No vision cost estimation or abort threshold. |
@@ -87,10 +87,23 @@ Validation failures are returned as ImportResult with errors; no process crash.
 - Creates parent directories; applies strategy (skip_existing, update_changed, force) based on file existence and content comparison.
 - Returns WriteResult with created/updated/skipped/failed counts and path lists. No post-write re-index trigger.
 
-### 5. Dummy source and registry factory
+### 5. Notion source
+
+`src/harle/vault_imports/notion/` implements the first real import source:
+
+- **NotionImportSource**: API mode with two-phase extraction (standalone pages then databases). Database import supports `pages` mode (one file per row with properties in frontmatter) and `table` mode (single Markdown table). Reference mode is stubbed (`NotImplementedError`).
+- **NotionImportClient**: Wraps the Notion connection's HTTP client. Handles search, page/block retrieval, database schema and query, and two-step property resolution (required by Notion API 2022-06-28).
+- **converter.py**: Converts Notion blocks to Markdown (headings, lists, code, tables, images, etc.), rich text with annotations, and property values (all types: select, multi_select, date, checkbox, people, files, formula, relation, rollup, status, etc.). Also provides `database_to_markdown_table()`.
+
+### 6. Dummy source and registry factory
 
 - **DummyImportSource**: file mode only, returns two hardcoded ImportItems; used to exercise the full pipeline.
-- **build_import_registry(config=None)**: creates ImportRegistry and registers the dummy source; config is not passed to initialize().
+- **build_import_registry(config=None, connections=None)**: creates ImportRegistry, registers the dummy source unconditionally, and registers NotionImportSource when a Notion connection is available.
+
+### 7. CLI and API
+
+- **`harle import notion`** Go CLI command with `--dry-run`, `--context`, `--target-dir`, `--strategy`, `--db-mode` flags.
+- **`POST /import`** API endpoint accepts `{source, config, dry_run}` and returns `ImportResponse` with counts, paths, and errors.
 
 ### 6. Tests
 
@@ -113,9 +126,9 @@ So reference files are structurally correct for “access via tool module” but
 
 The TRD specifies a deduplication check by import_source_id (update if content changed, skip if unchanged). The current writer only considers path existence and content diff for the same path; it does not search the vault for an existing file with matching import_source_id. Re-imports can create duplicate paths if suggested_path differs or if the same source_id was written under a different path previously.
 
-### Source lifecycle without connections
+### Notion reference mode
 
-BaseImportSource.initialize(config, connections) is never invoked by the registry. So API-mode sources have no way to receive the shared ConnectionRegistry or stored clients. The framework is ready (signature exists) but not wired.
+`NotionImportSource.supported_modes()` returns `["api", "reference"]` but reference mode raises `NotImplementedError`. The stubbed mode is validated by `validate_input()` which returns an error message.
 
 ---
 
@@ -139,17 +152,17 @@ Missing: In pipeline frontmatter for REFERENCE items, add sync_summary (e.g. row
 
 **What this would unlock:** Better context for the agent and clearer “last synced” UX for reference imports.
 
-### 4. Source initialize() with ConnectionRegistry
+### 4. Notion reference mode
 
-Missing: When building or using the registry, call source.initialize(merged_config, connection_registry) so API-mode sources can store the shared connection and use it in extract().
+Missing: Reference import mode that creates lightweight vault files with metadata and `AccessInfo` pointing to the Notion tool module for live access. Currently raises `NotImplementedError`.
 
-**What this would unlock:** Notion API, Miro API, and other API-based sources without duplicating client code; alignment with the Connections Layer described in the TRD.
+**What this would unlock:** Import without full materialization; agents access content live via Notion tools.
 
-### 5. Notion source (file + API)
+### 5. Notion file mode (ZIP export)
 
-Missing: `vault_imports/notion/` (source.py, parser.py), NotionExportParser for ZIP, NotionImportSource with file and API modes, database materialization vs reference strategy, and connection reference to notion.
+Missing: Parsing Notion HTML/Markdown ZIP exports. Only API mode is implemented.
 
-**What this would unlock:** The primary migration path from Notion (ZIP export and live API) into the vault.
+**What this would unlock:** Offline import without API credentials; import of content from workspace exports.
 
 ### 6. Miro source
 

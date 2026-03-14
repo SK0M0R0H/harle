@@ -9,7 +9,12 @@ from fastapi import APIRouter, HTTPException, Query
 from sse_starlette.sse import EventSourceResponse
 
 from harle.api.models import (
+    ConnectionStatusItem,
+    ConnectionsHealthResponse,
+    HealthAllResponse,
     HealthResponse,
+    ImportRequest,
+    ImportResponse,
     InitResponse,
     ReindexResponse,
     RunDetail,
@@ -17,6 +22,8 @@ from harle.api.models import (
     RunResponse,
     SearchResponse,
     SearchResultItem,
+    ToolStatusItem,
+    ToolsHealthResponse,
 )
 from harle.api.streaming import drain_debug_events, result_event
 from harle.config import Settings
@@ -33,6 +40,9 @@ def build_router(
     db: Database | None = None,
     search_engine: SearchEngine | None = None,
     settings: Settings | None = None,
+    import_registry: object | None = None,
+    connections: object | None = None,
+    tool_registry: object | None = None,
 ) -> APIRouter:
     """Create API routes bound to concrete service instances.
 
@@ -41,12 +51,92 @@ def build_router(
         db: Optional database instance (enables ``/init``).
         search_engine: Optional search engine (enables ``/search``).
         settings: Application settings (needed for ``/init``).
+        import_registry: Optional ``ImportRegistry`` (enables ``/import``).
+        connections: Optional ``ConnectionRegistry`` (enables ``/health/connections``).
+        tool_registry: Optional ``ToolRegistry`` (enables ``/health/tools``).
     """
     router = APIRouter()
+
+    def _run_async(coro):
+        import asyncio
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(1) as pool:
+            return pool.submit(asyncio.run, coro).result()
 
     @router.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
+
+    @router.get("/health/connections", response_model=ConnectionsHealthResponse)
+    def health_connections() -> ConnectionsHealthResponse:
+        """Run health checks for all registered connections (Notion, Trello, Tavily, etc.)."""
+        if connections is None:
+            return ConnectionsHealthResponse(connections=[], all_healthy=True)
+        from harle.connections.registry import ConnectionRegistry
+        reg: ConnectionRegistry = connections  # type: ignore[assignment]
+        statuses = _run_async(reg.health_check_all())
+        items = [
+            ConnectionStatusItem(
+                name=name,
+                healthy=s.healthy,
+                message=s.message or "",
+                latency_ms=s.latency_ms,
+            )
+            for name, s in statuses.items()
+        ]
+        return ConnectionsHealthResponse(
+            connections=items,
+            all_healthy=all(s.healthy for s in statuses.values()),
+        )
+
+    @router.get("/health/tools", response_model=ToolsHealthResponse)
+    def health_tools() -> ToolsHealthResponse:
+        """Run health checks for all registered tool modules."""
+        if tool_registry is None:
+            return ToolsHealthResponse(tools=[], all_healthy=True)
+        from harle.tools.registry import ToolRegistry
+        reg: ToolRegistry = tool_registry  # type: ignore[assignment]
+        results = _run_async(reg.health_check_all())
+        items = [ToolStatusItem(name=name, healthy=ok) for name, ok in results.items()]
+        return ToolsHealthResponse(
+            tools=items,
+            all_healthy=all(results.values()) if results else True,
+        )
+
+    @router.get("/health/all", response_model=HealthAllResponse)
+    def health_all() -> HealthAllResponse:
+        """Run health checks for all connections and tool modules (covers tools and imports)."""
+        conn_items: list[ConnectionStatusItem] = []
+        if connections is not None:
+            from harle.connections.registry import ConnectionRegistry
+            reg: ConnectionRegistry = connections  # type: ignore[assignment]
+            statuses = _run_async(reg.health_check_all())
+            conn_items = [
+                ConnectionStatusItem(
+                    name=name,
+                    healthy=s.healthy,
+                    message=s.message or "",
+                    latency_ms=s.latency_ms,
+                )
+                for name, s in statuses.items()
+            ]
+        tool_items: list[ToolStatusItem] = []
+        if tool_registry is not None:
+            from harle.tools.registry import ToolRegistry
+            reg: ToolRegistry = tool_registry  # type: ignore[assignment]
+            results = _run_async(reg.health_check_all())
+            tool_items = [ToolStatusItem(name=name, healthy=ok) for name, ok in results.items()]
+        conn_healthy = all(c.healthy for c in conn_items) if conn_items else True
+        tool_healthy = all(t.healthy for t in tool_items) if tool_items else True
+        return HealthAllResponse(
+            connections=conn_items,
+            tools=tool_items,
+            all_healthy=conn_healthy and tool_healthy,
+        )
 
     @router.post("/run", response_model=RunResponse)
     def run_task(
@@ -197,6 +287,73 @@ def build_router(
                 for r in results
             ],
             total=len(results),
+        )
+
+    @router.post("/import", response_model=ImportResponse)
+    def run_import(request: ImportRequest) -> ImportResponse:
+        """Run an import from an external source into the vault."""
+        if import_registry is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Import registry is not configured.",
+            )
+        if settings is None or not settings.HARLE_DATASET_PATH:
+            raise HTTPException(
+                status_code=503,
+                detail="Dataset path is not configured. Set HARLE_DATASET_PATH.",
+            )
+
+        from harle.vault_imports.registry import ImportRegistry, ImportSourceNotFound
+
+        registry: ImportRegistry = import_registry  # type: ignore[assignment]
+
+        import asyncio
+
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                result = asyncio.run(
+                    registry.run_import(
+                        request.source,
+                        request.config,
+                        vault_path=settings.HARLE_DATASET_PATH,
+                        dry_run=request.dry_run,
+                    )
+                )
+            else:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(1) as pool:
+                    result = pool.submit(
+                        asyncio.run,
+                        registry.run_import(
+                            request.source,
+                            request.config,
+                            vault_path=settings.HARLE_DATASET_PATH,
+                            dry_run=request.dry_run,
+                        ),
+                    ).result()
+        except ImportSourceNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except Exception as e:
+            logger.exception("Import failed: %s", e)
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        status = "dry_run" if request.dry_run else "completed"
+        if result.errors:
+            status = "completed_with_errors" if result.items_imported else "failed"
+
+        return ImportResponse(
+            status=status,
+            source=result.source_name,
+            items_found=result.items_found,
+            items_imported=result.items_imported,
+            items_skipped=result.items_skipped,
+            items_failed=result.items_failed,
+            errors=result.errors,
+            created_paths=result.created_paths,
+            updated_paths=result.updated_paths,
         )
 
     def _sse_response(response: RunResponse) -> EventSourceResponse:
