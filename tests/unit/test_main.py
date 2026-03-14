@@ -46,7 +46,7 @@ def test_create_app_runs_startup_initialization_when_db_and_dataset_configured(m
         }
 
     monkeypatch.setattr("harle.bootstrap.ensure_initialized", _ensure_initialized)
-    monkeypatch.setattr("harle.main.build_tool_registry", lambda **kwargs: object())
+    monkeypatch.setattr("harle.tools.build_tool_registry", lambda **kwargs: object())
     monkeypatch.setattr("harle.main.build_orchestrator", lambda **kwargs: object())
     monkeypatch.setattr("harle.main.build_router", lambda **kwargs: APIRouter())
 
