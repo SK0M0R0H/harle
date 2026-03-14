@@ -14,8 +14,11 @@ import logging
 import sys
 from pathlib import Path
 
+from sqlalchemy import inspect, select
+
 from harle.dataset.reader import DatasetReader
 from harle.db.connection import Database
+from harle.db.models import Base, FileIndex
 from harle.indexing.indexer import Indexer
 
 logger = logging.getLogger(__name__)
@@ -297,6 +300,13 @@ def seed_dataset(dataset_path: str) -> int:
     return written
 
 
+def _sync_index(db: Database, dataset_path: str) -> int:
+    """Run one indexer sync pass for *dataset_path* and return change count."""
+    reader = DatasetReader(dataset_path)
+    indexer = Indexer(db, reader)
+    return indexer.sync()
+
+
 def run_initial_index(db: Database, dataset_path: str) -> int:
     """Index all dataset files into the ``file_index`` table.
 
@@ -307,9 +317,65 @@ def run_initial_index(db: Database, dataset_path: str) -> int:
     Returns:
         Number of file_index rows added or updated.
     """
+    return _sync_index(db, dataset_path)
+
+
+def _dataset_seed_ready(dataset_path: str) -> bool:
+    """Return whether the expected vault structure and seed files already exist."""
+    root = Path(dataset_path)
+    if not root.exists() or not root.is_dir():
+        return False
+
+    directories_ready = all((root / directory).is_dir() for directory in SEED_DIRECTORIES)
+    files_ready = all((root / relative_path).is_file() for relative_path in SEED_FILES)
+    return directories_ready and files_ready
+
+
+def _tables_exist(db: Database) -> bool:
+    """Return whether all ORM tables are present in the configured database."""
+    inspector = inspect(db.engine)
+    existing_tables = set(inspector.get_table_names())
+    expected_tables = set(Base.metadata.tables)
+    return expected_tables.issubset(existing_tables)
+
+
+def _file_index_populated(db: Database) -> bool:
+    """Return whether the ``file_index`` table contains at least one row."""
+    if not _tables_exist(db):
+        return False
+
+    with db.session() as session:
+        first_row = session.scalars(select(FileIndex.id).limit(1)).first()
+    return first_row is not None
+
+
+def ensure_initialized(db: Database, dataset_path: str) -> dict[str, object]:
+    """Ensure DB tables, dataset seed, and initial index are in place.
+
+    This is safe to run on every startup. It always ensures tables exist,
+    then runs seeding/indexing only when the current environment indicates
+    they are still missing.
+    """
+    create_tables(db)
+
+    dataset_seed_ready = _dataset_seed_ready(dataset_path)
+    files_seeded = 0 if dataset_seed_ready else seed_dataset(dataset_path)
+
+    file_index_populated = _file_index_populated(db)
+    should_index = files_seeded > 0 or not file_index_populated
+    files_indexed = run_initial_index(db, dataset_path) if should_index else 0
+
     reader = DatasetReader(dataset_path)
-    indexer = Indexer(db, reader)
-    return indexer.sync()
+    total_files = len(reader.list_files())
+
+    return {
+        "tables_created": True,
+        "files_seeded": files_seeded,
+        "files_indexed": files_indexed,
+        "total_files": total_files,
+        "dataset_path": dataset_path,
+        "already_initialized": files_seeded == 0 and not should_index,
+    }
 
 
 def init_system(db: Database, dataset_path: str) -> dict[str, object]:
@@ -326,20 +392,7 @@ def init_system(db: Database, dataset_path: str) -> dict[str, object]:
     Returns:
         Summary dict with counts of tables, seed files, and indexed files.
     """
-    create_tables(db)
-    files_created = seed_dataset(dataset_path)
-    files_indexed = run_initial_index(db, dataset_path)
-
-    reader = DatasetReader(dataset_path)
-    total_files = len(reader.list_files())
-
-    return {
-        "tables_created": True,
-        "files_seeded": files_created,
-        "files_indexed": files_indexed,
-        "total_files": total_files,
-        "dataset_path": dataset_path,
-    }
+    return ensure_initialized(db, dataset_path)
 
 
 def reindex_dataset(db: Database, dataset_path: str) -> dict[str, object]:
@@ -355,9 +408,8 @@ def reindex_dataset(db: Database, dataset_path: str) -> dict[str, object]:
     Returns:
         Summary dict with the number of index changes and total files.
     """
+    changes = _sync_index(db, dataset_path)
     reader = DatasetReader(dataset_path)
-    indexer = Indexer(db, reader)
-    changes = indexer.sync()
     total_files = len(reader.list_files())
 
     return {
