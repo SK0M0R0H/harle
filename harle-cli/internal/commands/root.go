@@ -30,6 +30,7 @@ func NewRootCommand() *cobra.Command {
 	command.AddCommand(newExecCommand(&serverURL, &contextValue))
 	command.AddCommand(newInitCommand(&serverURL))
 	command.AddCommand(newCaptureCommand(&serverURL))
+	command.AddCommand(newImportCommand(&serverURL))
 
 	return command
 }

@@ -60,6 +60,44 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class ConnectionStatusItem(BaseModel):
+    """Health status of a single connection (Notion, Trello, Tavily, etc.)."""
+
+    name: str
+    healthy: bool
+    message: str = ""
+    latency_ms: float | None = None
+
+
+class ConnectionsHealthResponse(BaseModel):
+    """Result of health checks for all registered connections."""
+
+    connections: list[ConnectionStatusItem]
+    all_healthy: bool
+
+
+class ToolStatusItem(BaseModel):
+    """Health status of a single tool module."""
+
+    name: str
+    healthy: bool
+
+
+class ToolsHealthResponse(BaseModel):
+    """Result of health checks for all registered tool modules."""
+
+    tools: list[ToolStatusItem]
+    all_healthy: bool
+
+
+class HealthAllResponse(BaseModel):
+    """Combined health check for connections and tools (covers tools and imports)."""
+
+    connections: list[ConnectionStatusItem]
+    tools: list[ToolStatusItem]
+    all_healthy: bool
+
+
 class ErrorResponse(BaseModel):
     """Structured error returned by the API."""
 
@@ -87,6 +125,34 @@ class ReindexResponse(BaseModel):
     files_indexed: int
     total_files: int
     dataset_path: str
+
+
+# --- Import models ---
+
+
+class ImportRequest(BaseModel):
+    """Request body for the ``/import`` endpoint."""
+
+    source: str = Field(min_length=1, description="Import source name (e.g. 'notion')")
+    config: dict = Field(default_factory=dict, description="Source-specific config")
+    dry_run: bool = Field(default=False, description="Preview without writing files")
+
+
+class ImportResponse(BaseModel):
+    """Response from the ``/import`` endpoint."""
+
+    status: str
+    source: str
+    items_found: int
+    items_imported: int
+    items_skipped: int
+    items_failed: int
+    errors: list[str] = Field(default_factory=list)
+    created_paths: list[str] = Field(default_factory=list)
+    updated_paths: list[str] = Field(default_factory=list)
+
+
+# --- Search models ---
 
 
 class SearchResultItem(BaseModel):

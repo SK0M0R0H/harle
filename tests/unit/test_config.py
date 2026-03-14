@@ -9,7 +9,13 @@ from unittest.mock import patch
 
 import pytest
 
-from harle.config import Settings, _coerce, _load_yaml, load_settings
+from harle.config import (
+    Settings,
+    _coerce,
+    _load_yaml,
+    get_vault_imports_config,
+    load_settings,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +155,39 @@ class TestLoadSettings:
         with patch.dict(os.environ, env, clear=False):
             s = load_settings()
         assert s.HARLE_HOST == "from_file"
+
+
+# ---------------------------------------------------------------------------
+# get_vault_imports_config
+# ---------------------------------------------------------------------------
+
+class TestGetVaultImportsConfig:
+    def test_returns_vault_imports_section(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(dedent("""\
+            HARLE_HOST: "127.0.0.1"
+            vault_imports:
+              notion:
+                max_block_depth: 5
+                page_size: 50
+        """), encoding="utf-8")
+        env = {"HARLE_CONFIG_PATH": str(cfg)}
+        with patch.dict(os.environ, env, clear=False):
+            result = get_vault_imports_config()
+        assert result.get("notion", {}).get("max_block_depth") == 5
+        assert result.get("notion", {}).get("page_size") == 50
+
+    def test_returns_empty_dict_when_section_missing(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("HARLE_HOST: localhost\n", encoding="utf-8")
+        env = {"HARLE_CONFIG_PATH": str(cfg)}
+        with patch.dict(os.environ, env, clear=False):
+            result = get_vault_imports_config()
+        assert result == {}
+
+    def test_returns_empty_dict_when_file_missing(self, tmp_path: Path) -> None:
+        fake = tmp_path / "nonexistent.yaml"
+        env = {"HARLE_CONFIG_PATH": str(fake)}
+        with patch.dict(os.environ, env, clear=False):
+            result = get_vault_imports_config()
+        assert result == {}

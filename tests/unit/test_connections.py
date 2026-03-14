@@ -1,4 +1,4 @@
-"""Tests for the Connections Layer core and Tavily implementation."""
+"""Tests for the Connections Layer core, Tavily, Trello, and Notion implementations."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from harle.connections import (
     ConnectionConfigError,
     ConnectionRegistry,
     ConnectionStatus,
+    NotionConnection,
     RateLimitConfig,
     RateLimiter,
     TavilyConnection,
@@ -209,3 +210,81 @@ class TestTrelloConnection:
         _run(conn.shutdown())
 
         mock_client.aclose.assert_awaited_once()
+
+
+class TestNotionConnection:
+    def test_initialize_requires_api_token(self) -> None:
+        conn = NotionConnection()
+        with pytest.raises(ConnectionConfigError):
+            _run(conn.initialize({}))
+
+    def test_initialize_requires_nonempty_token(self) -> None:
+        conn = NotionConnection()
+        with pytest.raises(ConnectionConfigError):
+            _run(conn.initialize({"api_token": "  "}))
+
+    @patch("harle.connections.notion.httpx.AsyncClient")
+    def test_initialize_and_get_client(self, mock_client_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value = mock_client
+
+        conn = NotionConnection()
+        _run(conn.initialize({"api_token": "ntn_test"}))
+
+        assert conn.get_client() is mock_client
+        mock_client_cls.assert_called_once()
+
+        call_kwargs = mock_client_cls.call_args[1]
+        assert "api.notion.com" in call_kwargs["base_url"]
+        assert "Bearer ntn_test" in call_kwargs["headers"]["Authorization"]
+        assert "Notion-Version" in call_kwargs["headers"]
+
+    @patch("harle.connections.notion.httpx.AsyncClient")
+    def test_health_check_success(self, mock_client_cls: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client_cls.return_value = mock_client
+
+        conn = NotionConnection()
+        _run(conn.initialize({"api_token": "ntn_test"}))
+        status = _run(conn.health_check())
+
+        assert status.healthy is True
+        assert status.service_name == "Notion"
+
+    @patch("harle.connections.notion.httpx.AsyncClient")
+    def test_health_check_failure(self, mock_client_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = RuntimeError("boom")
+        mock_client_cls.return_value = mock_client
+
+        conn = NotionConnection()
+        _run(conn.initialize({"api_token": "ntn_test"}))
+        status = _run(conn.health_check())
+
+        assert status.healthy is False
+        assert "boom" in status.message
+
+    @patch("harle.connections.notion.httpx.AsyncClient")
+    def test_shutdown_closes_client(self, mock_client_cls: MagicMock) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value = mock_client
+
+        conn = NotionConnection()
+        _run(conn.initialize({"api_token": "ntn_test"}))
+        _run(conn.shutdown())
+
+        mock_client.aclose.assert_awaited_once()
+
+    def test_get_client_before_init_raises(self) -> None:
+        conn = NotionConnection()
+        with pytest.raises(RuntimeError, match="not been initialized"):
+            conn.get_client()
+
+    def test_name_and_display_name(self) -> None:
+        conn = NotionConnection()
+        assert conn.name == "notion"
+        assert conn.service_display_name == "Notion"

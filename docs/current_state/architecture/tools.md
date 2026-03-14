@@ -2,7 +2,7 @@
 title: "Harle Tool Module Layer — Current State"
 tags: [tools, current-state, architecture, implementation-status, registry, skills, security]
 context: global
-last_updated: 2026-03-06
+last_updated: 2026-03-14
 summary: "Tracks what the Tool Module Layer implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Tool Module Layer — Architecture & Functionality](../../trd/ar
 
 ## Overall Status
 
-The Tool Module Layer is **substantially implemented** for core infrastructure and two real modules (vault, web search). The registry, permissions, constraints, sandbox, and skills system exist and are tested. Gaps are mainly: config-driven module loading, Connections Layer integration, additional modules (Trello, scripts), per-request tool selection and approval flow wiring, and MCP.
+The Tool Module Layer is **substantially implemented** for core infrastructure and four real modules (vault, web search, Trello, Notion). The registry, permissions, constraints, sandbox, and skills system exist and are tested. Connections Layer integration is in place for Trello and Notion. Gaps are mainly: config-driven module loading, additional modules (scripts), per-request tool selection and approval flow wiring, and MCP.
 
 ---
 
@@ -32,12 +32,13 @@ The Tool Module Layer is **substantially implemented** for core infrastructure a
 | Skills system | Implemented | `skills.py`: vault override then built-in, SkillLoaderConfig, load_module_skills, token budget, LoadedSkill. |
 | Orchestrator wiring | Partially implemented | Registry is built and passed in; tools and skills are injected. Tool set is all tools, not a per-agent subset; approval gate not invoked before execution. |
 | Config-driven loading | Not implemented | Modules are registered in `factory.py` by hardcoded rules (env/deps), not from `config.yaml` `tool_modules`. |
-| Connections Layer in modules | Not implemented | `BaseToolModule.initialize(config)` has no `connections` parameter; web_search uses its own `client.py`, not a shared connection. |
+| Connections Layer in modules | Implemented | `BaseToolModule.initialize(config, connections)` accepts ConnectionRegistry; Trello, Notion, and Web Search modules use shared connections. |
 | Vault module | Partially implemented | Read-only: `dataset_search`, `dataset_read_file`. No create_note, update_note, search_notes as in TRD. |
 | Web Search module | Implemented | `search_web`, `search_news`, `fetch_page`; own client; skills loaded (e.g. research). |
-| Trello module | Not implemented | No `trello/` module. |
+| Trello module | Implemented | `trello/`: TrelloModule, trello_list_boards, trello_list_cards. Read-only via shared TrelloConnection. |
 | Scripts module | Not implemented | No `scripts/` module (run_script, list_scripts). |
-| Notion / Twitter | Not implemented | Not present. |
+| Notion module | Implemented | `notion/`: NotionModule with notion_search, notion_read_page, notion_get_database, notion_query_database. Read-only via shared NotionConnection. |
+| Twitter | Not implemented | Not present. |
 | Approval flow in request path | Not implemented | Permission checks exist but orchestrator does not pause for user approval on write/delete. |
 | Run Logger constraint/audit | Not verified | TRD Layer 5: log constraint results and full call details; not confirmed in this pass. |
 | config.example.yaml tool_modules | Partial | Short comment only; no full tool_modules with constraints, skills, mode per module. |
@@ -69,12 +70,14 @@ The Tool Module Layer is **substantially implemented** for core infrastructure a
 ### 5. Modules in use
 
 - **Vault**: `VaultModule` with `dataset_search` and `dataset_read_file`; receives search_engine and dataset_reader from factory; read-only; no skills registered in factory.
-- **Web Search**: `WebSearchModule` with `search_web`, `search_news`, `fetch_page`; own `WebSearchClient` in `client.py`; initialised from config dict (provider, api_key, etc.); skills `["research"]` registered.
+- **Web Search**: `WebSearchModule` with `search_web`, `search_news`, `fetch_page`; uses shared TavilyConnection via `connections.get("tavily")`; skills `["research"]` registered.
+- **Trello**: `TrelloModule` with `trello_list_boards` and `trello_list_cards`; uses shared TrelloConnection via `connections.get("trello")`; skills `["read_sequence"]` registered.
+- **Notion**: `NotionModule` with `notion_search`, `notion_read_page`, `notion_get_database`, `notion_query_database`; uses shared NotionConnection via `connections.get("notion")`; skills `["usage"]` registered. Two-step property resolution for database queries. All tools read-only.
 - **Dummy**: test module with read/create/delete and permission attributes.
 
 ### 6. Factory and orchestrator
 
-- **factory.py**: `build_tool_registry(search_engine=..., dataset_reader=...)` registers vault when dataset backends exist, web_search when `TAVILY_API_KEY` is set. Registry is built without reading `config.yaml` `tool_modules` or `tool_skills`.
+- **factory.py**: `build_connections()` creates a shared `ConnectionRegistry` from env vars (Tavily, Trello, Notion). `build_tool_registry(search_engine=..., dataset_reader=..., connections=...)` registers vault when dataset backends exist, web_search when Tavily is configured, trello when Trello credentials are set, notion when `NOTION_API_TOKEN` is set. Registry is built without reading `config.yaml` `tool_modules` or `tool_skills`.
 - **Orchestrator**: receives `tool_registry`, uses `list_all_tools()` and `get_agent_tools(all_tool_names)`, `get_skills_for_tools(all_tool_names)` so all registered tools and their skills are given to the agent.
 
 ### 7. Tests
@@ -109,10 +112,10 @@ TRD and “Phase 7” describe a full `tool_modules` example with per-module ena
 
 ## What Is Not Implemented
 
-### 1. Connections Layer in the tool layer
+### 1. Connections Layer — config-driven
 
-- **Missing:** `initialize(config, connections: ConnectionRegistry | None = None)` in BaseToolModule; modules obtaining clients via `connections.get("<name>")`; shared Tavily/Trello/Notion clients from a Connections Layer.
-- **Unlocks:** Single credential and client per service, shared rate limiting, no duplicate client code; consistent pattern for all API-based modules.
+- **Missing:** Reading connections from `config.yaml` instead of environment variables. The Connections Layer is functional but env-var-based.
+- **Unlocks:** Credential management and rotation via config; per-connection rate limits.
 
 ### 2. Config-driven tool module loading
 
@@ -129,32 +132,27 @@ TRD and “Phase 7” describe a full `tool_modules` example with per-module ena
 - **Missing:** Before executing a tool call, orchestrator/agent runner calls `check_tool_permission`; when `needs_approval` is true and mode is propose, pause and present the planned call to the user; only execute after approval (or skip).
 - **Unlocks:** Safe use of write/delete tools; user control over destructive or sensitive operations as in the TRD.
 
-### 5. Trello module
-
-- **Missing:** `trello/module.py`, `trello/tools.py` (e.g. search_cards, create_card, move_card), `trello/skills/`, and registration (preferably via config + connection).
-- **Unlocks:** Task and board management from the agent; Secretary-style use cases.
-
-### 6. Scripts module
+### 5. Scripts module
 
 - **Missing:** `scripts/module.py`, `scripts/tools.py` (run_script, list_scripts), `scripts/skills/safety.md`; registration with default_constraints and sandbox execution; constraint checks and run_sandboxed in the execution path.
 - **Unlocks:** Execution of user scripts from the agent with bounded risk (allowlists, blocked patterns, time/memory limits).
 
-### 7. Vault module write tools
+### 6. Vault module write tools
 
 - **Missing:** create_note, update_note (and possibly search_notes if different from dataset_search) with path constraints and permissions.
 - **Unlocks:** Agent ability to create/update vault content under constraints and approval.
 
-### 8. Run Logger audit (Layer 5)
+### 7. Run Logger audit (Layer 5)
 
 - **Missing (or not confirmed):** Logging each tool call with tool name, module, inputs, constraint check results, approval status, output summary, duration, resource usage.
 - **Unlocks:** Audit trail for safety and debugging; basis for “Specialist analyzes tool logs” use case.
 
-### 9. config.example.yaml tool_modules and tool_skills
+### 8. config.example.yaml tool_modules and tool_skills
 
 - **Missing:** Full `tool_modules` with at least vault, web_search, scripts (when added), with enabled, mode, skills, constraints; `tool_skills` with user_skills_dir and max_tokens_per_module.
 - **Unlocks:** Clear, copy-paste defaults and secure constraint examples for new deployments.
 
-### 10. MCP compatibility (Phase 8)
+### 9. MCP compatibility (Phase 8)
 
 - **Missing:** `mcp_provider.py` (consume external MCP servers as tools), `mcp_export.py` (expose Harle modules as MCP server).
 - **Unlocks:** Use of external MCP tools (e.g. GitHub) and use of Harle tools from Cursor/Claude.
@@ -163,7 +161,7 @@ TRD and “Phase 7” describe a full `tool_modules` example with per-module ena
 
 ## Key Deviations From the TRD
 
-- **Connections:** BaseToolModule does not take or use a ConnectionRegistry; web_search uses its own client. TRD assumes a shared Connections Layer and `connections.get("<name>")`.
+- **Connections:** Connections Layer is implemented and used by Trello, Notion, and Web Search modules. However, it is env-var-driven, not config-driven as in the TRD.
 - **Module discovery:** Registration is hardcoded in the factory by env/deps; TRD describes config-driven discovery from `tool_modules`.
 - **Tool set:** All registered tools are passed to every request; TRD describes a selected subset per agent/request.
 - **Approval:** Permission and needs_approval are implemented at the registry level but are not used in the execution path to gate or pause tool calls.
@@ -173,4 +171,4 @@ TRD and “Phase 7” describe a full `tool_modules` example with per-module ena
 
 ## Current Assessment
 
-The Tool Module Layer has a **solid core**: base, registry, permissions, constraints, sandbox, and skills are in place and tested, and two modules (vault read-only, web search) are wired through the factory into the orchestrator. The main gaps are **configuration and integration**: config-driven loading, Connections Layer integration, per-request tool selection, and approval flow in the request path. Adding Trello and Scripts modules and completing config.example.yaml would align the implementation with the TRD’s phased plan and unlock the Secretary and script-execution scenarios.
+The Tool Module Layer has a **solid core**: base, registry, permissions, constraints, sandbox, and skills are in place and tested, and four modules (vault read-only, web search, Trello, Notion) are wired through the factory into the orchestrator with shared connections. The main gaps are **configuration and integration**: config-driven loading, per-request tool selection, approval flow in the request path, scripts module, and MCP. Completing config.example.yaml would align the implementation with the TRD’s phased plan and unlock the remaining scenarios.

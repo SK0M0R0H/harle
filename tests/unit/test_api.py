@@ -22,6 +22,7 @@ def _make_client(
     db: object | None = None,
     search_engine: object | None = None,
     settings: Settings | None = None,
+    import_registry: object | None = None,
 ) -> TestClient:
     svc = OrchestratorService(llm_provider=EchoProvider())
     router = build_router(
@@ -29,6 +30,7 @@ def _make_client(
         db=db,  # type: ignore[arg-type]
         search_engine=search_engine,  # type: ignore[arg-type]
         settings=settings,
+        import_registry=import_registry,
     )
     app = FastAPI()
     app.include_router(router)
@@ -283,3 +285,70 @@ class TestGetRunEndpoint:
         resp = client.get("/run/run_guarded")
         assert resp.status_code == 200
         assert resp.json()["run_id"] == "run_guarded"
+
+
+class TestImportEndpoint:
+    """Tests for POST /import."""
+
+    def test_503_when_no_import_registry(self, client: TestClient) -> None:
+        resp = client.post("/import", json={"source": "notion", "config": {}, "dry_run": True})
+        assert resp.status_code == 503
+        assert "import registry" in resp.json()["detail"].lower()
+
+    def test_503_when_dataset_path_missing(self, client: TestClient) -> None:
+        from harle.vault_imports import build_import_registry
+
+        reg = build_import_registry()
+        client_with_reg = _make_client(
+            import_registry=reg,
+            settings=Settings(),
+        )
+        resp = client_with_reg.post(
+            "/import",
+            json={"source": "dummy", "config": {}, "dry_run": True},
+        )
+        assert resp.status_code == 503
+        assert "HARLE_DATASET_PATH" in resp.json()["detail"] or "Dataset path" in resp.json()["detail"]
+
+    def test_success_dry_run_returns_preview(self, tmp_path) -> None:
+        from harle.vault_imports import build_import_registry
+
+        reg = build_import_registry()
+        client_with_both = _make_client(
+            import_registry=reg,
+            settings=Settings(HARLE_DATASET_PATH=str(tmp_path)),
+        )
+        resp = client_with_both.post(
+            "/import",
+            json={"source": "dummy", "config": {}, "dry_run": True},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "dry_run"
+        assert data["source"] == "dummy"
+        assert data["items_found"] == 2
+        assert data["items_imported"] == 0
+        assert "created_paths" in data
+        assert "errors" in data
+
+    def test_success_import_writes_files(self, tmp_path) -> None:
+        from harle.vault_imports import build_import_registry
+
+        vault = tmp_path
+        reg = build_import_registry()
+        client_with_both = _make_client(
+            import_registry=reg,
+            settings=Settings(HARLE_DATASET_PATH=str(vault)),
+        )
+        resp = client_with_both.post(
+            "/import",
+            json={"source": "dummy", "config": {}, "dry_run": False},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert data["source"] == "dummy"
+        assert data["items_imported"] == 2
+        assert len(data["created_paths"]) == 2
+        for p in data["created_paths"]:
+            assert (vault / p).exists()
