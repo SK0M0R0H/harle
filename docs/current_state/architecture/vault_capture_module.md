@@ -2,7 +2,7 @@
 title: "Harle Vault Capture Module — Current State"
 tags: [vault-capture, current-state, architecture, implementation-status, onboarding, vault]
 context: global
-last_updated: 2026-03-06
+last_updated: 2026-03-13
 summary: "Tracks what the Vault Capture Module currently implements, what remains missing relative to the TRD, and what each missing part would unlock."
 ---
 
@@ -16,11 +16,9 @@ Reference TRD: [Vault Capture Module — Architecture & Functionality](../../trd
 
 ## Overall Status
 
-The Vault Capture Module exists today as an early infrastructure slice, not as a complete user-facing feature. The repository already contains a dedicated `src/harle/capture` package and matching database tables for capture runs, which means the project has started implementing **Phase 1: Core Infrastructure** from the TRD.
+The Vault Capture Module now includes both the **Phase 1: Core Infrastructure** and the **Phase 4: Conversational Interview** from the TRD. The module provides a complete topic registry, run lifecycle management, a profile writer, and a fully functional interview engine with LLM-driven adaptive questions, document draft generation, and an interactive CLI flow.
 
-What exists is enough to define topics, persist capture run state, and write capture output into the vault. What does **not** exist yet is the runtime system around it: no quick profile flow, no interview engine, no refresh flow, no health checker, no progressive capture hook, no memories bridge, and no CLI or API integration exposing the module to the user.
-
-In practice, the module is currently a **foundation layer** rather than an operational feature.
+The module is now an **operational feature** that users can invoke through `harle capture interview`.
 
 ---
 
@@ -28,18 +26,19 @@ In practice, the module is currently a **foundation layer** rather than an opera
 
 | TRD area | Current status | Notes |
 |---|---|---|
-| Topic Registry | Implemented | `src/harle/capture/topics.py` and `src/harle/capture/registry.py` define the topic model and default topic tree. |
-| Session / run persistence | Implemented | `src/harle/capture/run.py` and DB models in `src/harle/db/models.py` support create, pause, resume, complete, cancel, and per-topic progress tracking. |
-| Profile Writer | Partially implemented | `src/harle/capture/writer.py` writes Markdown with frontmatter and can merge sections, but the merge strategy is simpler than the TRD design. |
-| Database schema for capture | Implemented | `capture_runs` and `capture_run_topic_progress` tables exist in SQLAlchemy models and are created by the standard DB initialization path. |
+| Topic Registry | Implemented | `topics.py` and `registry.py` define the topic model and default topic tree. |
+| Session / run persistence | Implemented | `run.py` and DB models support create, pause, resume, complete, cancel, find-resumable, and per-topic progress. |
+| Profile Writer | Partially implemented | `writer.py` writes Markdown with frontmatter and can merge sections; merge strategy is simpler than TRD design (no user-edit detection). |
+| Database schema for capture | Implemented | `capture_runs` and `capture_run_topic_progress` tables in SQLAlchemy models. |
 | Quick Profile | Not implemented | No `quick_profile.py`, no CLI questionnaire, no bootstrap trigger. |
-| Conversational Interview engine | Not implemented | No `engine.py`, no prompts module, no interview orchestration. |
-| Refresh flow | Not implemented | No targeted stale-topic refresh workflow exists. |
-| Progressive Capture Hook | Not implemented | No passive capture from normal conversations exists. |
-| Health Checker | Not implemented | No staleness, metadata, coverage, or backlog reporting yet. |
-| Memories Bridge / consolidation | Not implemented | `memories` table exists, but no bridge or consolidation code is present. |
-| CLI integration | Not implemented | No `harle capture ...` or `harle vault check` commands were found. |
-| HTTP/API integration | Not implemented | No `/capture` endpoints or equivalent API surface were found. |
+| Conversational Interview engine | Implemented | `engine.py` + `interview_helpers.py` + `prompts.py` provide full interview flow with topic-cluster orchestration, adaptive LLM follow-ups, summary/confirmation, draft generation, and user approval loop. |
+| Interview prompt templates | Implemented | `prompts.py` includes system prompt, question builder, summary builder, draft builder, and per-topic capability notes. |
+| Refresh flow | Not implemented | No targeted stale-topic refresh workflow. |
+| Progressive Capture Hook | Not implemented | No passive capture from normal conversations. |
+| Health Checker | Not implemented | No staleness, metadata, coverage, or backlog reporting. |
+| Memories Bridge / consolidation | Not implemented | `memories` table exists, but no bridge or consolidation code. |
+| CLI integration (Go) | Partially implemented | `harle capture interview` subcommand with `--scope`, `--tier`, `--resume` flags. Other capture commands (`quick`, `refresh`, `consolidate`, `status`) and `harle vault check` not implemented. |
+| HTTP/API integration | Partially implemented | `/capture/interview/start` and `/capture/interview/respond` endpoints. No `/capture/status` or `/vault/check`. |
 | Tests for capture module | Not implemented | No dedicated tests for `harle.capture` were found in `tests/`. |
 
 ---
@@ -48,78 +47,47 @@ In practice, the module is currently a **foundation layer** rather than an opera
 
 ### 1. Topic model and default topic tree
 
-The codebase already includes the TRD's core topic abstractions:
-
-- `Tier`
-- `Sensitivity`
-- `TopicQuestion`
-- `Topic`
-
-The default topic tree in `src/harle/capture/topics.py` covers the same major areas described in the TRD:
-
-- Tier 1 work topics
-- Tier 2 work topics
-- Tier 3 personal topics
-- Tier 4 goals / aspirational topics
-
-This is a strong match with the intended architecture. The current implementation already treats the topic registry as **data-driven**, which aligns well with the TRD's main design principle for this component.
+The full TRD topic tree is implemented with `Tier`, `Sensitivity`, `TopicQuestion`, `Topic` dataclasses and the `default_topic_tree()` function covering tiers 1–4 (work, personal, goals).
 
 ### 2. Topic querying via `TopicRegistry`
 
-`src/harle/capture/registry.py` provides query methods for:
-
-- all topics
-- topic lookup by id
-- filtering by tier
-- filtering by scope
-- detecting stale topics from completion timestamps
-
-That means the system already has the core read/query behavior needed by future capture flows, health checks, and refresh logic.
+`registry.py` provides query methods for all topics, by ID, by tier, by scope, and stale topic detection. The `TopicSelector` helper in `interview_helpers.py` provides topic ordering and next-topic selection.
 
 ### 3. Capture run lifecycle persistence
 
-The TRD's Session Manager has been implemented under a slightly different naming scheme:
+`CaptureRunManager` supports: create, start, pause, resume, complete, cancel, find-resumable, and per-topic progress updates. All state is persisted in PostgreSQL via `capture_runs` and `capture_run_topic_progress` tables.
 
-- TRD term: `Session Manager`
-- current code term: `CaptureRunManager`
-- TRD term: `CaptureSession`
-- current code term: `CaptureRun`
+### 4. Profile Writer with merge
 
-This naming change is documented in code comments and appears intentional, mainly to avoid confusion with chat sessions.
+`ProfileWriter` writes capture outputs to vault with YAML frontmatter, creates directories, and merges by section heading on updates.
 
-The current implementation supports:
+### 5. Conversational Interview Engine (Phase 4)
 
-- creating a run
-- selecting topics for the run based on scope and tier
-- starting a run
-- pausing a run
-- resuming a run
-- completing a run
-- cancelling a run
-- updating per-topic progress, answers, generated content, and vault path
+The interview engine (`engine.py`, `interview_helpers.py`, `prompts.py`) provides:
 
-The matching SQLAlchemy tables also exist:
+- **State machine per topic cluster**: questioning → summary/confirmation → draft review → approval → vault write
+- **LLM-driven adaptive questions**: uses the OpenAI API to rephrase registry questions naturally and generate follow-ups based on user answers
+- **GATE methodology**: open-ended questions, progressive depth (broad → narrow)
+- **Summary and confirmation**: after 3–5 questions per cluster, generates a summary and asks "did I miss anything?"
+- **Vault document generation**: LLM generates Markdown documents (not Q&A transcripts) from collected answers
+- **Draft review flow**: user can approve, edit, or skip each draft
+- **Tier breaks**: after each tier, offers a stopping point (DP-6)
+- **Privacy handling**: high-sensitivity topics include a privacy note (DP-7)
+- **Capability notes**: after each topic, explains what the captured knowledge enables (DP-4)
+- **Pause/resume**: sessions persist to DB and can be resumed later
+- **Fallback mode**: when no OpenAI API key is set, uses registry questions directly and simple text templates
 
-- `capture_runs`
-- `capture_run_topic_progress`
+### 6. HTTP API for interview
 
-This gives the project a real persistence backbone for resumable capture workflows.
+- `POST /capture/interview/start` — start or resume an interview session
+- `POST /capture/interview/respond` — process user responses and advance the interview
 
-### 4. Basic vault writing with frontmatter
+### 7. Go CLI for interview
 
-`ProfileWriter` can already:
-
-- validate that writes stay inside the vault root
-- create parent directories
-- generate frontmatter for new files
-- update `last_updated` when writing an update
-- merge new content into an existing document by section heading
-
-This is enough to support basic generated vault output and gives the project a reusable write path for later capture flows.
-
-### 5. Capture package export surface
-
-`src/harle/capture/__init__.py` exposes the main Phase 1 objects as a coherent module API. That is a small but useful sign that the code was written as a real subsystem rather than as isolated experiments.
+- `harle capture interview` — interactive interview loop
+- Flags: `--scope`, `--tier`, `--resume`
+- Slash commands: `/pause`, `/skip`, `/quit`
+- Draft review: `y` to approve, type to edit, `/skip` to skip
 
 ---
 
@@ -127,27 +95,15 @@ This is enough to support basic generated vault output and gives the project a r
 
 ### Profile Writer merge behavior
 
-The TRD describes a sophisticated merge strategy that preserves user-edited sections and appends capture updates when needed. The current implementation does **not** do that yet.
+Current behavior: replace matching headings, append new headings. Missing: detection of user-modified sections, preservation of manual edits, append-only `[Capture update]` fallback.
 
-Current behavior:
+### CLI coverage
 
-- split existing and new documents by heading
-- replace matching headings
-- append new headings that do not exist yet
+Only `harle capture interview` is implemented. Missing: `harle capture quick`, `harle capture refresh`, `harle capture consolidate`, `harle capture status`, `harle vault check`.
 
-Missing behavior from the TRD:
+### API coverage
 
-- detection of user-modified sections
-- preservation of manual edits when capture data changes
-- append-only fallback such as a `[Capture update]` subsection
-
-This means the current writer is useful for bootstrapping, but it is not yet safe enough for the full refresh workflow described in the TRD.
-
-### Database readiness vs. product readiness
-
-The database schema exists, but the user-facing workflows that would populate and consume it do not. The tables are present because they are part of the global ORM model set, not because the full capture product is already active.
-
-This is an important distinction: the module is **schema-ready**, but not yet **flow-ready**.
+Only interview start/respond endpoints. Missing: status endpoint, vault check endpoint.
 
 ---
 
@@ -155,141 +111,31 @@ This is an important distinction: the module is **schema-ready**, but not yet **
 
 ### 1. Quick Profile flow
 
-Missing pieces:
+No `quick_profile.py`, CLI questionnaire, or bootstrap trigger. Would provide a 5-minute no-LLM onboarding path.
 
-- `quick_profile.py`
-- CLI questionnaire
-- bootstrap trigger for empty vaults
-- response-to-document generation flow
+### 2. Refresh workflow
 
-What this would unlock:
+No targeted stale-topic refresh. Would keep personalized knowledge current over time.
 
-- the first usable onboarding experience for new users
-- immediate creation of a minimal personalized vault
-- a practical path to fulfill the TRD rule of "never present a blank canvas"
+### 3. Health Checker
 
-### 2. Conversational interview engine
+No staleness, metadata, coverage analysis, or health reports. Would provide vault quality visibility.
 
-Missing pieces:
+### 4. Progressive Capture Hook
 
-- `engine.py`
-- interview prompt templates
-- topic-cluster orchestration
-- adaptive follow-up questions
-- user confirmation loop around generated drafts
+No passive preference capture from normal conversations. Would enable organic learning.
 
-What this would unlock:
+### 5. Memories Bridge and consolidation
 
-- the main high-value capture workflow described in the TRD
-- deeper user modeling beyond a short bootstrap form
-- progressive depth in onboarding rather than one-shot static input
+No vault ↔ memories sync, no progressive capture consolidation. Would bridge human-readable files and machine-queryable facts.
 
-### 3. Refresh workflow
+### 6. Re-indexing and post-write side effects
 
-Missing pieces:
+No automatic re-index trigger after writes. Would make captured knowledge immediately searchable.
 
-- stale-topic loading
-- display of current vault content before re-capture
-- targeted update flow for existing files
-- refresh-specific orchestration rules
+### 7. Tests for the module
 
-What this would unlock:
-
-- keeping personalized knowledge current over time
-- safe re-interview on aging facts such as projects, tools, and preferences
-- a practical maintenance loop rather than one-time onboarding only
-
-### 4. Health Checker
-
-Missing pieces:
-
-- staleness detection across vault files
-- metadata validation for capture outputs
-- coverage analysis against the topic registry
-- progressive-capture backlog reporting
-- human-readable health report generation
-
-What this would unlock:
-
-- visibility into how complete and how stale the user's vault is
-- a clear mechanism to recommend next capture actions
-- the basis for proactive nudges such as "refresh this topic" or "fill this gap"
-
-### 5. Progressive Capture Hook
-
-Missing pieces:
-
-- interception of normal conversations
-- preference/fact extraction rules
-- confidence-based filtering
-- exclusions for sensitive topics
-- background save path for durable preferences
-
-What this would unlock:
-
-- learning from normal usage without forcing explicit onboarding
-- gradual personalization over time
-- a more natural UX where Harle becomes more useful as the user works
-
-### 6. Memories Bridge and consolidation
-
-Missing pieces:
-
-- extraction of atomic memories from capture outputs
-- synchronization from vault documents into `memories`
-- consolidation of progressively captured facts back into structured documents
-
-What this would unlock:
-
-- the bridge between human-readable vault files and fast machine-queryable facts
-- immediate personalization from newly captured knowledge
-- consolidation of fragmented learned preferences into stable documents
-
-### 7. CLI and API integration
-
-Missing pieces:
-
-- `harle capture quick`
-- `harle capture interview`
-- `harle capture refresh`
-- `harle capture consolidate`
-- `harle capture status`
-- `harle vault check`
-- API endpoints for capture lifecycle and interaction
-
-What this would unlock:
-
-- actual access to the module from the product
-- manual and automated entry points for onboarding and refresh
-- a path for future UI layers to call the same workflows
-
-### 8. Re-indexing and post-write side effects
-
-Missing pieces:
-
-- immediate re-index trigger after capture writes
-- automatic updates to related memory records
-- completion bookkeeping coupled to successful writes
-
-What this would unlock:
-
-- "immediate value" after capture, as described in the TRD
-- newly captured knowledge becoming searchable right away
-- more reliable synchronization across the vault, DB, and future reasoning pipeline
-
-### 9. Tests for the module
-
-Missing pieces:
-
-- unit tests for topic registry behavior
-- unit tests for run lifecycle persistence
-- unit tests for writer merge behavior
-
-What this would unlock:
-
-- confidence to evolve the module without breaking pause/resume or vault writes
-- safer implementation of later phases like refresh and progressive capture
-- faster iteration on prompt-driven flows once the engine is added
+No dedicated unit or integration tests. Would enable safe evolution of the module.
 
 ---
 
@@ -297,37 +143,25 @@ What this would unlock:
 
 ### "Session" became "Run"
 
-The code uses `CaptureRun` and `CaptureRunManager` rather than `CaptureSession` and `Session Manager`. This is not a problem by itself, but future documentation should stay explicit about the terminology so chat sessions and capture workflows are not confused.
+The code uses `CaptureRun` and `CaptureRunManager` to avoid confusion with chat sessions.
 
-### Implementation path differs from the issue shorthand
+### Interview uses direct OpenAI calls, not the Orchestrator's conversation mode
 
-The active implementation is in `src/harle/capture`, not `src/capture`. Any future current-state docs or rules should point to the real package path.
+The TRD says the interview should reuse the Orchestrator's conversation mode. The current implementation uses the OpenAI API directly from the CaptureEngine, with its own prompt construction. This avoids coupling to the orchestrator's multi-turn infrastructure and gives the interview engine full control over the LLM interaction, but means conversation history is stored in the capture run (answers JSON), not in the conversations/messages tables.
 
-### Phase 1 is narrower than the TRD promise
+### Summary and draft generation are combined
 
-The TRD's Phase 1 description includes verification and a full working foundation for later phases. The repository currently has the production code skeleton for that phase, but it is not yet backed by module-specific tests or integrated product flows.
-
-### Writer safety is below the TRD target
-
-The existing merge strategy is appropriate for a first pass, but it does not yet satisfy the TRD promise that user edits are preserved intelligently during updates.
+The TRD describes separate "summarize and confirm" and "generate draft" steps. The current implementation generates both in one transition, showing the summary as a preamble to the draft.
 
 ---
 
 ## Current Assessment
 
-The Vault Capture Module is **started well but still pre-feature**.
+The Vault Capture Module is now a **working feature** for the primary use case: conversational interviews that capture personal knowledge into vault documents. The interview flow follows the TRD's topic tree, interview techniques, and design principles (DP-1, DP-2, DP-4, DP-5, DP-6, DP-7).
 
-The strongest implemented parts are:
+The most impactful next steps are:
 
-- the topic system
-- persistent capture run data structures
-- the basic vault writer
-
-The most important missing parts are:
-
-- user-facing entry points
-- the actual conversational engine
-- health and refresh loops
-- synchronization with memories and indexing
-
-The next meaningful milestone would be to turn the current infrastructure into the first end-to-end flow, most likely **Quick Profile**, because that would convert the existing foundation into something the user can actually run and benefit from.
+1. **Quick Profile** — provides a no-LLM fallback for fast onboarding
+2. **Health Checker** — enables vault quality monitoring
+3. **Tests** — enables confident evolution of the module
+4. **Re-indexing** — makes captured knowledge immediately searchable

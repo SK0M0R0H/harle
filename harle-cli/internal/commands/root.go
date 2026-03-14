@@ -29,6 +29,7 @@ func NewRootCommand() *cobra.Command {
 	command.PersistentFlags().StringVarP(&contextValue, "context", "c", "personal", "Context scope: personal or work")
 	command.AddCommand(newExecCommand(&serverURL, &contextValue))
 	command.AddCommand(newInitCommand(&serverURL))
+	command.AddCommand(newCaptureCommand(&serverURL))
 
 	return command
 }
