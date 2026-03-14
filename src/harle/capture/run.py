@@ -225,6 +225,38 @@ class CaptureRunManager:
         db_session.flush()
         return self.get_run(db_session, run_id)
 
+    def find_resumable_run(
+        self,
+        db_session: Session,
+        *,
+        mode: CaptureMode,
+    ) -> CaptureRun | None:
+        """Find the most recent paused or created run for the given mode.
+
+        Used by the interview engine to resume a previously paused session.
+        Returns the run or None if no resumable run exists.
+        """
+        row = db_session.execute(
+            select(CaptureRunRow)
+            .where(
+                CaptureRunRow.mode == mode.value,
+                CaptureRunRow.state.in_([
+                    CaptureRunState.PAUSED.value,
+                    CaptureRunState.CREATED.value,
+                ]),
+            )
+            .order_by(CaptureRunRow.updated_at.desc())
+            .limit(1),
+        ).scalars().first()
+        if row is None:
+            return None
+        progress_rows = db_session.execute(
+            select(CaptureRunTopicProgressRow).where(
+                CaptureRunTopicProgressRow.run_id == row.run_id,
+            ),
+        ).scalars().all()
+        return _row_to_run(row, progress_rows)
+
     def update_topic_progress(
         self,
         db_session: Session,

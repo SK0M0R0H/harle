@@ -1,9 +1,11 @@
-"""Vault Capture Module — topic registry, run manager, profile writer.
+"""Vault Capture Module — topic registry, run manager, profile writer, interview engine.
 
-Phase 1 provides the core infrastructure: topics, capture run lifecycle
-persistence, and writing/merging capture results to the vault. "Run"
-refers to a single capture workflow (quick profile, interview, refresh),
-distinct from chat sessions between the user and Harle.
+Provides core infrastructure and the conversational interview engine:
+topics, capture run lifecycle persistence, writing/merging capture
+results to the vault, LLM prompt templates, and the interview state
+machine. "Run" refers to a single capture workflow (quick profile,
+interview, refresh), distinct from chat sessions between the user
+and Harle.
 """
 
 from harle.capture.registry import TopicRegistry
