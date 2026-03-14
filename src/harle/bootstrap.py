@@ -18,7 +18,7 @@ from sqlalchemy import inspect, select
 
 from harle.dataset.reader import DatasetReader
 from harle.db.connection import Database
-from harle.db.models import FileIndex
+from harle.db.models import Base, FileIndex
 from harle.indexing.indexer import Indexer
 
 logger = logging.getLogger(__name__)
@@ -300,6 +300,13 @@ def seed_dataset(dataset_path: str) -> int:
     return written
 
 
+def _sync_index(db: Database, dataset_path: str) -> int:
+    """Run one indexer sync pass for *dataset_path* and return change count."""
+    reader = DatasetReader(dataset_path)
+    indexer = Indexer(db, reader)
+    return indexer.sync()
+
+
 def run_initial_index(db: Database, dataset_path: str) -> int:
     """Index all dataset files into the ``file_index`` table.
 
@@ -310,9 +317,7 @@ def run_initial_index(db: Database, dataset_path: str) -> int:
     Returns:
         Number of file_index rows added or updated.
     """
-    reader = DatasetReader(dataset_path)
-    indexer = Indexer(db, reader)
-    return indexer.sync()
+    return _sync_index(db, dataset_path)
 
 
 def _dataset_seed_ready(dataset_path: str) -> bool:
@@ -330,7 +335,7 @@ def _tables_exist(db: Database) -> bool:
     """Return whether all ORM tables are present in the configured database."""
     inspector = inspect(db.engine)
     existing_tables = set(inspector.get_table_names())
-    expected_tables = set(FileIndex.metadata.tables)
+    expected_tables = set(Base.metadata.tables)
     return expected_tables.issubset(existing_tables)
 
 
@@ -403,9 +408,8 @@ def reindex_dataset(db: Database, dataset_path: str) -> dict[str, object]:
     Returns:
         Summary dict with the number of index changes and total files.
     """
+    changes = _sync_index(db, dataset_path)
     reader = DatasetReader(dataset_path)
-    indexer = Indexer(db, reader)
-    changes = indexer.sync()
     total_files = len(reader.list_files())
 
     return {
