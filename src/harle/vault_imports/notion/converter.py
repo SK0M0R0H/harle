@@ -298,7 +298,16 @@ def property_value_to_string(
     if property_type == "relation":
         rels = value if isinstance(value, list) else value.get("results", value.get("relation", []))
         if isinstance(rels, list):
-            return ", ".join(r.get("id", "") for r in rels if isinstance(r, dict))
+            ids = []
+            for r in rels:
+                if not isinstance(r, dict):
+                    continue
+                # Notion relation items carry the related page ID under relation.id;
+                # top-level id is the property item id, not the target page.
+                page_id = r.get("relation", {}).get("id", r.get("id", ""))
+                if page_id:
+                    ids.append(page_id)
+            return ", ".join(ids)
         return ""
 
     if property_type == "rollup":

@@ -669,10 +669,18 @@ class TestNotionConverter:
     def test_property_value_to_string_relation(self) -> None:
         from harle.vault_imports.notion.converter import property_value_to_string
 
-        rels = [{"id": "id1"}, {"id": "id2"}]
+        # Notion API returns relation items with the related page ID under relation.id
+        rels = [
+            {"id": "prop-item-1", "type": "relation", "relation": {"id": "page-aaa-111"}},
+            {"id": "prop-item-2", "type": "relation", "relation": {"id": "page-bbb-222"}},
+        ]
         result = property_value_to_string("relation", rels)
-        assert "id1" in result
-        assert "id2" in result
+        assert "page-aaa-111" in result
+        assert "page-bbb-222" in result
+        assert "prop-item-1" not in result  # must use relation.id, not top-level id
+        # Fallback when relation.id is missing (e.g. legacy shape)
+        fallback = property_value_to_string("relation", [{"id": "only-id"}])
+        assert fallback == "only-id"
 
     def test_property_value_to_string_created_by(self) -> None:
         from harle.vault_imports.notion.converter import property_value_to_string
