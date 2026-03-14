@@ -68,8 +68,19 @@ def create_app() -> FastAPI:
         logger.info("Database connection configured.")
 
         if settings.HARLE_DATASET_PATH:
+            from harle.bootstrap import ensure_initialized
             from harle.dataset.reader import DatasetReader
             from harle.search.engine import SearchEngine
+
+            init_result = ensure_initialized(db, settings.HARLE_DATASET_PATH)
+            if init_result["already_initialized"]:
+                logger.info("Startup init check: already initialized; skipped seeding/indexing.")
+            else:
+                logger.info(
+                    "Startup init check completed (seeded=%s, indexed=%s).",
+                    init_result["files_seeded"],
+                    init_result["files_indexed"],
+                )
 
             search_engine = SearchEngine(
                 dataset_path=settings.HARLE_DATASET_PATH,
