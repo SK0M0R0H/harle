@@ -3,6 +3,8 @@
 Resolution order (highest priority wins):
     1. Config file  (``config.yaml`` by default, override with ``HARLE_CONFIG_PATH``)
     2. Environment variables  (fallback when a key is absent from the file)
+       - Process environment values win over ``.env`` values
+       - ``.env`` is loaded at startup when present
     3. Built-in defaults defined on the :class:`Settings` dataclass
 
 Field names are identical to environment variable names, so the same
@@ -19,12 +21,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import find_dotenv, load_dotenv
 
 logger = logging.getLogger(__name__)
 
 PROVIDER_OPENAI = "openai"
 
 DEFAULT_CONFIG_FILENAME = "config.yaml"
+DEFAULT_DOTENV_FILENAME = ".env"
+
+_DOTENV_LOADED = False
 
 
 @dataclass(frozen=True)
@@ -124,6 +130,42 @@ def _resolve_config_path() -> Path:
     return Path(DEFAULT_CONFIG_FILENAME)
 
 
+def _resolve_dotenv_path() -> Path | None:
+    """Return the dotenv path if one should be loaded.
+
+    Resolution order:
+        1. ``HARLE_DOTENV_PATH`` when set
+        2. The nearest ``.env`` discovered from the current working directory
+    """
+    dotenv_override = os.getenv("HARLE_DOTENV_PATH")
+    if dotenv_override:
+        return Path(dotenv_override)
+
+    discovered = find_dotenv(filename=DEFAULT_DOTENV_FILENAME, usecwd=True)
+    if discovered:
+        return Path(discovered)
+    return None
+
+
+def load_environment(*, force: bool = False) -> None:
+    """Load environment values from dotenv once without overriding process env.
+
+    ``force=True`` can be used by tests to reload after changing cwd or env.
+    """
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED and not force:
+        return
+
+    dotenv_path = _resolve_dotenv_path()
+    if dotenv_path is None:
+        _DOTENV_LOADED = True
+        return
+
+    load_dotenv(dotenv_path=dotenv_path, override=False)
+    logger.info("Loaded environment variables from %s", dotenv_path)
+    _DOTENV_LOADED = True
+
+
 def load_settings() -> Settings:
     """Build :class:`Settings` by merging config file, env vars, and defaults.
 
@@ -132,6 +174,8 @@ def load_settings() -> Settings:
         2. Environment variables
         3. Dataclass defaults
     """
+    load_environment()
+
     file_values = _load_yaml(_resolve_config_path())
 
     resolved: dict[str, Any] = {}
