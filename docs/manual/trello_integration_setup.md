@@ -48,7 +48,7 @@ Then start Harle as usual. The tool factory will register the Trello connection 
 
 ### Option B: `.env` or similar
 
-If you use a `.env` file (and load it before starting Harle), add:
+If you use a `.env` file in the project root (or set `HARLE_DOTENV_PATH`), Harle loads it automatically at startup. Add:
 
 ```
 TRELLO_API_KEY=your-api-key

@@ -217,12 +217,18 @@ HARLE_DATASET_PATH: "/home/you/harle-vault"
 DATABASE_URL: "postgresql+psycopg2://harle:harle@localhost:5432/harle"
 ```
 
-Set environment variables:
+Set environment variables directly, or create a `.env` file in the project root:
 
 ```bash
 export OPENAI_API_KEY="sk-..."         # required for LLM
 export TAVILY_API_KEY="tvly-..."       # optional: enables web search tools
 ```
+
+Harle automatically loads `.env` at startup (without overriding variables already set in the process environment). You can override the dotenv file location with `HARLE_DOTENV_PATH=/path/to/.env`.
+
+Precedence for environment values is:
+1. Process environment (shell/system) 
+2. `.env` file
 
 If `OPENAI_API_KEY` is not set, the app uses a local echo provider so you can still test the end-to-end flow. If `TAVILY_API_KEY` is not set, web search tools are simply not registered.
 
@@ -485,3 +491,6 @@ Environment variables (never in config file):
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Yes (for LLM) | OpenAI API key |
 | `TAVILY_API_KEY` | No | Enables web search tools |
+| `HARLE_DOTENV_PATH` | No | Optional custom `.env` file path |
+
+Harle loads `.env` automatically on startup. Process environment variables take precedence over values from `.env`.
