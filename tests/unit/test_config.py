@@ -14,6 +14,7 @@ from harle.config import (
     _coerce,
     _load_yaml,
     get_vault_imports_config,
+    load_environment,
     load_settings,
 )
 
@@ -191,3 +192,43 @@ class TestGetVaultImportsConfig:
         with patch.dict(os.environ, env, clear=False):
             result = get_vault_imports_config()
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# load_environment
+# ---------------------------------------------------------------------------
+
+class TestLoadEnvironment:
+    def test_loads_from_default_dotenv_in_cwd(self, tmp_path: Path) -> None:
+        dotenv = tmp_path / ".env"
+        dotenv.write_text("HARLE_LLM_MODEL=from_dotenv\n", encoding="utf-8")
+
+        with patch.dict(os.environ, {}, clear=True), patch("harle.config._DOTENV_LOADED", False):
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(tmp_path)
+                load_environment(force=True)
+                assert os.getenv("HARLE_LLM_MODEL") == "from_dotenv"
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_process_env_overrides_dotenv(self, tmp_path: Path) -> None:
+        dotenv = tmp_path / ".env"
+        dotenv.write_text("OPENAI_API_KEY=from_dotenv\n", encoding="utf-8")
+
+        env = {
+            "OPENAI_API_KEY": "from_process",
+            "HARLE_DOTENV_PATH": str(dotenv),
+        }
+        with patch.dict(os.environ, env, clear=True), patch("harle.config._DOTENV_LOADED", False):
+            load_environment(force=True)
+            assert os.getenv("OPENAI_API_KEY") == "from_process"
+
+    def test_custom_dotenv_path(self, tmp_path: Path) -> None:
+        dotenv = tmp_path / "custom.env"
+        dotenv.write_text("TAVILY_API_KEY=tvly-custom\n", encoding="utf-8")
+
+        env = {"HARLE_DOTENV_PATH": str(dotenv)}
+        with patch.dict(os.environ, env, clear=True), patch("harle.config._DOTENV_LOADED", False):
+            load_environment(force=True)
+            assert os.getenv("TAVILY_API_KEY") == "tvly-custom"
