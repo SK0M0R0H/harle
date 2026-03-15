@@ -30,6 +30,7 @@ class RunResponse(BaseModel):
     status: StatusType
     result: str
     context: ContextType
+    agent: str = "assistant"
     conversation_id: str | None = None
     tools_called: list[str] | None = None
     turns_used: int | None = None
