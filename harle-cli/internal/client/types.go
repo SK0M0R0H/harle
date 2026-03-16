@@ -7,11 +7,14 @@ type RunRequest struct {
 }
 
 type RunResponse struct {
-	RunID          string  `json:"run_id"`
-	Status         string  `json:"status"`
-	Result         string  `json:"result"`
-	Context        string  `json:"context"`
-	ConversationID *string `json:"conversation_id"`
+	RunID          string   `json:"run_id"`
+	Status         string   `json:"status"`
+	Result         string   `json:"result"`
+	Context        string   `json:"context"`
+	Agent          string   `json:"agent"`
+	ConversationID *string  `json:"conversation_id"`
+	ToolsCalled    []string `json:"tools_called"`
+	TurnsUsed      *int     `json:"turns_used"`
 }
 
 type InitResponse struct {
