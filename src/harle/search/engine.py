@@ -206,7 +206,7 @@ class SearchEngine:
         """Phase 2: expand -> pre-filter -> Whoosh -> enrich -> memory/prior -> rank."""
         index_path_str = getattr(config, "whoosh_index_path", "") or ""
         index_path = Path(index_path_str).expanduser() if index_path_str else None
-        max_results = getattr(config, "max_results", 10) or 10
+        max_results = query.max_results if query.max_results is not None and query.max_results > 0 else (getattr(config, "max_results", 10) or 10)
         max_mem = getattr(config, "max_memories", 10) or 10
         max_runs = getattr(config, "max_prior_runs", 5) or 5
         min_conf = getattr(config, "memory_min_confidence", 0.3) or 0.0

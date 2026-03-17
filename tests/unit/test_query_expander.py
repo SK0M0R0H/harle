@@ -39,8 +39,9 @@ class TestExpand:
         q = SearchQuery(query="trello tasks", max_results=5)
         vocab = {"trello", "task-management", "work"}
         out = expand(q, vocab, _config())
-        assert "trello" in out.tag_filters
-        assert "tasks" in out.tag_filters
+        assert "trello" in out.tag_filters  # exact match
+        # "tasks" stem-matches "task-management" → we add the vocab term for overlap()
+        assert "task-management" in out.tag_filters
         assert out.whoosh_terms
 
     def test_tag_filters_empty_when_no_match(self) -> None:

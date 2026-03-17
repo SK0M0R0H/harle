@@ -65,28 +65,32 @@ def expand(
     else:
         whoosh_terms = list(dict.fromkeys(words))
 
-    # Tag filters: terms that appear in the tag vocabulary or stem-match vocab tokens
-    # (e.g. "tasks" matches vocab "task-management" via stem "task").
+    # Tag filters: exact vocabulary terms only, so get_candidates_for_search()'s
+    # tags.overlap(tag_filters) matches. Include vocab terms that stem-match query
+    # words (e.g. query "tasks" stems to "task" → add vocab term "task-management").
     match_tags = getattr(config, "match_tag_vocabulary", True)
     if match_tags and tag_vocabulary:
         stemmer = StemmingAnalyzer() if use_stemming else None
-        stemmed_vocab: set[str] = set()
+        stem_to_vocab_terms: dict[str, set[str]] = {}
         for term in tag_vocabulary:
             for part in term.replace("-", " ").split():
                 if stemmer:
                     for tok in stemmer(part):
                         if tok.text:
-                            stemmed_vocab.add(tok.text)
+                            stem_to_vocab_terms.setdefault(tok.text, set()).add(term)
                 else:
-                    stemmed_vocab.add(part.lower())
+                    stem_to_vocab_terms.setdefault(part.lower(), set()).add(term)
         tag_filters = []
         for w in words:
             if w in tag_vocabulary:
                 tag_filters.append(w)
-            elif stemmed_vocab:
-                stem_w = next((t.text for t in stemmer(w) if t.text), w) if stemmer else w.lower()
-                if stem_w in stemmed_vocab:
-                    tag_filters.append(w)
+            elif stemmer:
+                stem_w = next((t.text for t in stemmer(w) if t.text), w)
+                for vocab_term in stem_to_vocab_terms.get(stem_w, ()):
+                    tag_filters.append(vocab_term)
+            else:
+                for vocab_term in stem_to_vocab_terms.get(w.lower(), ()):
+                    tag_filters.append(vocab_term)
         tag_filters = list(dict.fromkeys(tag_filters))
     else:
         tag_filters = []
