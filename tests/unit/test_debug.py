@@ -270,6 +270,42 @@ class TestVaultExporterIntegration:
         vault.export(exporter.spans)
         assert not list(tmp_path.rglob("*_trace.md"))
 
+    @pytest.mark.parametrize(
+        "run_id_value",
+        [
+            "Tool: notion_search",  # colon
+            "task#123",            # hash (YAML comment char)
+            "[step] optional",     # brackets
+            "say \"hello\"",       # double quotes
+            "it's fine",           # single quote / apostrophe
+            "50%",                 # percent
+            "key: value",         # colon + space
+        ],
+    )
+    def test_export_run_id_edge_cases_writes_valid_yaml_frontmatter(
+        self, tmp_path: Path, run_id_value: str
+    ) -> None:
+        """run_id with colons, quotes, #, etc. must be emitted as valid YAML."""
+        from harle.dataset.frontmatter import parse_frontmatter
+
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("handle_request") as root:
+            root.set_attribute("harle.level", "STEP")
+            root.set_attribute("run_id", run_id_value)
+            root.set_attribute("harle.module", "orchestrator")
+
+        provider.force_flush()
+
+        vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
+        result = vault.export(exporter.spans)
+        assert result == SpanExportResult.SUCCESS
+
+        debug_files = list(tmp_path.rglob("*_trace.md"))
+        assert len(debug_files) == 1
+        content = debug_files[0].read_text(encoding="utf-8")
+        meta, _ = parse_frontmatter(content, source_path="trace.md")
+        assert meta.get("run_id") == run_id_value
+
 
 # ---------------------------------------------------------------------------
 # Vault module-level helpers (tested via real ReadableSpan from SDK)

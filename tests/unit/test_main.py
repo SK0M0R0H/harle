@@ -14,9 +14,9 @@ class _FakeDatabase:
 
 
 class _FakeSearchEngine:
-    def __init__(self, dataset_path: str, db: object) -> None:
-        self.dataset_path = dataset_path
-        self.db = db
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.dataset_path = kwargs.get("dataset_path", args[0] if args else None)
+        self.db = kwargs.get("db", args[1] if len(args) > 1 else None)
 
 
 class _FakeDatasetReader:

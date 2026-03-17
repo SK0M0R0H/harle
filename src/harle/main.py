@@ -82,9 +82,12 @@ def create_app() -> FastAPI:
                     init_result["files_indexed"],
                 )
 
+            from harle.config import get_search_config
+
             search_engine = SearchEngine(
                 dataset_path=settings.HARLE_DATASET_PATH,
                 db=db,
+                search_config=get_search_config(),
             )
             dataset_reader = DatasetReader(settings.HARLE_DATASET_PATH)
             logger.info(

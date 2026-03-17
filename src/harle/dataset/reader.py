@@ -82,7 +82,7 @@ class DatasetReader:
         """
         full_path = self.dataset_path / relative_path
         raw_content = full_path.read_text(encoding="utf-8")
-        metadata, body = parse_frontmatter(raw_content)
+        metadata, body = parse_frontmatter(raw_content, source_path=relative_path)
 
         return DatasetFile(
             relative_path=relative_path,

@@ -24,7 +24,7 @@ def test_ensure_initialized_skips_seed_and_index_when_already_ready(monkeypatch)
         calls.append("seed_dataset")
         return 1
 
-    def _run_initial_index(db: object, path: str) -> int:
+    def _run_initial_index(db: object, path: str, **kwargs: object) -> int:
         calls.append("run_initial_index")
         return 2
 
@@ -52,7 +52,7 @@ def test_ensure_initialized_runs_seed_and_index_when_not_ready(monkeypatch) -> N
         calls.append("seed_dataset")
         return 3
 
-    def _run_initial_index(db: object, path: str) -> int:
+    def _run_initial_index(db: object, path: str, **kwargs: object) -> int:
         calls.append("run_initial_index")
         return 5
 

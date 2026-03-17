@@ -15,12 +15,14 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+def parse_frontmatter(content: str, source_path: str | None = None) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from a Markdown string.
 
     Args:
         content: Raw file content, possibly starting with a ``---``
             fenced YAML block.
+        source_path: Optional path or identifier for the content (e.g. relative
+            file path), used in warning messages when parsing fails.
 
     Returns:
         A tuple of ``(metadata_dict, body_text)``.  If no valid
@@ -47,8 +49,13 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 
     try:
         metadata = yaml.safe_load(yaml_block)
-    except yaml.YAMLError:
-        logger.warning("Failed to parse YAML frontmatter; treating as plain content.")
+    except yaml.YAMLError as e:
+        location = f" in {source_path}" if source_path else ""
+        logger.warning(
+            "Failed to parse YAML frontmatter%s; treating as plain content. %s",
+            location,
+            e,
+        )
         return {}, content
 
     if not isinstance(metadata, dict):

@@ -270,7 +270,9 @@ def build_router(
         from harle.search.types import SearchQuery
 
         query = SearchQuery(query=q, context=context, max_results=max_results)
-        results = search_engine.search(query)
+        search_response = search_engine.search(query)
+        # Support both SearchResponse (Phase 2) and plain list (backward compat)
+        results = getattr(search_response, "file_results", search_response)
 
         return SearchResponse(
             query=q,

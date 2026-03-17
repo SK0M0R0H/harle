@@ -2,13 +2,15 @@
 
 Scans the user dataset, compares file hashes with the ``file_index``
 table, and inserts or updates rows for new or changed files.  Removes
-rows for files that no longer exist on disk.
+rows for files that no longer exist on disk.  Optionally updates the
+Whoosh full-text index for Phase 2 search.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -26,17 +28,27 @@ class Indexer:
     Args:
         db: Database instance for reading/writing file_index.
         reader: Dataset reader for listing and parsing vault files.
+        whoosh_index_path: Optional path to the Whoosh index directory.
+            When set, sync will update/remove documents for changed/deleted files.
     """
 
-    def __init__(self, db: Database, reader: DatasetReader) -> None:
+    def __init__(
+        self,
+        db: Database,
+        reader: DatasetReader,
+        whoosh_index_path: str | Path | None = None,
+    ) -> None:
         self.db = db
         self.reader = reader
+        self.whoosh_index_path = Path(whoosh_index_path).expanduser() if whoosh_index_path else None
 
     def sync(self) -> int:
         """Perform a full incremental sync.
 
         Walks the dataset, compares content hashes, and updates the
-        database.  Only changed or new files are processed.
+        database.  Only changed or new files are processed.  If
+        whoosh_index_path is set, updates the Whoosh index for
+        added/updated/deleted files.
 
         Returns:
             Number of file_index rows added, updated, or deleted.
@@ -44,6 +56,8 @@ class Indexer:
         files = self.reader.read_all()
         changes = 0
         now = datetime.now(timezone.utc)
+        whoosh_updated: list = []  # DatasetFile for add/update
+        whoosh_deleted: list[str] = []
 
         with self.db.session() as session:
             existing: dict[str, FileIndex] = {
@@ -70,6 +84,7 @@ class Indexer:
                     row.last_modified = now
                     row.last_indexed = now
                     logger.info("Updated index for %s", f.relative_path)
+                    whoosh_updated.append(f)
                 else:
                     # New file — insert.
                     session.add(
@@ -86,13 +101,23 @@ class Indexer:
                         )
                     )
                     logger.info("Indexed new file %s", f.relative_path)
+                    whoosh_updated.append(f)
                 changes += 1
 
             # Remove rows for files that no longer exist.
             for path in set(existing.keys()) - seen_paths:
                 session.delete(existing[path])
                 logger.info("Removed index entry for deleted file %s", path)
+                whoosh_deleted.append(path)
                 changes += 1
+
+        if self.whoosh_index_path and (whoosh_updated or whoosh_deleted):
+            _sync_whoosh(
+                self.whoosh_index_path,
+                whoosh_updated,
+                whoosh_deleted,
+                now,
+            )
 
         logger.info(
             "Sync complete: %d change(s), %d file(s) in dataset.",
@@ -100,3 +125,47 @@ class Indexer:
             len(files),
         )
         return changes
+
+
+def _sync_whoosh(
+    index_path: Path,
+    updated: list,
+    deleted: list[str],
+    modified: datetime,
+) -> None:
+    """Update the Whoosh index for the given added/updated and deleted paths."""
+    from harle.search import whoosh_index
+
+    if not index_path.exists():
+        try:
+            from harle.dataset.reader import DatasetReader
+            # Build from scratch requires a reader; we don't have dataset_path here.
+            # So we only do incremental updates when the index already exists.
+            logger.debug("Whoosh index path does not exist; skip incremental update.")
+            return
+        except Exception:  # noqa: S110
+            return
+
+    if not whoosh_index.exists_in(str(index_path)):
+        logger.debug("Whoosh index not present at %s; skip incremental update.", index_path)
+        return
+
+    try:
+        ix = whoosh_index.get_or_create_index(index_path)
+        writer = ix.writer()
+        for f in updated:
+            whoosh_index.update_document(
+                writer,
+                path=f.relative_path,
+                title=(f.title or "").strip(),
+                tags=f.tags or [],
+                content=(f.content or "").strip(),
+                context=(f.context or "").strip(),
+                modified=modified,
+            )
+        for path in deleted:
+            whoosh_index.remove_document(writer, path)
+        writer.commit()
+        logger.info("Whoosh index updated: %d doc(s), %d removed.", len(updated), len(deleted))
+    except Exception as e:
+        logger.warning("Whoosh index update failed: %s", e)
