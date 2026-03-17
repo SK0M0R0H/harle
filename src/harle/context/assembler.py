@@ -450,7 +450,8 @@ class ContextAssembler:
             context=context,
             max_results=self.max_search_results,
         )
-        return self.search_engine.search(query)
+        response = self.search_engine.search(query)
+        return getattr(response, "file_results", response)
 
     def _format_search_results(
         self,

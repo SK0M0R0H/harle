@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+import yaml
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
@@ -109,12 +110,21 @@ def _render_markdown(
 ) -> str:
     """Render the span tree as a human-readable Markdown document."""
     ts_str = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    fm = {
+        "run_id": run_id,
+        "timestamp": ts_str,
+        "total_spans": total_spans,
+        "duration_ms": duration_ms,
+    }
+    fm_yaml = yaml.dump(
+        fm,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    ).strip()
     lines = [
         "---",
-        f"run_id: {run_id}",
-        f"timestamp: {ts_str}",
-        f"total_spans: {total_spans}",
-        f"duration_ms: {duration_ms}",
+        fm_yaml,
         "---",
         "",
         f"# Debug Trace — {run_id}",

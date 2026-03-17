@@ -10,13 +10,64 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from harle.db.models import Run
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+def search_similar_runs(
+    session: Session,
+    *,
+    context_scope: str,
+    query_text: str,
+    limit: int = 5,
+) -> list[Run]:
+    """Return completed runs whose request/summary match the query (Phase 2).
+
+    Uses PostgreSQL full-text search on user_request and result_summary.
+    Used to surface prior runs for context assembly and prior_run_bonus.
+
+    Args:
+        session: Active SQLAlchemy session.
+        context_scope: ``work`` or ``personal``.
+        query_text: Query string for full-text match.
+        limit: Maximum number of runs to return.
+
+    Returns:
+        List of :class:`Run` instances, ordered by timestamp DESC.
+    """
+    if not query_text or not query_text.strip():
+        stmt = (
+            select(Run)
+            .where(
+                Run.context_scope == context_scope,
+                Run.status == "completed",
+            )
+            .order_by(Run.timestamp.desc())
+            .limit(limit)
+        )
+        return list(session.scalars(stmt).all())
+
+    clause = text(
+        "to_tsvector('english', user_request || ' ' || COALESCE(result_summary, '')) "
+        "@@ plainto_tsquery('english', :q)"
+    )
+    stmt = (
+        select(Run)
+        .where(
+            Run.context_scope == context_scope,
+            Run.status == "completed",
+            clause,
+        )
+        .order_by(Run.timestamp.desc())
+        .limit(limit)
+    )
+    result = session.execute(stmt, {"q": query_text.strip()})
+    return list(result.scalars().all())
 
 
 def create_run(

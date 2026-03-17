@@ -2,7 +2,7 @@
 title: "Harle Search Algorithm — Current State"
 tags: [search, current-state, architecture, whoosh, retrieval, implementation-status]
 context: global
-last_updated: 2026-03-11
+last_updated: 2026-03-17
 summary: "Tracks what the Search Algorithm implements vs the TRD (search.md and data.md), and what each missing part would unlock."
 ---
 
@@ -16,11 +16,9 @@ Reference TRD: [Harle Search Algorithm — Architecture & Functionality](../../t
 
 ## Overall Status
 
-The Search Algorithm is in **Phase 1 only**. The codebase implements simple keyword search over the indexed dataset: tokenize query, load all file-index entries (filtered by context), read each file from disk, score by term matching (title 3×, tag 2×, content 0.5× capped), sort and return top N. This matches the TRD’s Phase 1 description and works for small datasets (<100 files) with no extra dependencies beyond PostgreSQL.
+The Search Algorithm supports **Phase 1 (keyword) and Phase 2 (Whoosh)**. The default engine is **Whoosh**; set `search.engine: "keyword"` to use Phase 1. Phase 1: tokenize query, load file_index entries by context, read files from disk, score by term matching, return top N. Phase 2: query expansion (tokenize, stem, tag vocabulary, role terms), metadata pre-filter (context + global, tag overlap, P0 injection), Whoosh BM25 search over candidates, metadata enrichment, memory and prior-run lookup, weighted ranking (BM25 + tag match + recency + source priority + prior-run bonus), and `SearchResponse` (file_results, memory_results, prior_runs, query_metadata). Whoosh index is built from scratch on init/reindex when engine is whoosh and updated incrementally during sync.
 
-Phase 2 (Whoosh full-text, query expansion, metadata pre-filtering, ranking and fusion, memory/history lookup) is **not implemented**: `query_expander.py`, `whoosh_index.py`, and `ranker.py` are stubs. The public interface is a subset of the TRD: callers get `list[SearchResult]` only; there is no `SearchResponse` with memories, prior runs, or query metadata. Chunking, semantic search (Phase 3), and search-related config/error-handling from the TRD are also not implemented.
-
-Per **Data Layer Best Practices**: there is no hybrid/semantic retrieval (BM25 + pgvector, RRF, reranking); no three-tier memory integration in search (memories not queried); no explicit relevance scoring formula (search_relevance + metadata_match + recency + source_priority + memory_confidence + prior_run_success) or reranking.
+**Not implemented:** Chunking (`chunker.py`), Phase 3 (pgvector semantic search, hybrid RRF, reranking), `deleted_at` filter on file_index, search timeout, and PostgreSQL-unreachable fallback. Per **Data Layer Best Practices**: hybrid (BM25 + pgvector) and reranking are not implemented; memory and prior-run lookup are implemented and included in the response.
 
 ---
 
@@ -28,122 +26,88 @@ Per **Data Layer Best Practices**: there is no hybrid/semantic retrieval (BM25 +
 
 | TRD area | Current status | Notes |
 |----------|----------------|-------|
-| Phase 1: Simple keyword search | Implemented | `engine.py`: tokenize, get candidates by context, load content from disk, score (title/tag/content weights), sort, return top N. → Best practices §6 (keyword only; hybrid not implemented). |
-| SearchQuery / SearchResult types | Implemented | `types.py`: query, context, max_results; file_path, title, score, context, tags, snippet. |
-| Context-based candidate filter | Partially implemented | `db/file_index.get_all_entries(session, context=...)` filters by context only. No tag overlap, no P0 injection, no `deleted_at` or global-context handling. → Best practices §6 (metadata pre-filter). |
-| Step 1: Query expansion | Not implemented | `query_expander.py` is a stub. No tokenize/normalize, role terms, tag vocabulary, or stemming. |
-| Step 2: Metadata pre-filter (full) | Not implemented | No tag overlap (`tags && ARRAY[]`), no P0-always-included, no global context in scope. → Best practices §6 (metadata pre-filter). |
-| Step 3: Whoosh full-text (BM25) | Not implemented | `whoosh_index.py` is a stub. No index build/update/query, no field boosts. → Best practices §6 (hybrid search). |
-| Step 4: Metadata enrichment | Partially implemented | Results carry title, tags, context, snippet from engine. No token_count, summary, last_modified from DB in SearchResult. |
-| Step 5: Memory and history lookup | Not implemented | No memories or prior-runs queries; no MemoryResult / PriorRunResult. → Best practices §7 (memory in search). |
-| Step 6: Ranking and fusion | Not implemented | `ranker.py` is a stub. No RRF, no source priority, no deduplication. → Best practices §4.4 (relevance scoring), §9 (failure-mode mitigations). |
-| Whoosh index management | Not implemented | No index build during sync, no incremental update, no rebuild on missing/corrupt. → Best practices §6. |
-| Chunking strategy | Not implemented | No `chunker.py`; no section-level chunking or contextual enrichment. → Best practices §5. |
+| Phase 1: Simple keyword search | Implemented | `engine.py`: tokenize, get candidates by context, load content from disk, score (title/tag/content weights), sort; returns `SearchResponse` with `file_results`. |
+| Phase 2: Whoosh pipeline | Implemented | Engine branch when `search.engine: whoosh`: expand → pre-filter → Whoosh search → enrich → memory/prior-run → rank; returns `SearchResponse`. |
+| SearchQuery / SearchResult types | Implemented | `types.py`: SearchQuery (query, context, max_results, agent_role); SearchResult (+ token_count, summary, source, last_modified). |
+| Step 1: Query expansion | Implemented | `query_expander.py`: tokenize, stopwords, stemming (Whoosh), tag vocabulary match, role terms; `ExpandedQuery`. |
+| Step 2: Metadata pre-filter (full) | Implemented | `get_candidates_for_search`: context + global/NULL, tag overlap, P0 (prompts/policies) always included. No `deleted_at` (schema has none). |
+| Step 3: Whoosh full-text (BM25) | Implemented | `whoosh_index.py`: schema (path, title, tags, content, context, modified), build_from_scratch, update/remove, search with candidate filter. |
+| Step 4: Metadata enrichment | Implemented | `get_entries_by_paths`; SearchResult has token_count, summary, last_modified; ranker and engine populate them. |
+| Step 5: Memory and history lookup | Implemented | `memories.search_memories`, `runs.search_similar_runs`; MemoryResult, PriorRunResult in SearchResponse. → Best practices §7. |
+| Step 6: Ranking and fusion | Implemented | `ranker.py`: normalized BM25 + tag_match + recency + source_priority + prior_run_bonus; dedupe by path; configurable weights. → Best practices §4.4. |
+| Whoosh index management | Implemented | Build on init/reindex when engine=whoosh; incremental update/remove in indexer sync; rebuild on missing/corrupt in engine. |
+| Chunking strategy | Not implemented | No `chunker.py`; no section-level chunking. → Best practices §5. |
 | Phase 3: Semantic search (pgvector) | Not implemented | Not started. → Best practices §6 (hybrid: pgvector). |
-| SearchResponse / QueryMetadata | Not implemented | Callers get `list[SearchResult]` only. No file_results + memory_results + prior_runs + query_metadata. |
-| Search config (config.yaml) | Not implemented | No `search.*` keys used; engine uses hardcoded weights and no whoosh_index_path. |
-| TRD error handling | Partially implemented | Missing file skipped; encoding error skipped. No Whoosh rebuild, no PG-unreachable fallback, no timeout. → Best practices §9. |
-| Integration (Context Assembler) | Partially implemented | Assembler calls `SearchEngine.search(query)` and gets a list of results; interface is simpler than TRD’s SearchResponse. |
+| SearchResponse / QueryMetadata | Implemented | file_results, memory_results, prior_runs, query_metadata; Context Assembler and API use `response.file_results`. |
+| Search config (config.yaml) | Implemented | `get_search_config()`: engine, max_results, whoosh_index_path, weights, expansion options; env HARLE_SEARCH_ENGINE, HARLE_WHOOSH_INDEX_PATH. |
+| TRD error handling | Partially implemented | Whoosh missing/corrupt → rebuild; missing file skipped. No PG-unreachable fallback, no timeout. → Best practices §9. |
+| Integration (Context Assembler) | Implemented | Assembler uses `SearchResponse.file_results`; API and vault tools use `response.file_results`. |
 
 ### Best practices (§) alignment
 
 | Best practices § | Current status | Notes |
 |------------------|----------------|-------|
-| §4.4 Context Assembly: relevance scoring | Not implemented | No weighted formula (search_relevance + metadata_match + recency + source_priority + memory_confidence + prior_run_success). |
-| §5 Chunking strategy | Not implemented | No section-level chunking; no contextual enrichment; no chunker; retrieval is whole-file. |
-| §6 Retrieval: hybrid search | Not implemented | Phase 1 keyword only; no BM25 + pgvector, no RRF, no reranking. |
-| §6 Metadata pre-filter (scope, tags, P0) | Partially implemented | Context-scope filter only; no tag overlap, no P0-always-included, no global in scope. |
-| §7 Memory in search | Not implemented | Memories table not queried; no MemoryResult; three-tier memory not integrated in search. |
-| §9 Failure-mode mitigations | Not implemented | No deduplication by content hash in ranking; no reranking to reduce over-retrieval/orphaned chunks. |
+| §4.4 Context Assembly: relevance scoring | Implemented | Weighted formula in ranker (bm25 + tag_match + recency + source_priority + prior_run). |
+| §5 Chunking strategy | Not implemented | No section-level chunking; retrieval is whole-file. |
+| §6 Retrieval: hybrid search | Partially implemented | BM25 (Whoosh) implemented; pgvector and RRF for hybrid not yet. |
+| §6 Metadata pre-filter (scope, tags, P0) | Implemented | get_candidates_for_search with context/global, tag overlap, P0 injection. |
+| §7 Memory in search | Implemented | search_memories, search_similar_runs; MemoryResult, PriorRunResult in response. |
+| §9 Failure-mode mitigations | Partially implemented | Deduplication by path in ranker; Whoosh rebuild on corrupt; no reranking. |
 
 ---
 
 ## What Is Implemented
 
-### 1. Phase 1 keyword search pipeline
+### 1. Phase 1 and Phase 2 engine
 
-`src/harle/search/engine.py` implements the TRD’s Phase 1 flow:
+`engine.py` supports both pipelines. **Default:** `search.engine` is `"whoosh"` (Phase 2): expand (query_expander), `get_candidates_for_search`, Whoosh search (with rebuild on missing/corrupt), `get_entries_by_paths` enrichment, `search_memories` and `search_similar_runs`, rank, then `SearchResponse` with all four result lists and `QueryMetadata`. **Opt-in Phase 1:** set `search.engine: "keyword"` for tokenize, `get_all_entries`, load content from disk, `_compute_score`, sort, return `SearchResponse(file_results=..., query_metadata=..., memory_results=[], prior_runs=[])`.
 
-- **Tokenize:** `_tokenize(query.query)` — split on whitespace, lowercase, drop very short words.
-- **Candidates:** `get_all_entries(session, context=query.context)` — all file_index rows (optionally filtered by context).
-- **Score:** For each candidate, read file from disk; `_compute_score(terms, title, tags, content)` with title weight 3.0, tag 2.0, content 0.5 per term capped at 3.0.
-- **Snippet:** `_extract_snippet(content, terms)` — short excerpt around first match.
-- **Output:** Sort by score descending, slice to `query.max_results`, return `list[SearchResult]`.
+### 2. Types and SearchResponse
 
-This matches the TRD’s “Simple Keyword Search (current — implemented)” description: zero dependencies beyond PostgreSQL, good for datasets under ~100 files, with O(n) disk I/O and naive scoring.
+`types.py`: **SearchQuery** (query, context, max_results, agent_role). **SearchResult** (file_path, title, score, context, tags, snippet, token_count, summary, source, last_modified). **ExpandedQuery**, **QueryMetadata**, **MemoryResult**, **PriorRunResult**, **SearchResponse**. Callers use `response.file_results`; memories and prior runs are available for context assembly.
 
-### 2. Stable query and result types
+### 3. Query expansion, pre-filter, Whoosh, ranker
 
-`types.py` defines:
+- **query_expander.py:** Tokenize, stopwords, Whoosh stemming, tag vocabulary match, optional role terms; returns `ExpandedQuery`.
+- **file_index:** `get_all_tags`, `get_candidates_for_search` (context + global, tag overlap, P0 injection), `get_entries_by_paths`.
+- **whoosh_index.py:** Schema, `build_from_scratch`, `update_document`, `remove_document`, `search` with candidate-path filter.
+- **ranker.py:** Normalized BM25 + tag_match + recency + source_priority + prior_run_bonus; dedupe by path; returns `list[SearchResult]`.
 
-- **SearchQuery:** `query`, `context`, `max_results` — used by the engine and by callers (e.g. Context Assembler, vault tools).
-- **SearchResult:** `file_path`, `title`, `score`, `context`, `tags`, `snippet` — sufficient for Phase 1 and for the current Context Assembler to consume.
+### 4. Memory and prior-run lookup
 
-These form the stable public interface; the TRD states that `SearchEngine.search(query) → list[SearchResult]` remains unchanged across Phase 2/3 migrations.
+`db/memories.py`: `search_memories` (full-text on content, context_scope, confidence). `db/runs.py`: `search_similar_runs` (full-text on user_request/result_summary, context_scope, status=completed). Results mapped to `MemoryResult` and `PriorRunResult` in the engine.
 
-### 3. Context scope filtering
+### 5. Config and indexer–Whoosh wiring
 
-The engine passes `query.context` to `get_all_entries`. So when the orchestrator requests work or personal context, only files for that context are considered. This is the minimal form of the TRD’s “scope isolation” in the metadata pre-filter step.
-
-### 4. Package layout and stubs for Phase 2
-
-The TRD’s project structure is reflected: `engine.py`, `query_expander.py`, `whoosh_index.py`, `ranker.py`, `types.py`, `__init__.py`. The three non-engine modules are present as stubs with docstrings describing their future role, which keeps the migration path clear.
+`config.py`: `get_search_config()` reads `search` from YAML, env overrides `HARLE_SEARCH_ENGINE`, `HARLE_WHOOSH_INDEX_PATH`; returns `SearchConfig` with engine, whoosh_index_path, weights, expansion options. Indexer accepts optional `whoosh_index_path`; sync updates/removes Whoosh documents for changed/deleted files. Bootstrap builds Whoosh on init/reindex when engine is whoosh and ensures index exists.
 
 ---
 
 ## What Is Only Partially Implemented
 
-### 1. Metadata pre-filter (Step 2)
+### 1. Error handling
 
-TRD Step 2 and Best Practices §6 specify:
+Whoosh index missing or corrupt triggers rebuild. Missing files are skipped. The TRD also describes: PostgreSQL unreachable → fall back to Whoosh-only; search timeout (e.g. 500 ms) → cancel and return partial results. These are not implemented.
 
-- Scope: `(context = :context OR context = 'global' OR context IS NULL)`
-- Tag overlap: `tags && ARRAY[:matched_tags]` (or skip if no tags matched)
-- Exclude deleted: `deleted_at IS NULL`
-- Optional: always include P0 files (prompts, policies)
+### 2. Context Assembler use of memories/prior runs
 
-Current behaviour:
-
-- Only equality filter on `context` in `get_all_entries`; no “global” or NULL, so cross-context policies are not included.
-- No tag-based filter.
-- No `deleted_at` filter in the search path (indexer may set it elsewhere).
-- No P0 injection.
-
-So the “metadata pre-filter” exists only as context-scope filtering; the rest would unlock a much smaller candidate set (e.g. 30–100 files from 500+) before any content scoring.
-
-### 2. Result shape and enrichment (Step 4)
-
-SearchResult today has no `token_count`, `summary`, or `source`. The TRD uses these for token-budget planning and for the Context Assembler to decide inclusion without reading full content. The assembler can still work with the current shape but cannot do budget-aware packing or quick relevance checks from summaries.
-
-### 3. Error handling
-
-Engine skips missing files and files that fail to read (e.g. encoding). The TRD additionally describes: Whoosh index missing → rebuild; Whoosh corrupted → delete and rebuild; PostgreSQL unreachable → fall back to Whoosh-only; search timeout → cancel and return partial results. None of these are implemented, so behaviour in failure modes is narrower than the TRD.
-
-### 4. Context Assembler interface
-
-The assembler receives a list of search results only. The TRD’s full contract is `SearchResponse` (file_results, memory_results, prior_runs, query_metadata). So the integration works for Phase 1 but does not yet expose memories, prior runs, or expansion/timing metadata.
+SearchResponse includes `memory_results` and `prior_runs`; the Context Assembler currently uses only `file_results`. Including memories and prior runs in the assembled context (e.g. a “Memories” / “Prior runs” section) is a small follow-up.
 
 ---
 
 ## What Is Not Implemented Yet
 
-### 1. Query expansion (Step 1)
+### 1. Chunking strategy (Best Practices §5)
 
-**Missing:** `query_expander.py` implementation: tokenize/normalize, stopword removal, domain/role terms, tag vocabulary matching, stemming for Whoosh, and an `ExpandedQuery` (whoosh_terms, tag_filters, role_terms, context_filter, raw_query).
+**Missing:** `chunker.py` (or equivalent); section-level chunking at H2 boundaries; cascading metadata; optional contextual enrichment; chunk-aware indexing and retrieval for files > ~2,500 tokens.
 
-**What this would unlock:** Better recall without sacrificing precision; smaller, more relevant candidate set when combined with tag pre-filter; role-aware search (e.g. secretary always considering workflow/task terms); foundation for Phase 2 Whoosh queries.
+**What this would unlock:** Accurate retrieval for long files; better use of context window; alignment with Best Practices §5.
 
-### 2. Full metadata pre-filter (Step 2)
+### 2. Phase 3: Semantic search (pgvector; Best Practices §6)
 
-**Missing:** PostgreSQL query that applies context (including global), tag overlap, deleted_at, and optional P0 injection; candidate set of ~30–100 files instead of all files in context.
+**Missing:** Embeddings table usage; embedding API for index/query; pgvector similarity search; fusion of semantic and Whoosh results; optional reranking.
 
-**What this would unlock:** Sub-50ms candidate retrieval; Whoosh only needs to score a small set; less disk I/O and better scalability.
-
-### 3. Whoosh full-text search and hybrid retrieval (Step 3; Best Practices §6)
-
-**Missing:** `whoosh_index.py`: schema (path, title, tags, content, context, modified), index build/update during sync, query with MultifieldParser and filter by candidate paths, BM25 with title/tag boosts. No storage of content in the index (content loaded from vault when needed). Best Practices §6: BM25 + pgvector pipeline, Reciprocal Rank Fusion, optional reranking phase.
-
-**What this would unlock:** No file I/O at query time; sub-50ms full-text search; stemming and field boosts; scalable search for 100–1,000+ files; conceptual and paraphrase match for large or diverse datasets.
+**What this would unlock:** Conceptual and paraphrase matching when keyword search fails; hybrid (BM25 + pgvector) as in Best Practices §6.
 
 ### 4. Metadata enrichment (Step 4) and result types
 
@@ -197,42 +161,37 @@ The assembler receives a list of search results only. The TRD’s full contract 
 
 ## Key Deviations From The TRD
 
-### Return type is list[SearchResult] only
+### deleted_at not filtered
 
-The TRD specifies a rich `SearchResponse` (file_results, memory_results, prior_runs, query_metadata). The implementation returns only a list of file results. This is an intentional simplification for Phase 1; extending the return type will be required for Phase 2 (memories, prior runs, metadata).
+TRD pre-filter mentions `deleted_at IS NULL`. The `file_index` schema has no `deleted_at` column; the filter is omitted.
 
-### Context filter does not include global
+### chunker.py not present
 
-TRD says files with `context = 'global'` (or NULL) should be candidates in both work and personal. `get_all_entries` only filters by equality on context, so global-scope files are not currently included when a specific context is requested.
+TRD project structure mentions `chunker.py` as "(future)". The repo has no chunker module yet.
 
-### No search config yet
+### Context Assembler uses only file_results
 
-Weights and limits are hardcoded in the engine. The TRD describes a full `search:` section in config and env overrides; that is left for Phase 2.
+Memories and prior runs are returned in `SearchResponse` but are not yet included in the assembled context text; that can be a follow-up.
 
 ### chunker.py not present
 
 TRD project structure mentions `chunker.py` as “(future)”. The repo has no chunker module yet; that is consistent with the TRD but worth noting for the implementation snapshot.
 
-### Best Practices: relevance scoring and memory
-
-Data Layer Best Practices §4.4 recommends an explicit weighted relevance formula for context assembly; §7 recommends memory integration in search (memories queried and included in context). Neither is implemented yet.
 
 ---
 
 ## Current Assessment
 
-The Search Algorithm is **Phase 1 complete and Phase 2 not started**.
+The Search Algorithm is **Phase 1 and Phase 2 implemented**. Engine is selectable via `search.engine` (keyword or whoosh). Whoosh pipeline: query expansion, metadata pre-filter, BM25 search, enrichment, memory/prior-run lookup, weighted ranking, and SearchResponse. Indexer and bootstrap keep the Whoosh index in sync.
 
 **Strengths:**
 
-- Phase 1 keyword search is implemented and used by the Context Assembler and vault tools.
-- Public types (SearchQuery, SearchResult) are in place and match current needs.
-- Stubs for query_expander, whoosh_index, and ranker preserve the TRD structure and migration path.
+- Phase 1 and Phase 2 pipelines; config-driven engine selection.
+- Full SearchResponse (file_results, memory_results, prior_runs, query_metadata); Context Assembler and API use file_results.
+- Search config (get_search_config), Whoosh index lifecycle (build, incremental update, rebuild on corrupt).
 
-**Gaps that matter most for the next step:**
+**Possible next steps:**
 
-- **Whoosh index and engine wiring:** Without Whoosh and the full 6-step pipeline, search does not scale beyond small datasets and does not use tag/pre-filter or ranking.
-- **Query expansion and metadata pre-filter:** These directly reduce the candidate set and improve recall, and are prerequisites for effective Whoosh use.
-- **SearchResponse and memory/prior-run lookup:** Needed for the TRD’s full context-assembly story (memories, prior runs, query metadata).
-
-The next meaningful milestone is **Phase 2**: implement Whoosh index lifecycle and query, query expansion, full metadata pre-filter, ranker (RRF + weights), then optionally add memory/history lookup and the full SearchResponse so the Context Assembler can consume the full TRD contract. Implementing these would also align with the Data Layer Best Practices TRD (hybrid retrieval §6, memory in search §7, relevance scoring §4.4, reranking §9).
+- Include memory_results and prior_runs in the assembled context (e.g. a short section).
+- Phase 3: pgvector semantic search, hybrid RRF, optional reranking.
+- Chunking for long files; search timeout and PG-unreachable fallback.

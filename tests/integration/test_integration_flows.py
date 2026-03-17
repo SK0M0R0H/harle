@@ -17,7 +17,35 @@ from harle.db.connection import Database
 from harle.db.models import Message
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
-from harle.search.types import SearchQuery, SearchResult
+from harle.search.types import QueryMetadata, SearchQuery, SearchResponse, SearchResult
+
+
+class _StaticSearchEngine:
+    """Search engine stub returning deterministic dataset results."""
+
+    def search(self, query: SearchQuery) -> SearchResponse:
+        return SearchResponse(
+            file_results=[
+                SearchResult(
+                    file_path="knowledge/work/roadmap.md",
+                    title="Roadmap",
+                    score=9.2,
+                    context=query.context,
+                    tags=["planning"],
+                    snippet="Milestones and delivery plan.",
+                )
+            ],
+            memory_results=[],
+            prior_runs=[],
+            query_metadata=QueryMetadata(
+                original_query=query.query,
+                expanded_terms=[],
+                tags_matched=[],
+                candidates_count=1,
+                search_time_ms=0.0,
+                phase="keyword",
+            ),
+        )
 
 
 class _CapturingProvider:
@@ -36,22 +64,6 @@ class _CapturingProvider:
     ) -> str:
         self.last_system_prompt = system_prompt
         return f"ok::{context}::{prompt}"
-
-
-class _StaticSearchEngine:
-    """Search engine stub returning deterministic dataset results."""
-
-    def search(self, query: SearchQuery) -> list[SearchResult]:
-        return [
-            SearchResult(
-                file_path="knowledge/work/roadmap.md",
-                title="Roadmap",
-                score=9.2,
-                context=query.context,
-                tags=["planning"],
-                snippet="Milestones and delivery plan.",
-            )
-        ]
 
 
 def _write_vault_file(path: Path, content: str) -> None:
@@ -271,3 +283,75 @@ class TestApiPipelines:
             assert (tmp_path / rel_path).exists()
             content = (tmp_path / rel_path).read_text()
             assert "import_source: dummy" in content or "dummy" in content
+
+
+@pytest.mark.integration
+class TestSearchPhase2Pipeline:
+    """Full Phase 2 search pipeline: expand -> Whoosh -> rank -> SearchResponse."""
+
+    def test_phase2_pipeline_on_fixture_dataset(self, tmp_path: Path) -> None:
+        """Expand, build Whoosh, search, rank on a tiny fixture dataset."""
+        from types import SimpleNamespace
+
+        from harle.search.query_expander import expand
+        from harle.search.ranker import rank
+        from harle.search.types import SearchQuery
+        from harle.search import whoosh_index
+
+        (tmp_path / "knowledge" / "work").mkdir(parents=True)
+        (tmp_path / "policies").mkdir(parents=True)
+        (tmp_path / "knowledge" / "work" / "fixture.md").write_text(
+            "---\ntitle: Fixture Doc\ntags: [trello, tasks]\ncontext: work\n---\n\n"
+            "Stalled tasks in Trello and how to triage them.",
+            encoding="utf-8",
+        )
+        (tmp_path / "policies" / "global.md").write_text(
+            "---\ntitle: Global Policy\ntags: []\ncontext: global\n---\n\nPolicy text.",
+            encoding="utf-8",
+        )
+
+        reader = DatasetReader(str(tmp_path))
+        whoosh_index.build_from_scratch(reader, tmp_path / "whoosh_idx")
+        assert whoosh_index.exists_in(str(tmp_path / "whoosh_idx"))
+
+        config = SimpleNamespace(
+            add_role_terms=False,
+            match_tag_vocabulary=True,
+            use_stemming=True,
+        )
+        tag_vocabulary = {"trello", "tasks", "work"}
+        query = SearchQuery(query="stalled tasks Trello", context="work", max_results=10)
+        expanded = expand(query, tag_vocabulary, config)
+        assert expanded.whoosh_terms
+        assert "trello" in expanded.tag_filters or "tasks" in expanded.tag_filters
+
+        candidate_paths = {"knowledge/work/fixture.md", "policies/global.md"}
+        whoosh_results = whoosh_index.search(
+            tmp_path / "whoosh_idx",
+            expanded.whoosh_terms,
+            candidate_paths,
+            limit=10,
+        )
+        assert len(whoosh_results) >= 1
+        assert whoosh_results[0][0] == "knowledge/work/fixture.md"
+
+        path_to_metadata = {}
+        for f in reader.read_all():
+            path_to_metadata[f.relative_path] = SimpleNamespace(
+                file_path=f.relative_path,
+                title=f.title or f.relative_path,
+                tags=f.tags or [],
+                context=f.context,
+                token_count=None,
+                summary=None,
+                last_modified=None,
+            )
+        ranked = rank(
+            whoosh_results,
+            path_to_metadata,
+            tag_filters=expanded.tag_filters or [],
+        )
+        assert len(ranked) >= 1
+        assert ranked[0].file_path == "knowledge/work/fixture.md"
+        assert ranked[0].score > 0
+        assert ranked[0].title == "Fixture Doc"

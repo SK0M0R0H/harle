@@ -93,7 +93,7 @@ async def dataset_search(
 
     max_results = max(1, min(max_results, 10))
     sq = SearchQuery(query=query, max_results=max_results)
-    results = engine.search(sq)
+    results = engine.search(sq).file_results
 
     payload: dict = {"query": query, "results": []}
     for r in results:

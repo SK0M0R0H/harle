@@ -300,24 +300,37 @@ def seed_dataset(dataset_path: str) -> int:
     return written
 
 
-def _sync_index(db: Database, dataset_path: str) -> int:
-    """Run one indexer sync pass for *dataset_path* and return change count."""
+def _sync_index(
+    db: Database,
+    dataset_path: str,
+    whoosh_index_path: str | Path | None = None,
+) -> int:
+    """Run one indexer sync pass for *dataset_path* and return change count.
+
+    When *whoosh_index_path* is set (Phase 2), the indexer will update
+    the Whoosh index for added/updated/deleted files.
+    """
     reader = DatasetReader(dataset_path)
-    indexer = Indexer(db, reader)
+    indexer = Indexer(db, reader, whoosh_index_path=whoosh_index_path)
     return indexer.sync()
 
 
-def run_initial_index(db: Database, dataset_path: str) -> int:
+def run_initial_index(
+    db: Database,
+    dataset_path: str,
+    whoosh_index_path: str | Path | None = None,
+) -> int:
     """Index all dataset files into the ``file_index`` table.
 
     Args:
         db: Initialised :class:`Database` instance.
         dataset_path: Absolute path to the vault root.
+        whoosh_index_path: Optional Whoosh index path for Phase 2 sync.
 
     Returns:
         Number of file_index rows added or updated.
     """
-    return _sync_index(db, dataset_path)
+    return _sync_index(db, dataset_path, whoosh_index_path=whoosh_index_path)
 
 
 def _dataset_seed_ready(dataset_path: str) -> bool:
@@ -363,7 +376,15 @@ def ensure_initialized(db: Database, dataset_path: str) -> dict[str, object]:
 
     file_index_populated = _file_index_populated(db)
     should_index = files_seeded > 0 or not file_index_populated
-    files_indexed = run_initial_index(db, dataset_path) if should_index else 0
+
+    whoosh_path = _whoosh_index_path_if_enabled()
+    files_indexed = (
+        run_initial_index(db, dataset_path, whoosh_index_path=whoosh_path)
+        if should_index
+        else 0
+    )
+    if whoosh_path:
+        _ensure_whoosh_index(dataset_path, whoosh_path)
 
     reader = DatasetReader(dataset_path)
     total_files = len(reader.list_files())
@@ -395,11 +416,39 @@ def init_system(db: Database, dataset_path: str) -> dict[str, object]:
     return ensure_initialized(db, dataset_path)
 
 
+def _whoosh_index_path_if_enabled() -> Path | None:
+    """Return Whoosh index path if search engine is whoosh, else None."""
+    try:
+        from harle.config import get_search_config
+        config = get_search_config()
+        if getattr(config, "engine", "whoosh") != "whoosh":
+            return None
+        path = getattr(config, "whoosh_index_path", "") or ""
+        return Path(path).expanduser() if path else None
+    except Exception:  # noqa: S110
+        return None
+
+
+def _ensure_whoosh_index(dataset_path: str, index_path: Path) -> None:
+    """Build Whoosh index from scratch if it is missing or empty."""
+    from harle.search import whoosh_index
+
+    if not index_path.exists() or not whoosh_index.exists_in(str(index_path)):
+        try:
+            reader = DatasetReader(dataset_path)
+            whoosh_index.build_from_scratch(reader, index_path)
+            logger.info("Whoosh index built at %s", index_path)
+        except Exception as e:
+            logger.warning("Whoosh index build failed: %s", e)
+
+
 def reindex_dataset(db: Database, dataset_path: str) -> dict[str, object]:
     """Re-index all dataset files without seeding or recreating tables.
 
     A lightweight alternative to :func:`init_system` for when new files
-    have been added to the vault and just need to be picked up.
+    have been added to the vault and just need to be picked up. When
+    search engine is whoosh, the Whoosh index is updated and rebuilt
+    if missing.
 
     Args:
         db: Initialised :class:`Database` instance.
@@ -408,7 +457,10 @@ def reindex_dataset(db: Database, dataset_path: str) -> dict[str, object]:
     Returns:
         Summary dict with the number of index changes and total files.
     """
-    changes = _sync_index(db, dataset_path)
+    whoosh_path = _whoosh_index_path_if_enabled()
+    changes = _sync_index(db, dataset_path, whoosh_index_path=whoosh_path)
+    if whoosh_path:
+        _ensure_whoosh_index(dataset_path, whoosh_path)
     reader = DatasetReader(dataset_path)
     total_files = len(reader.list_files())
 

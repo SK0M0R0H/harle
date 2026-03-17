@@ -209,3 +209,139 @@ def get_vault_imports_config() -> dict[str, Any]:
     if isinstance(vault_imports, dict):
         return vault_imports
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Search config (Phase 2+)
+# ---------------------------------------------------------------------------
+
+def _default_whoosh_index_path() -> str:
+    """Default Whoosh index path following XDG Base Directory spec."""
+    home = os.environ.get("HOME", os.path.expanduser("~"))
+    return f"{home}/.local/share/harle/whoosh_index"
+
+
+@dataclass(frozen=True)
+class SearchConfig:
+    """Search algorithm configuration (Phase 2 Whoosh + ranking).
+
+    Read from the ``search`` key in config.yaml with env overrides
+    for ``HARLE_SEARCH_ENGINE`` and ``HARLE_WHOOSH_INDEX_PATH``.
+    """
+
+    engine: str = "whoosh"
+    max_results: int = 10
+    min_score: float = 0.1
+    whoosh_index_path: str = ""
+    title_boost: float = 2.0
+    tag_boost: float = 1.5
+    bm25_weight: float = 0.40
+    tag_match_weight: float = 0.20
+    recency_weight: float = 0.15
+    source_priority_weight: float = 0.15
+    prior_run_weight: float = 0.10
+    memory_min_confidence: float = 0.3
+    max_memories: int = 10
+    max_prior_runs: int = 5
+    add_role_terms: bool = True
+    match_tag_vocabulary: bool = True
+    use_stemming: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.whoosh_index_path:
+            object.__setattr__(self, "whoosh_index_path", _default_whoosh_index_path())
+
+
+def _get_search_config_raw() -> dict[str, Any]:
+    """Return the ``search`` section from the config file (no env overrides)."""
+    data = _load_yaml(_resolve_config_path())
+    search = data.get("search")
+    if isinstance(search, dict):
+        return search
+    return {}
+
+
+def get_search_config() -> SearchConfig:
+    """Return search configuration from config file and env overrides.
+
+    Priority: env vars (HARLE_SEARCH_ENGINE, HARLE_WHOOSH_INDEX_PATH)
+    override the ``search`` section in config.yaml. Missing keys use
+    :class:`SearchConfig` defaults.
+    """
+    load_environment()
+    raw = _get_search_config_raw()
+
+    def _str(key: str, default: str) -> str:
+        env_key = "HARLE_SEARCH_ENGINE" if key == "engine" else "HARLE_WHOOSH_INDEX_PATH"
+        env_val = os.getenv(env_key)
+        if env_val is not None:
+            return env_val.strip()
+        val = raw.get(key)
+        return str(val).strip() if val is not None else default
+
+    def _int(key: str, default: int) -> int:
+        val = raw.get(key)
+        if val is None:
+            return default
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return default
+
+    def _float(key: str, default: float) -> float:
+        val = raw.get(key)
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    def _bool(key: str, default: bool) -> bool:
+        val = raw.get(key)
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in {"1", "true", "yes"}
+        return default
+
+    engine = _str("engine", "whoosh")
+    whoosh_index_path = _str("whoosh_index_path", _default_whoosh_index_path())
+    if not whoosh_index_path:
+        whoosh_index_path = _default_whoosh_index_path()
+
+    expansion = raw.get("expansion")
+    if not isinstance(expansion, dict):
+        expansion = {}
+
+    def _expansion_bool(key: str, default: bool) -> bool:
+        val = expansion.get(key)
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in {"1", "true", "yes"}
+        return default
+
+    return SearchConfig(
+        engine=engine,
+        max_results=_int("max_results", 10),
+        min_score=_float("min_score", 0.1),
+        whoosh_index_path=whoosh_index_path,
+        title_boost=_float("title_boost", 2.0),
+        tag_boost=_float("tag_boost", 1.5),
+        bm25_weight=_float("bm25_weight", 0.40),
+        tag_match_weight=_float("tag_match_weight", 0.20),
+        recency_weight=_float("recency_weight", 0.15),
+        source_priority_weight=_float("source_priority_weight", 0.15),
+        prior_run_weight=_float("prior_run_weight", 0.10),
+        memory_min_confidence=_float("memory_min_confidence", 0.3),
+        max_memories=_int("max_memories", 10),
+        max_prior_runs=_int("max_prior_runs", 5),
+        add_role_terms=_expansion_bool("add_role_terms", True),
+        match_tag_vocabulary=_expansion_bool("match_tag_vocabulary", True),
+        use_stemming=_expansion_bool("use_stemming", True),
+    )

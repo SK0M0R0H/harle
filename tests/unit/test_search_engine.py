@@ -1,10 +1,18 @@
-"""Tests for harle.search.engine — tokenizer, scorer, snippet extraction."""
+"""Tests for harle.search.engine — tokenizer, scorer, snippet extraction, SearchResponse."""
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from harle.search.engine import _compute_score, _extract_snippet, _tokenize
+from harle.search.engine import (
+    SearchEngine,
+    _compute_score,
+    _extract_snippet,
+    _tokenize,
+)
+from harle.search.types import SearchQuery, SearchResponse
 
 
 # ---------------------------------------------------------------------------
@@ -176,3 +184,28 @@ class TestExtractSnippet:
         content = "Some content here."
         snippet = _extract_snippet(content, [])
         assert snippet.startswith("Some content")
+
+
+# ---------------------------------------------------------------------------
+# SearchEngine.search return type (Phase 1)
+# ---------------------------------------------------------------------------
+
+class TestSearchReturnsSearchResponse:
+    """Engine.search() returns SearchResponse with file_results, query_metadata."""
+
+    def test_empty_query_returns_response_with_empty_file_results(self) -> None:
+        db = MagicMock()
+        session_mock = MagicMock()
+        session_mock.__enter__ = lambda self: self
+        session_mock.__exit__ = lambda *a: None
+        db.session.return_value = session_mock
+        session_mock.scalars.return_value.all.return_value = []
+
+        engine = SearchEngine(dataset_path="/nonexistent", db=db)
+        query = SearchQuery(query="", max_results=10)
+        response = engine.search(query)
+
+        assert isinstance(response, SearchResponse)
+        assert response.file_results == []
+        assert response.query_metadata.phase == "whoosh"  # default engine
+        assert response.query_metadata.original_query == ""
