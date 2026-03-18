@@ -1,0 +1,5 @@
+# E2E test config: minimal settings so env vars (DATABASE_URL, HARLE_DATASET_PATH, etc.)
+# passed by tests/e2e/conftest.py are used. Do not set DATABASE_URL here.
+
+HARLE_HOST: "127.0.0.1"
+# HARLE_PORT is set per run by conftest

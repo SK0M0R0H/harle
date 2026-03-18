@@ -41,6 +41,7 @@ test = [
 testpaths = ["tests/unit", "tests/integration"]
 markers = [
   "integration: multi-component tests with real module wiring",
+  "e2e: end-to-end tests (real server, optional DB)",
 ]
 
 [tool.setuptools]
