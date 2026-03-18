@@ -105,9 +105,11 @@ class TestApiPipelines:
         assert invalid_context.status_code == 422
 
     def test_chat_endpoint_persists_multi_turn_conversation(
-        self, chat_db: Database
+        self, chat_db: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """POST /chat creates a conversation and persists user/assistant messages across turns."""
+        # SQLite chat_db has no runs table (Run uses PostgreSQL ARRAY); patch create_run like unit tests.
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *args, **kwargs: None)
         app = FastAPI()
         app.include_router(
             build_router(
