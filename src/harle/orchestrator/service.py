@@ -22,9 +22,11 @@ import os
 import signal
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Callable, TypeVar
 
 from harle.api.models import RunRequest, RunResponse
 from harle.config import PROVIDER_OPENAI, Settings
@@ -158,6 +160,31 @@ def _run_timeout(seconds: int | None) -> object:
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
+
+
+_T = TypeVar("_T")
+
+
+def _run_with_timeout(seconds: int | None, thunk: Callable[[], _T]) -> _T:
+    """Run a callable under a wall-clock timeout that works in any thread.
+
+    On the main thread uses SIGALRM; on worker threads (e.g. under
+    run_in_threadpool) runs the thunk in a separate thread and waits
+    with timeout so the server-side limit is enforced in production.
+    """
+    if not seconds or seconds <= 0:
+        return thunk()
+
+    if threading.current_thread() is threading.main_thread():
+        with _run_timeout(seconds):
+            return thunk()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(thunk)
+        try:
+            return future.result(timeout=seconds)
+        except FuturesTimeoutError:
+            raise RunTimeoutError("Run timed out before completion")
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────
@@ -468,6 +495,53 @@ class OrchestratorService:
 
     # ── one-shot execution ────────────────────────────────────────────
 
+    def _run_core(self, request: RunRequest, state: _RunState) -> _AgentResult:
+        """Assembly + execute + state update only; caller is responsible for finalize."""
+        if self.context_assembler is not None:
+            package = self.context_assembler.assemble(
+                message=request.message,
+                context=request.context,
+                agent_role=DEFAULT_AGENT_ROLE,
+            )
+            state.system_prompt = package.system_prompt
+            state.files_used = _files_used_from_package(
+                package.p0_files,
+                package.search_results,
+            )
+            logger.info(
+                "Context assembled: %d tokens, %d search results, "
+                "%d P0 files, %d budget remaining",
+                package.total_tokens,
+                len(package.search_results),
+                len(package.p0_files),
+                package.budget_remaining,
+            )
+            etrace.step(
+                "Context assembled",
+                module="orchestrator",
+                tokens=package.total_tokens,
+                search_results=len(package.search_results),
+                p0_files=len(package.p0_files),
+                budget_remaining=package.budget_remaining,
+            )
+
+        agent_result = self._execute(
+            user_message=request.message,
+            context=request.context,
+            conversation_id=state.conversation_id,
+            system_prompt=state.system_prompt,
+        )
+        state.result_text = agent_result.text
+        state.tools_called = agent_result.tools_called or None
+        state.turns_used = agent_result.turns_used or None
+        etrace.step(
+            "Agent execution complete",
+            module="orchestrator",
+            tools_called=agent_result.tools_called,
+            turns_used=agent_result.turns_used,
+        )
+        return agent_result
+
     def run(self, *, request: RunRequest) -> RunResponse:
         """Process a run request end-to-end.
 
@@ -507,56 +581,15 @@ class OrchestratorService:
                 routing_method="default",
             )
             try:
-                with _run_timeout(self.run_timeout_seconds):
-                    if self.context_assembler is not None:
-                        package = self.context_assembler.assemble(
-                            message=request.message,
-                            context=request.context,
-                            agent_role=DEFAULT_AGENT_ROLE,
-                        )
-                        state.system_prompt = package.system_prompt
-                        state.files_used = _files_used_from_package(
-                            package.p0_files,
-                            package.search_results,
-                        )
-                        logger.info(
-                            "Context assembled: %d tokens, %d search results, "
-                            "%d P0 files, %d budget remaining",
-                            package.total_tokens,
-                            len(package.search_results),
-                            len(package.p0_files),
-                            package.budget_remaining,
-                        )
-                        etrace.step(
-                            "Context assembled",
-                            module="orchestrator",
-                            tokens=package.total_tokens,
-                            search_results=len(package.search_results),
-                            p0_files=len(package.p0_files),
-                            budget_remaining=package.budget_remaining,
-                        )
-
-                    agent_result = self._execute(
-                        user_message=request.message,
-                        context=request.context,
-                        conversation_id=state.conversation_id,
-                        system_prompt=state.system_prompt,
-                    )
-                    state.result_text = agent_result.text
-                    state.tools_called = agent_result.tools_called or None
-                    state.turns_used = agent_result.turns_used or None
-                    etrace.step(
-                        "Agent execution complete",
-                        module="orchestrator",
-                        tools_called=agent_result.tools_called,
-                        turns_used=agent_result.turns_used,
-                    )
-
-                    self._finalize_run(
-                        state=state,
-                        ended_at=datetime.now(timezone.utc),
-                        status="completed",
-                    )
+                agent_result = _run_with_timeout(
+                    self.run_timeout_seconds,
+                    lambda: self._run_core(request, state),
+                )
+                self._finalize_run(
+                    state=state,
+                    ended_at=datetime.now(timezone.utc),
+                    status="completed",
+                )
             except RunTimeoutError:
                 duration_ms = int(
                     (datetime.now(timezone.utc) - state.started_at).total_seconds() * 1000
@@ -638,6 +671,108 @@ class OrchestratorService:
 
     # ── multi-turn chat ───────────────────────────────────────────────
 
+    def _chat_core(self, request: RunRequest, state: _RunState) -> _AgentResult:
+        """Load/create conversation, assembly, execute, persist messages; no finalize."""
+        from harle.db.conversations import (
+            add_message,
+            create_conversation,
+            get_conversation,
+            get_recent_messages,
+            touch_conversation,
+        )
+
+        conversation_history: list[dict[str, str]] | None = None
+        if state.conversation_id is not None:
+            with self.db.session() as session:
+                conv = get_conversation(session, state.conversation_id)
+            if conv is None:
+                raise ValueError(
+                    f"Conversation {state.conversation_id!r} not found."
+                )
+            with self.db.session() as session:
+                messages = get_recent_messages(
+                    session,
+                    state.conversation_id,
+                )
+                conversation_history = [
+                    {"role": m.role, "content": m.content}
+                    for m in messages
+                ]
+        else:
+            state.conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
+            with self.db.session() as session:
+                create_conversation(
+                    session,
+                    conversation_id=state.conversation_id,
+                    context_scope=request.context,
+                    agent_role=DEFAULT_AGENT_ROLE,
+                )
+
+        if self.context_assembler is not None:
+            package = self.context_assembler.assemble(
+                message=request.message,
+                context=request.context,
+                agent_role=DEFAULT_AGENT_ROLE,
+                conversation_history=conversation_history,
+            )
+            state.system_prompt = package.system_prompt
+            state.files_used = _files_used_from_package(
+                package.p0_files,
+                package.search_results,
+            )
+            logger.info(
+                "Context assembled: %d tokens, %d search results, "
+                "%d P0 files, %d conversation messages, "
+                "%d budget remaining",
+                package.total_tokens,
+                len(package.search_results),
+                len(package.p0_files),
+                package.conversation_messages_included,
+                package.budget_remaining,
+            )
+            etrace.step(
+                "Context assembled",
+                module="orchestrator",
+                tokens=package.total_tokens,
+                search_results=len(package.search_results),
+                conversation_messages=package.conversation_messages_included,
+            )
+
+        agent_result = self._execute(
+            user_message=request.message,
+            context=request.context,
+            conversation_id=state.conversation_id,
+            system_prompt=state.system_prompt,
+        )
+        state.result_text = agent_result.text
+        state.tools_called = agent_result.tools_called or None
+        state.turns_used = agent_result.turns_used or None
+        etrace.step(
+            "Agent execution complete",
+            module="orchestrator",
+            tools_called=agent_result.tools_called,
+            turns_used=agent_result.turns_used,
+        )
+
+        with self.db.session() as session:
+            add_message(
+                session,
+                conversation_id=state.conversation_id,
+                role="user",
+                content=request.message,
+                run_id=state.run_id,
+            )
+            add_message(
+                session,
+                conversation_id=state.conversation_id,
+                role="assistant",
+                content=state.result_text,
+                run_id=state.run_id,
+            )
+            touch_conversation(session, state.conversation_id)
+
+        return agent_result
+
     def chat(self, *, request: RunRequest) -> RunResponse:
         """Process a chat message with full conversation management.
 
@@ -666,14 +801,6 @@ class OrchestratorService:
                 "Set DATABASE_URL in the configuration."
             )
 
-        from harle.db.conversations import (
-            add_message,
-            create_conversation,
-            get_conversation,
-            get_recent_messages,
-            touch_conversation,
-        )
-
         state = _RunState(
             run_id=f"run_{uuid.uuid4().hex[:12]}",
             started_at=datetime.now(timezone.utc),
@@ -682,7 +809,6 @@ class OrchestratorService:
             conversation_id=request.conversation_id,
         )
         agent_result: _AgentResult | None = None
-        conversation_history: list[dict[str, str]] | None = None
 
         with etrace.span(
             "handle_chat",
@@ -697,105 +823,15 @@ class OrchestratorService:
                 routing_method="default",
             )
             try:
-                with _run_timeout(self.run_timeout_seconds):
-                    # ── load or create conversation ──────────────────────────
-                    if state.conversation_id is not None:
-                        with self.db.session() as session:
-                            conv = get_conversation(session, state.conversation_id)
-                        if conv is None:
-                            raise ValueError(
-                                f"Conversation {state.conversation_id!r} not found."
-                            )
-                        with self.db.session() as session:
-                            messages = get_recent_messages(
-                                session,
-                                state.conversation_id,
-                            )
-                            conversation_history = [
-                                {"role": m.role, "content": m.content}
-                                for m in messages
-                            ]
-                    else:
-                        state.conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
-                        with self.db.session() as session:
-                            create_conversation(
-                                session,
-                                conversation_id=state.conversation_id,
-                                context_scope=request.context,
-                                agent_role=DEFAULT_AGENT_ROLE,
-                            )
-
-                    # ── context assembly ─────────────────────────────────────
-                    if self.context_assembler is not None:
-                        package = self.context_assembler.assemble(
-                            message=request.message,
-                            context=request.context,
-                            agent_role=DEFAULT_AGENT_ROLE,
-                            conversation_history=conversation_history,
-                        )
-                        state.system_prompt = package.system_prompt
-                        state.files_used = _files_used_from_package(
-                            package.p0_files,
-                            package.search_results,
-                        )
-                        logger.info(
-                            "Context assembled: %d tokens, %d search results, "
-                            "%d P0 files, %d conversation messages, "
-                            "%d budget remaining",
-                            package.total_tokens,
-                            len(package.search_results),
-                            len(package.p0_files),
-                            package.conversation_messages_included,
-                            package.budget_remaining,
-                        )
-                        etrace.step(
-                            "Context assembled",
-                            module="orchestrator",
-                            tokens=package.total_tokens,
-                            search_results=len(package.search_results),
-                            conversation_messages=package.conversation_messages_included,
-                        )
-
-                    # ── execution ────────────────────────────────────────────
-                    agent_result = self._execute(
-                        user_message=request.message,
-                        context=request.context,
-                        conversation_id=state.conversation_id,
-                        system_prompt=state.system_prompt,
-                    )
-                    state.result_text = agent_result.text
-                    state.tools_called = agent_result.tools_called or None
-                    state.turns_used = agent_result.turns_used or None
-                    etrace.step(
-                        "Agent execution complete",
-                        module="orchestrator",
-                        tools_called=agent_result.tools_called,
-                        turns_used=agent_result.turns_used,
-                    )
-
-                    # ── persist messages ────────────────────────────────────
-                    with self.db.session() as session:
-                        add_message(
-                            session,
-                            conversation_id=state.conversation_id,
-                            role="user",
-                            content=request.message,
-                            run_id=state.run_id,
-                        )
-                        add_message(
-                            session,
-                            conversation_id=state.conversation_id,
-                            role="assistant",
-                            content=state.result_text,
-                            run_id=state.run_id,
-                        )
-                        touch_conversation(session, state.conversation_id)
-
-                    self._finalize_run(
-                        state=state,
-                        ended_at=datetime.now(timezone.utc),
-                        status="completed",
-                    )
+                agent_result = _run_with_timeout(
+                    self.run_timeout_seconds,
+                    lambda: self._chat_core(request, state),
+                )
+                self._finalize_run(
+                    state=state,
+                    ended_at=datetime.now(timezone.utc),
+                    status="completed",
+                )
             except RunTimeoutError:
                 duration_ms = int(
                     (datetime.now(timezone.utc) - state.started_at).total_seconds() * 1000
