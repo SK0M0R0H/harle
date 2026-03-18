@@ -57,6 +57,7 @@ class Settings:
 
     # Agentic loop
     HARLE_MAX_ITERATIONS: int = 10  # Max turns for the Agents SDK Runner (tool-calling loop)
+    HARLE_RUN_TIMEOUT_SECONDS: int | None = 60  # End-to-end orchestrator timeout
 
     # Run logging (vault logs/ directory)
     HARLE_RUN_LOG_STORE_CONTEXT: bool = False  # Store assembled context in logs (optional, for size/privacy)

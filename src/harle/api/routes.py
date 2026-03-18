@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Generator
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
 from harle.api.models import (
     ConnectionStatusItem,
@@ -28,7 +30,7 @@ from harle.api.models import (
 from harle.api.streaming import drain_debug_events, result_event
 from harle.config import Settings
 from harle.db.connection import Database
-from harle.orchestrator.service import OrchestratorService
+from harle.orchestrator.service import OrchestratorService, RunTimeoutError
 from harle.search.engine import SearchEngine
 
 logger = logging.getLogger(__name__)
@@ -139,11 +141,49 @@ def build_router(
         )
 
     @router.post("/run", response_model=RunResponse)
-    def run_task(
+    async def run_task(
+        http_request: Request,
         request: RunRequest,
         debug: bool = Query(default=False, description="Enable SSE debug event stream"),
     ) -> RunResponse | EventSourceResponse:
-        response = orchestrator.run(request=request)
+        if await http_request.is_disconnected():
+            run_id = orchestrator.record_aborted_request(request=request)
+            logger.warning(
+                "Client disconnected before /run execution (run_id=%s conversation_id=%s)",
+                run_id,
+                request.conversation_id,
+            )
+            raise HTTPException(
+                status_code=499,
+                detail=(
+                    "Client disconnected before request execution started. "
+                    f"Recorded aborted run {run_id}."
+                ),
+            )
+
+        logger.info(
+            "Received /run request",
+            extra={
+                "path": str(http_request.url.path),
+                "context_scope": request.context,
+                "conversation_id": request.conversation_id,
+            },
+        )
+        try:
+            response = await run_in_threadpool(orchestrator.run, request=request)
+        except RunTimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="Run exceeded the server-side timeout before completion.",
+            ) from exc
+        except asyncio.CancelledError:
+            # Best-effort disconnect detection is limited here because the
+            # synchronous orchestrator work is already running in a threadpool.
+            logger.warning(
+                "Client disconnected during /run request handling (conversation_id=%s)",
+                request.conversation_id,
+            )
+            raise
         if debug:
             return _sse_response(response)
         return response
@@ -179,7 +219,8 @@ def build_router(
             )
 
     @router.post("/chat", response_model=RunResponse)
-    def chat(
+    async def chat(
+        http_request: Request,
         request: RunRequest,
         debug: bool = Query(default=False, description="Enable SSE debug event stream"),
     ) -> RunResponse | EventSourceResponse:
@@ -196,8 +237,44 @@ def build_router(
                 status_code=503,
                 detail="Database is not configured. Chat requires DATABASE_URL.",
             )
+        if await http_request.is_disconnected():
+            run_id = orchestrator.record_aborted_request(request=request)
+            logger.warning(
+                "Client disconnected before /chat execution (run_id=%s conversation_id=%s)",
+                run_id,
+                request.conversation_id,
+            )
+            raise HTTPException(
+                status_code=499,
+                detail=(
+                    "Client disconnected before chat execution started. "
+                    f"Recorded aborted run {run_id}."
+                ),
+            )
+
+        logger.info(
+            "Received /chat request",
+            extra={
+                "path": str(http_request.url.path),
+                "context_scope": request.context,
+                "conversation_id": request.conversation_id,
+            },
+        )
         try:
-            response = orchestrator.chat(request=request)
+            response = await run_in_threadpool(orchestrator.chat, request=request)
+        except RunTimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="Chat request exceeded the server-side timeout before completion.",
+            ) from exc
+        except asyncio.CancelledError:
+            # Mid-flight disconnects are not reliably recoverable while the
+            # synchronous orchestrator continues in the threadpool.
+            logger.warning(
+                "Client disconnected during /chat request handling (conversation_id=%s)",
+                request.conversation_id,
+            )
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if debug:
@@ -371,4 +448,3 @@ def build_router(
         return EventSourceResponse(_generate())
 
     return router
-

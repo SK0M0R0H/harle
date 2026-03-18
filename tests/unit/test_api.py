@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -23,14 +23,20 @@ def _make_client(
     search_engine: object | None = None,
     settings: Settings | None = None,
     import_registry: object | None = None,
+    connections: object | None = None,
+    tool_registry: object | None = None,
+    orchestrator: OrchestratorService | None = None,
 ) -> TestClient:
-    svc = OrchestratorService(llm_provider=EchoProvider())
+    if orchestrator is None:
+        orchestrator = OrchestratorService(llm_provider=EchoProvider())
     router = build_router(
-        orchestrator=svc,
+        orchestrator=orchestrator,
         db=db,  # type: ignore[arg-type]
         search_engine=search_engine,  # type: ignore[arg-type]
         settings=settings,
         import_registry=import_registry,
+        connections=connections,
+        tool_registry=tool_registry,
     )
     app = FastAPI()
     app.include_router(router)
@@ -59,6 +65,94 @@ class TestHealthEndpoint:
         assert resp.json() == {"status": "ok"}
 
 
+class TestHealthConnectionsEndpoint:
+    """Tests for GET /health/connections."""
+
+    def test_returns_empty_when_no_connections(self, client: TestClient) -> None:
+        resp = client.get("/health/connections")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["connections"] == []
+        assert data["all_healthy"] is True
+
+    def test_returns_statuses_when_connections_configured(self) -> None:
+        from harle.connections.base import ConnectionStatus
+
+        mock_reg = MagicMock()
+        mock_reg.health_check_all = AsyncMock(
+            return_value={
+                "notion": ConnectionStatus(
+                    healthy=True, service_name="Notion", message="", latency_ms=12.0
+                ),
+                "tavily": ConnectionStatus(
+                    healthy=False, service_name="Tavily", message="API key missing", latency_ms=None
+                ),
+            }
+        )
+        client = _make_client(connections=mock_reg)
+        resp = client.get("/health/connections")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["connections"]) == 2
+        names = {c["name"] for c in data["connections"]}
+        assert names == {"notion", "tavily"}
+        assert data["all_healthy"] is False
+
+
+class TestHealthToolsEndpoint:
+    """Tests for GET /health/tools."""
+
+    def test_returns_empty_when_no_tool_registry(self, client: TestClient) -> None:
+        resp = client.get("/health/tools")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tools"] == []
+        assert data["all_healthy"] is True
+
+    def test_returns_statuses_when_tool_registry_configured(self) -> None:
+        mock_reg = MagicMock()
+        mock_reg.health_check_all = AsyncMock(
+            return_value={"web_search": True, "codebase": False}
+        )
+        client = _make_client(tool_registry=mock_reg)
+        resp = client.get("/health/tools")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["tools"]) == 2
+        assert data["all_healthy"] is False
+
+
+class TestHealthAllEndpoint:
+    """Tests for GET /health/all."""
+
+    def test_returns_empty_when_nothing_configured(self, client: TestClient) -> None:
+        resp = client.get("/health/all")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["connections"] == []
+        assert data["tools"] == []
+        assert data["all_healthy"] is True
+
+    def test_aggregates_connections_and_tools(self) -> None:
+        from harle.connections.base import ConnectionStatus
+
+        conn_reg = MagicMock()
+        conn_reg.health_check_all = AsyncMock(
+            return_value={"notion": ConnectionStatus(healthy=True, service_name="Notion", message="", latency_ms=5.0)}
+        )
+        tool_reg = MagicMock()
+        tool_reg.health_check_all = AsyncMock(return_value={"tools": True})
+        client = _make_client(connections=conn_reg, tool_registry=tool_reg)
+        resp = client.get("/health/all")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["connections"]) == 1
+        assert data["connections"][0]["name"] == "notion"
+        assert len(data["tools"]) == 1
+        assert data["tools"][0]["name"] == "tools"
+        assert data["all_healthy"] is True
+
+
 class TestRunEndpoint:
     def test_valid_request(self, client: TestClient) -> None:
         resp = client.post("/run", json={"message": "hello"})
@@ -84,6 +178,25 @@ class TestRunEndpoint:
         resp = client.post("/run", json={"message": "hi", "conversation_id": "conv-abc"})
         assert resp.status_code == 200
         assert resp.json()["conversation_id"] == "conv-abc"
+
+    def test_504_when_run_timeout(self) -> None:
+        from harle.orchestrator.service import OrchestratorService, RunTimeoutError
+
+        class TimeoutOrchestrator(OrchestratorService):
+            def run(self, request):  # type: ignore[no-untyped-def]
+                raise RunTimeoutError("Run timed out before completion")
+
+        svc = TimeoutOrchestrator(llm_provider=EchoProvider())
+        client = _make_client(orchestrator=svc)
+        resp = client.post("/run", json={"message": "slow"})
+        assert resp.status_code == 504
+        assert "timeout" in resp.json()["detail"].lower()
+
+    def test_debug_true_returns_sse_stream(self, client: TestClient) -> None:
+        resp = client.post("/run", json={"message": "hi"}, params={"debug": "true"})
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        assert "event:" in resp.text or "result" in resp.text
 
 
 class TestInitEndpoint:
@@ -201,6 +314,29 @@ class TestSearchEndpoint:
         assert query.query == "deploy"
         assert query.context == "work"
         assert query.max_results == 7
+
+    def test_success_when_engine_returns_object_with_file_results(self) -> None:
+        """Covers route branch when search returns Phase 2 SearchResponse with file_results."""
+        mock_engine = MagicMock()
+        mock_response = MagicMock()
+        mock_response.file_results = [
+            SearchResult(
+                file_path="docs/readme.md",
+                title="Readme",
+                score=8.0,
+                context="work",
+                tags=[],
+                snippet="readme snippet",
+            )
+        ]
+        mock_engine.search.return_value = mock_response
+        client = _make_client(search_engine=mock_engine)
+        resp = client.get("/search", params={"q": "readme"})
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["total"] == 1
+        assert payload["results"][0]["file_path"] == "docs/readme.md"
+        assert payload["results"][0]["snippet"] == "readme snippet"
 
 
 class TestGetRunEndpoint:
@@ -352,3 +488,133 @@ class TestImportEndpoint:
         assert len(data["created_paths"]) == 2
         for p in data["created_paths"]:
             assert (vault / p).exists()
+
+    def test_404_when_import_source_not_found(self, tmp_path) -> None:
+        from harle.vault_imports.registry import ImportRegistry, ImportSourceNotFound
+
+        mock_reg = MagicMock(spec=ImportRegistry)
+        mock_reg.run_import = AsyncMock(
+            side_effect=ImportSourceNotFound("Source 'unknown' is not registered.")
+        )
+        client = _make_client(
+            import_registry=mock_reg,
+            settings=Settings(HARLE_DATASET_PATH=str(tmp_path)),
+        )
+        resp = client.post(
+            "/import",
+            json={"source": "unknown", "config": {}, "dry_run": False},
+        )
+        assert resp.status_code == 404
+        assert "not registered" in resp.json()["detail"].lower() or "unknown" in resp.json()["detail"].lower()
+
+    def test_500_when_import_raises(self, tmp_path) -> None:
+        from harle.vault_imports.registry import ImportRegistry
+
+        mock_reg = MagicMock(spec=ImportRegistry)
+        mock_reg.run_import = AsyncMock(side_effect=Exception("Connection refused"))
+        client = _make_client(
+            import_registry=mock_reg,
+            settings=Settings(HARLE_DATASET_PATH=str(tmp_path)),
+        )
+        resp = client.post(
+            "/import",
+            json={"source": "notion", "config": {}, "dry_run": False},
+        )
+        assert resp.status_code == 500
+        assert "Connection refused" in resp.json()["detail"] or "refused" in resp.json()["detail"].lower()
+
+    def test_import_status_completed_with_errors_when_errors_and_some_imported(
+        self, tmp_path
+    ) -> None:
+        from harle.vault_imports.base import ImportResult
+        from harle.vault_imports.registry import ImportRegistry
+
+        mock_reg = MagicMock(spec=ImportRegistry)
+        mock_reg.run_import = AsyncMock(
+            return_value=ImportResult(
+                source_name="notion",
+                items_found=3,
+                items_imported=2,
+                items_skipped=0,
+                items_failed=1,
+                errors=["One item failed"],
+                created_paths=["a.md", "b.md"],
+                updated_paths=[],
+            )
+        )
+        client = _make_client(
+            import_registry=mock_reg,
+            settings=Settings(HARLE_DATASET_PATH=str(tmp_path)),
+        )
+        resp = client.post(
+            "/import",
+            json={"source": "notion", "config": {}, "dry_run": False},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed_with_errors"
+        assert data["items_imported"] == 2
+        assert data["items_failed"] == 1
+        assert "One item failed" in data["errors"][0]
+
+
+class TestChatEndpoint:
+    """Tests for POST /chat."""
+
+    def test_503_when_no_db(self, client: TestClient) -> None:
+        resp = client.post("/chat", json={"message": "hi"})
+        assert resp.status_code == 503
+        assert "DATABASE_URL" in resp.json()["detail"]
+
+    def test_504_when_chat_timeout(self) -> None:
+        from harle.orchestrator.service import OrchestratorService, RunTimeoutError
+
+        class TimeoutOrchestrator(OrchestratorService):
+            def chat(self, request):  # type: ignore[no-untyped-def]
+                raise RunTimeoutError("Chat timed out")
+
+        mock_db = MagicMock()
+        mock_db.session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
+        svc = TimeoutOrchestrator(llm_provider=EchoProvider())
+        client = _make_client(orchestrator=svc, db=mock_db)
+        resp = client.post("/chat", json={"message": "hi"})
+        assert resp.status_code == 504
+        assert "timeout" in resp.json()["detail"].lower()
+
+    def test_404_when_conversation_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from harle.orchestrator.service import OrchestratorService
+
+        class ValueErrorOrchestrator(OrchestratorService):
+            def chat(self, request):  # type: ignore[no-untyped-def]
+                raise ValueError("Conversation conv-xyz not found")
+
+        mock_db = MagicMock()
+        mock_db.session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
+        svc = ValueErrorOrchestrator(llm_provider=EchoProvider())
+        client = _make_client(orchestrator=svc, db=mock_db)
+        resp = client.post("/chat", json={"message": "hi", "conversation_id": "conv-xyz"})
+        assert resp.status_code == 404
+        assert "conv-xyz" in resp.json()["detail"] or "not found" in resp.json()["detail"].lower()
+
+    def test_debug_true_returns_sse_stream(self) -> None:
+        from harle.api.models import RunRequest, RunResponse
+        from harle.orchestrator.service import OrchestratorService
+
+        class ChatEchoOrchestrator(OrchestratorService):
+            def chat(self, *, request: RunRequest) -> RunResponse:
+                return RunResponse(
+                    run_id="run_debug",
+                    status="completed",
+                    result=request.message,
+                    context=request.context,
+                )
+
+        client = _make_client(
+            db=MagicMock(),
+            orchestrator=ChatEchoOrchestrator(llm_provider=EchoProvider()),
+        )
+        resp = client.post("/chat", json={"message": "hi"}, params={"debug": "true"})
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")

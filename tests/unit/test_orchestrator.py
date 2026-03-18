@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 from textwrap import dedent
@@ -19,7 +21,12 @@ from harle.context.assembler import ContextAssembler, ContextPackage
 from harle.db.connection import Database
 from harle.db.models import Conversation, Message
 from harle.llm.providers import EchoProvider
-from harle.orchestrator.service import OrchestratorService, build_orchestrator
+from harle.orchestrator.service import (
+    OrchestratorService,
+    RunTimeoutError,
+    build_orchestrator,
+    _run_with_timeout,
+)
 
 
 class TestOrchestratorService:
@@ -161,6 +168,94 @@ class TestOrchestratorService:
         """Without explicit flag, legacy provider path is used."""
         svc = OrchestratorService(llm_provider=EchoProvider())
         assert svc.use_agent_runner is False
+
+
+class TestRunWithTimeout:
+    """Unit tests for _run_with_timeout (main-thread SIGALRM and worker-thread executor)."""
+
+    def test_returns_result_when_within_limit(self) -> None:
+        result = _run_with_timeout(10, lambda: 42)
+        assert result == 42
+
+    def test_none_seconds_disables_timeout(self) -> None:
+        """When seconds is None, slow thunk completes without timeout."""
+        result = _run_with_timeout(None, lambda: (time.sleep(0.2), 1)[1])
+        assert result == 1
+
+    def test_zero_seconds_disables_timeout(self) -> None:
+        result = _run_with_timeout(0, lambda: 99)
+        assert result == 99
+
+    def test_main_thread_raises_run_timeout_error_when_exceeded(self) -> None:
+        """On main thread, SIGALRM path raises RunTimeoutError when thunk exceeds limit."""
+        with pytest.raises(RunTimeoutError, match="timed out"):
+            _run_with_timeout(1, lambda: time.sleep(2))
+
+    def test_worker_thread_raises_run_timeout_error_when_exceeded(self) -> None:
+        """On a worker thread, executor path raises RunTimeoutError when thunk exceeds limit."""
+        exc_holder: list[Exception] = []
+
+        def run_in_worker() -> None:
+            try:
+                _run_with_timeout(1, lambda: time.sleep(2))
+            except RunTimeoutError as e:
+                exc_holder.append(e)
+
+        t = threading.Thread(target=run_in_worker)
+        t.start()
+        t.join(timeout=5)
+        assert t.is_alive() is False
+        assert len(exc_holder) == 1
+        assert "timed out" in str(exc_holder[0])
+
+
+class TestOrchestratorRunTimeout:
+    """OrchestratorService.run() applies run_timeout_seconds and raises RunTimeoutError."""
+
+    def test_run_raises_run_timeout_error_when_provider_slow(self) -> None:
+        """run() with a slow provider and run_timeout_seconds raises RunTimeoutError."""
+        slow_provider = MagicMock()
+        slow_provider.generate.side_effect = lambda **kwargs: (
+            time.sleep(2),
+            "too late",
+        )[1]
+
+        svc = OrchestratorService(
+            llm_provider=slow_provider,
+            run_timeout_seconds=1,
+        )
+        req = RunRequest(message="hello", context="personal")
+
+        with pytest.raises(RunTimeoutError, match="timed out"):
+            svc.run(request=req)
+
+    def test_run_raises_run_timeout_error_from_worker_thread(self) -> None:
+        """run() invoked from a worker thread still enforces timeout via executor path."""
+        slow_provider = MagicMock()
+        slow_provider.generate.side_effect = lambda **kwargs: (
+            time.sleep(2),
+            "too late",
+        )[1]
+
+        svc = OrchestratorService(
+            llm_provider=slow_provider,
+            run_timeout_seconds=1,
+        )
+        req = RunRequest(message="hello", context="personal")
+        exc_holder: list[Exception] = []
+
+        def run_in_worker() -> None:
+            try:
+                svc.run(request=req)
+            except RunTimeoutError as e:
+                exc_holder.append(e)
+
+        t = threading.Thread(target=run_in_worker)
+        t.start()
+        t.join(timeout=5)
+        assert t.is_alive() is False
+        assert len(exc_holder) == 1
+        assert "timed out" in str(exc_holder[0])
 
 
 class TestOrchestratorAgentRunnerTrello:
@@ -332,7 +427,12 @@ class TestBuildOrchestrator:
 
 
 def _make_test_db() -> Database:
-    """Create an in-memory SQLite database with conversation tables only."""
+    """Create an in-memory SQLite database with conversation tables only.
+
+    Run persistence is not tested here (runs table uses PostgreSQL ARRAY);
+    chat tests patch create_run to a no-op so conversation/message behavior
+    is exercised without needing the runs table.
+    """
     db = Database.__new__(Database)
     db.engine = create_engine("sqlite:///:memory:", echo=False)
     db._session_factory = sessionmaker(bind=db.engine, expire_on_commit=False)
@@ -343,6 +443,14 @@ def _make_test_db() -> Database:
 
 class TestOrchestratorChat:
     """Tests for the chat() method with conversation management."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Avoid persisting to runs table; SQLite test DB has no runs table (ARRAY)."""
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
 
     def test_chat_requires_db(self) -> None:
         svc = OrchestratorService(llm_provider=EchoProvider(), db=None)

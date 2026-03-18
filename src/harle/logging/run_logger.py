@@ -24,6 +24,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def build_result_body(
+    *,
+    status: str,
+    result_text: str | None = None,
+    summary: str | None = None,
+    duration_ms: int | None = None,
+) -> str:
+    """Build consistent result-body content for success and non-success runs."""
+    if status == "completed":
+        return result_text or summary or ""
+
+    if status == "failed":
+        return summary or "Run failed before completion"
+
+    if status == "timeout":
+        timeout_summary = summary or "Run timed out before completion"
+        if duration_ms is not None:
+            return f"{timeout_summary} (elapsed: {duration_ms} ms)"
+        return timeout_summary
+
+    if status == "aborted":
+        return summary or "Client disconnected before response completed"
+
+    return summary or result_text or ""
+
+
 def _frontmatter_yaml(
     run_id: str,
     timestamp: datetime,
@@ -101,9 +127,9 @@ def log_run_to_vault(
         run_id: Unique run identifier (e.g. run_abc123def456).
         timestamp: When the run occurred (used for YYYY/MM subdirs).
         agent: Agent role (e.g. secretary).
-        status: completed, failed, timeout.
+        status: completed, failed, timeout, or aborted.
         context_scope: work or personal.
-        result_body: Full result text (or summary) for the result file.
+        result_body: Formatted result text (or summary) for the result file.
         context_body: Assembled prompt/context text for the context file.
         store_context: Whether to write the context file (config-driven).
 
@@ -112,7 +138,9 @@ def log_run_to_vault(
         vault-relative path to the result file (e.g.
         logs/2026/02/run_abc123_result.md), or None if the dataset path
         does not exist. context_path is the vault-relative path to the
-        context file, or None if not written.
+        context file, or None if not written. Non-success runs still
+        write the optional context file when ``store_context`` is True
+        and ``context_body`` is available.
     """
     root = Path(dataset_path)
     if not root.is_absolute():

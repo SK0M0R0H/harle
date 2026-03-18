@@ -185,7 +185,7 @@ The dataset has a specific directory layout. Each directory has a purpose, and a
 
 ### Logs directory: structure, format, and search
 
-The `logs/` directory holds **agent run artifacts**: result summaries and, optionally, the assembled prompt (Context Assembler output) for each run. Logs are written by the Run Logger; they must be **searchable at scale** and **easy to open** in an editor or viewer.
+The `logs/` directory holds **agent run artifacts**: result summaries and, optionally, the assembled prompt (Context Assembler output) for each run. Logs are written by the Run Logger for successful and non-success runs alike; they must be **searchable at scale** and **easy to open** in an editor or viewer.
 
 **Directory structure (date-based, log-friendly):**
 
@@ -223,8 +223,24 @@ context_scope: work
 Summary of what the agent returned...
 ```
 
-- **Result files** (`*_result.md`): frontmatter + body = result summary (or full output). The Indexer stores the same metadata in the `runs` table and `result_path` points here.
-- **Context files** (`*_context.md`): optional; frontmatter + body = assembled prompt (system prompt + policies + search results + conversation slice). Can be disabled via config to limit size and privacy. If present, `context_path` on `runs` points here.
+- **Result files** (`*_result.md`): frontmatter + body = full output for `completed` runs, or a short failure/timeout/abort summary for non-success runs. The Indexer stores the same metadata in the `runs` table and `result_path` points here.
+- **Context files** (`*_context.md`): optional; frontmatter + body = assembled prompt (system prompt + policies + search results + conversation slice). Can be disabled via config to limit size and privacy. If present, `context_path` on `runs` points here. Failed and timed-out runs still write this file when context assembly finished and context logging is enabled; early aborts skip it gracefully when no context was assembled.
+
+**Expected terminal statuses:**
+- `completed`
+- `failed`
+- `timeout`
+- `aborted` (best-effort, usually for detected client disconnects/cancellations)
+
+**Minimum guaranteed data for early-failure logs:**
+- `run_id`
+- timestamp
+- `user_request`
+- `context_scope`
+- terminal `status`
+- `conversation_id` if it was already known
+
+When more execution state is available, the same run can also include `files_used`, `tools_called`, elapsed time, result summary, and optional assembled context.
 
 This format stays **plain Markdown** so logs are easy to open and read; frontmatter supports scripting and classic log tooling (e.g. filter by `agent`, `status`, or `timestamp` in the first few lines).
 
@@ -239,7 +255,7 @@ With a large number of runs, **search should not rely on scanning every file**. 
 | **By full body of results/context** | Vault `logs/` files | Optional: index log files in Whoosh (same as rest of dataset) or store excerpts in DB. Default: search via `runs` metadata + open by `result_path`/`context_path`. |
 | **Open a specific run** | Vault `logs/` | Use `result_path` or `context_path` from `runs`; or construct path from `run_id` and date. |
 
-So **classic log search** (time range, level/status, agent, full-text on message/summary) is done against the **Indexer**; the vault holds the **durable, human-readable artifact** and a stable path for opening. Optionally, log file bodies can be included in the dataset Whoosh index so "find runs where the result mentioned X" works without storing full bodies in PostgreSQL. Retention (e.g. delete or archive logs older than N months) can be implemented by pruning both `runs` rows and the corresponding files under `logs/`.
+So **classic log search** (time range, level/status, agent, full-text on message/summary) is done against the **Indexer**; the vault holds the **durable, human-readable artifact** and a stable path for opening. Optionally, log file bodies can be included in the dataset Whoosh index so "find runs where the result mentioned X" works without storing full bodies in PostgreSQL. Retention (e.g. delete or archive logs older than N months) can be implemented by pruning both `runs` rows and the corresponding files under `logs/`. The `runs` table is intentionally **not limited to completed runs**; failed, timed-out, and best-effort aborted runs also appear there so listing/detail views can surface operational issues alongside successful runs.
 
 ### File format conventions
 
@@ -385,7 +401,7 @@ CREATE TABLE runs (
     context_scope   TEXT NOT NULL,            -- "work" or "personal"
     agent           TEXT NOT NULL,            -- "secretary", "researcher", "specialist"
     routing_method  TEXT,                     -- "keyword_match", "llm_fallback", etc.
-    status          TEXT NOT NULL,            -- "completed", "failed", "timeout"
+    status          TEXT NOT NULL,            -- "completed", "failed", "timeout", "aborted"
     
     -- Context tracking
     files_used      TEXT[],                   -- Which dataset files were in context
@@ -415,11 +431,14 @@ CREATE TABLE runs (
 - **Quality improvement.** "Which requests take the most iterations?" — find patterns to optimize with better prompts or workflow templates.
 - **The Specialist agent** uses this table to analyze system performance.
 
+The `runs` table stores **all terminal outcomes**, not just successful ones. Similarity search and prior-run retrieval may deliberately filter to `completed` runs for relevance, but operational listing/detail views should expect to see `failed`, `timeout`, and `aborted` rows as well.
+
 **Where to store the assembled prompt (Context Assembler output):**  
 The full prompt built by the Context Assembler (system prompt + policies + search results + conversation slice) is not stored in the database — the `runs` table only keeps metadata (`files_used`, token counts, etc.). The **recommended place** to persist it is the **User Dataset** under `logs/`, as described in the [Logs directory](#logs-directory-structure-format-and-search) subsection: same date folder as the run result, filename `<run_id>_context.md` (e.g. `run_2026-02-12_001_context.md`). That keeps run artifacts together, human-readable and version-controlled; storage can be made optional via config (e.g. `logging.store_assembled_context`) to control size and privacy.
 
 - **Search:** Log search (by time, agent, status, or full-text on request/summary) is done via the **Indexer** (`runs` table and optional full-text indexes), not by scanning vault files — see the logs subsection for the split between DB-backed search and vault-backed storage.
 - **Opening:** User opens the file by path; an optional `context_path` column on `runs` can store the vault-relative path so the app can resolve it without reading the filesystem. If the application must fetch the assembled prompt by `run_id` without reading the vault (e.g. for retention or API), the content can alternatively be stored in a `run_contexts` table in PostgreSQL for programmatic access.
+- **Disconnect limitation:** Client-disconnect detection is best-effort in the current HTTP/threadpool runtime shape. Harle reliably records pre-start disconnects, but mid-flight disconnects may only be reflected indirectly through timeout/failure handling if the worker thread continues running after the client connection is gone.
 
 #### Table 3: `artifacts` — agent outputs
 
