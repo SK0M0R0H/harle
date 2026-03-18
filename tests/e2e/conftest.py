@@ -7,6 +7,7 @@ Postgres + vault. Skips the module when DATABASE_URL is not set.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -53,7 +54,17 @@ def _wait_for_health(
 
 
 @pytest.fixture(scope="session")
-def e2e_base_url() -> str:
+def e2e_vault_copy(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Copy the E2E fixture vault to a session-scoped temp dir so run/chat log_run_to_vault
+    mutations don't dirty the worktree or get indexed on future runs (hermetic suite).
+    """
+    dest = tmp_path_factory.mktemp("e2e_vault")
+    shutil.copytree(_E2E_VAULT, dest, dirs_exist_ok=True)
+    return str(dest)
+
+
+@pytest.fixture(scope="session")
+def e2e_base_url(e2e_vault_copy: str) -> str:
     """Start the Harle server and yield its base URL; skip when DATABASE_URL is unset."""
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
@@ -69,7 +80,7 @@ def e2e_base_url() -> str:
 
     env = os.environ.copy()
     env["DATABASE_URL"] = database_url
-    env["HARLE_DATASET_PATH"] = str(_E2E_VAULT)
+    env["HARLE_DATASET_PATH"] = e2e_vault_copy
     env["HARLE_PORT"] = str(port)
     # E2E-only config: no DATABASE_URL so env wins; avoids repo config/.env overriding test URL
     env["HARLE_CONFIG_PATH"] = str(_REPO_ROOT / "tests" / "e2e" / "config_e2e.yaml")
