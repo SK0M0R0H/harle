@@ -83,6 +83,45 @@ jobs:
           fi
           pytest -v --tb=short tests/integration
 
+  test-e2e:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: harle
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: harle_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U harle -d harle_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and test deps
+        run: pip install -e '.[test]'
+
+      - name: Run E2E tests (skip cleanly when none exist)
+        env:
+          DATABASE_URL: postgresql://harle:test@localhost:5432/harle_test
+        run: |
+          if [ ! -d tests/e2e ] || [ -z "$(find tests/e2e -name 'test_*.py' -print -quit)" ]; then
+            echo "No e2e tests directory/files found; skipping."
+            exit 0
+          fi
+          pytest -v --tb=short tests/e2e
+
   coverage:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

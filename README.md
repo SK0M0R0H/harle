@@ -374,7 +374,7 @@ docker rm -f harle-db
 
 ## Running tests
 
-The project uses **pytest** with a **unit** and **integration** layout. Unit tests cover configuration, frontmatter parsing, dataset reader, content hashing, search scoring, Pydantic models, LLM providers, orchestrator logic, tool infrastructure, and API endpoints; they use in-memory fixtures and the echo provider — no external services (PostgreSQL, OpenAI, Tavily) are required. Integration tests exercise multi-component flows with real module wiring.
+The project uses **pytest** with a **unit** and **integration** layout. Unit tests cover configuration, frontmatter parsing, dataset reader, content hashing, search scoring, Pydantic models, LLM providers, orchestrator logic, tool infrastructure, and API endpoints; they use in-memory fixtures and the echo provider — no external services (PostgreSQL, OpenAI, Tavily) are required. Integration tests exercise multi-component flows with real module wiring. **E2E tests** (`tests/e2e/`) start a real HTTP server (uvicorn) with the EchoProvider and optional Postgres + vault; they hit the API over HTTP (health, /run, /chat, /search, /health/tools). E2E tests require `DATABASE_URL` to be set (e.g. a local or CI Postgres); if it is not set, the E2E tests are skipped so you can still run unit and integration tests without a database.
 
 ```bash
 # Install test dependencies (once)
@@ -390,6 +390,17 @@ python -m pytest tests/unit
 # Run only integration tests
 python -m pytest tests/integration
 
+# Run E2E tests (real server, Postgres + vault fixture)
+# DATABASE_URL must match your Postgres: user, password, and database name.
+# If DATABASE_URL is not set, E2E tests are skipped.
+# The first run can take 1–2 minutes: the server runs DB init and vault indexing on startup.
+#
+# If you use the Quick start Docker run (step 3 above: POSTGRES_PASSWORD=harle, POSTGRES_DB=harle):
+DATABASE_URL="postgresql://harle:harle@localhost:5432/harle" python -m pytest tests/e2e -v
+#
+# For CI-style Postgres (user harle, password test, database harle_test):
+# DATABASE_URL="postgresql://harle:test@localhost:5432/harle_test" python -m pytest tests/e2e -v
+#
 # Verbose output with test names
 python -m pytest -v
 
@@ -426,6 +437,13 @@ tests/
     test_imports.py          # Import sanity checks
   integration/               # Multi-component flow tests
     test_integration_flows.py
+  e2e/                       # End-to-end (real server, optional Postgres)
+    conftest.py              # Server fixture, base_url, skip when no DATABASE_URL
+    test_session.py          # Health, /run, /chat
+    test_tool_flow.py        # Run completion (emulated)
+    test_vault.py            # Vault tool: /search, /health/tools
+  fixtures/
+    e2e_vault/               # Sample Markdown for E2E (searchable content)
 ```
 
 ## Session commands

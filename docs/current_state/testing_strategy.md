@@ -2,7 +2,7 @@
 title: "Harle Testing Strategy — Current State"
 tags: [testing, current-state, strategy, ci-cd, pytest, implementation-status]
 context: global
-last_updated: 2026-03-10
+last_updated: 2026-03-18
 summary: "Tracks what is implemented vs the Testing Strategy TRD and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 
 ## Overall Status
 
-**Foundation is in place:** unit tests for core modules (config, search, tools, context, API, etc.), an integration test suite with markers, shared fixtures in `conftest.py`, and a mock LLM (`EchoProvider`) for deterministic tests. **Missing:** CI/CD (no GitHub Actions), linting/formatting/type-check automation, coverage measurement and thresholds, semantic/LLM evaluation, E2E tests, Go CLI tests, and the full tooling stack (DeepEval, Promptfoo, ruff, mypy, pytest-cov). The TRD’s implementation roadmap (Phases 1–6) is largely not started.
+**Foundation is in place:** unit tests for core modules (config, search, tools, context, API, etc.), an integration test suite with markers, shared fixtures in `conftest.py`, and a mock LLM (`EchoProvider`) for deterministic tests. **Missing:** linting/formatting/type-check automation (partially in CI), full coverage thresholds, semantic/LLM evaluation, Go CLI tests, and the full tooling stack (DeepEval, Promptfoo, ruff, mypy, pytest-cov). The TRD’s implementation roadmap (Phases 1–6) is largely not started.
 
 ---
 
@@ -29,7 +29,7 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 | **§4 Layer 1: Unit tests** | Implemented | Many modules covered: config, tokenizer, reader, search, tools (registry, permissions, constraints, sandbox, skills, vault, web_search), API models, hasher, run_logger, providers, frontmatter. |
 | **§5 Layer 2: Integration tests** | Partially implemented | `tests/integration/` with marker `integration`; no full request→response or DB/orchestrator pipeline coverage as in TRD examples. |
 | **§6 Layer 3: Semantic / LLM evaluation** | Not implemented | No DeepEval, no golden datasets, no LLM-as-judge or relevancy/faithfulness metrics. |
-| **§7 Layer 4: E2E tests** | Not implemented | No E2E harness, no docker-compose.test.yml, no session/tool-flow E2E scenarios. |
+| **§7 Layer 4: E2E tests** | Implemented (emulated) | `tests/e2e/` with real-server harness; session lifecycle, health, /run, /chat, vault tool via /search; CI runs E2E on PR to main and nightly. Live E2E (real LLM, real APIs) is planned in [E2E live extension](../trd/e2e-live-extension.md). |
 | **§8 AI-assisted testing (Cursor)** | Partial | No `.cursor/rules/test_generation.mdc`; Cursor can be used ad hoc. |
 | **§9 CI/CD — GitHub Actions** | Not implemented | No `.github/workflows/`; tests run only manually. |
 | **§10 Tooling stack** | Partially implemented | pytest, httpx in use; no pytest-cov, pytest-asyncio, ruff, mypy, DeepEval, Promptfoo, pip-audit in config. |
@@ -37,7 +37,7 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 | **§12 Implementation roadmap** | Not started | Phases 1–6 (CI, coverage, integration, semantic, E2E, hardening) not executed. |
 | **§13 Metrics & coverage targets** | Not implemented | No coverage tracking, no thresholds, no quality dashboard. |
 | **Go CLI tests** | Not implemented | No tests in harle-cli (if present). |
-| **Pytest markers (full set)** | Partial | Only `integration` marker in pyproject; no `unit`, `semantic`, `e2e`. |
+| **Pytest markers (full set)** | Partial | `integration` and `e2e` markers in pyproject; no `unit`, `semantic`. |
 
 ---
 
@@ -61,6 +61,13 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 
 - Test files align with source modules (e.g. `test_tools*.py` for `harle.tools`).
 - Async tests use helpers (e.g. `_run()` for async) where needed.
+
+### 4. E2E tests (Layer 4, emulated)
+
+- **Location:** `tests/e2e/` with `conftest.py` (server fixture), `test_session.py` (health, /run, /chat), `test_tool_flow.py` (run completion), `test_vault.py` (vault tool: /search, /health/tools).
+- **Harness:** Real HTTP server (uvicorn) started in a subprocess with `DATABASE_URL`, `HARLE_DATASET_PATH` (tests/fixtures/e2e_vault), EchoProvider (no `OPENAI_API_KEY`). Skip when `DATABASE_URL` is unset.
+- **CI:** E2E runs on every pull request to main (`.github/workflows/ci.yml` job `test-e2e`) and in nightly (`nightly.yml`).
+- **Marker:** `e2e` in `pyproject.toml`. Live E2E (real LLM, real APIs) is planned in [E2E live extension](../trd/e2e-live-extension.md).
 
 ---
 
@@ -116,8 +123,8 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 
 ### 5. Layer 4: E2E tests (§7)
 
-- **Missing:** E2E harness, `docker-compose.test.yml`, E2E scenarios (session lifecycle, conversation context, tool call flow, error recovery, security boundary, concurrency).
-- **Unlocks:** Validation of the full CLI → Orchestrator → LLM → tools pipeline before release; catch integration and environment issues.
+- **Implemented (emulated):** `tests/e2e/` with real HTTP server (uvicorn), EchoProvider, Postgres and vault fixture; tests for health, /run, /chat multi-turn, vault tool (/search, /health/tools), and run completion. E2E runs on PR to main (ci.yml) and in nightly. Tool flow in emulated mode only validates run completion (no real agent tool calls).
+- **Not yet:** Live E2E (real OpenAI, Tavily, Trello), `docker-compose.test.yml`, error recovery / security boundary / concurrency scenarios. See [E2E live extension](../trd/e2e-live-extension.md) for the follow-on plan.
 
 ### 6. Go CLI tests
 
