@@ -101,7 +101,7 @@ def create_run(
         user_request: The user's request text.
         context_scope: ``work`` or ``personal``.
         agent: Agent role that handled the run (e.g. secretary).
-        status: ``completed``, ``failed``, ``timeout``.
+        status: ``completed``, ``failed``, ``timeout``, or ``aborted``.
         routing_method: How the agent was chosen (optional).
         files_used: Dataset file paths included in context (optional).
         tools_called: Tools invoked during the run (optional).
@@ -177,7 +177,8 @@ def list_runs(
         until: Only runs before this time (exclusive).
 
     Returns:
-        List of :class:`Run` instances.
+        List of :class:`Run` instances across all statuses unless
+        a specific status filter is requested.
     """
     stmt = select(Run).order_by(Run.timestamp.desc())
     if agent is not None:
