@@ -108,6 +108,13 @@ Flask is simpler but synchronous by default. Since every Orchestrator request in
 **Streaming support:**
 For long-running tasks (like research reports), the API supports **Server-Sent Events (SSE)** — a standard way to stream partial results to the client as they are generated. The CLI shows text appearing in real-time, similar to how ChatGPT streams responses word by word. This is important for user experience: without streaming, you stare at a blank screen for 30 seconds until the full response arrives.
 
+**Non-success outcomes and runtime safeguards:**
+- The Orchestrator also records non-success runs. Expected terminal statuses are `completed`, `failed`, `timeout`, and `aborted`.
+- `timeout` means the server-side runtime limit was exceeded and the request was stopped intentionally.
+- `failed` means the request raised an internal error during context assembly, execution, logging, or persistence.
+- `aborted` is best-effort and is currently used for detected client disconnects/cancellations before normal completion.
+- Client-disconnect detection is strongest **before** orchestration starts. Once synchronous orchestrator work is already running in a threadpool, mid-flight disconnect detection is not fully reliable, so the server-side timeout remains the primary safety mechanism.
+
 ---
 
 ### 2. Router (which agent handles this?)
@@ -513,6 +520,25 @@ The Run Logger answers all of these questions for every single run.
 **Where logs are stored:**
 - **PostgreSQL** (`runs` table) — structured log data for querying ("show me all runs from last week that used Trello tools").
 - **Dataset vault** (`logs/` directory) — human-readable result files in Markdown, for your own review.
+
+**Run artifact behavior by status:**
+
+| Status | Vault result log | Vault context log | `runs` table row | Notes |
+|---|---|---|---|---|
+| `completed` | Yes | Optional | Yes | Result body contains the full model output. |
+| `failed` | Yes | Optional if context assembly completed and context logging is enabled | Yes | Result body contains a short error summary including the exception class. |
+| `timeout` | Yes | Optional if context assembly completed and context logging is enabled | Yes | Result body contains a short timeout summary and elapsed time when known. |
+| `aborted` | Best-effort | Optional only if assembled context already existed | Best-effort | Used for detected disconnect/cancellation before normal completion. |
+
+**Minimum data guaranteed in early-failure logs:**
+- `run_id`
+- timestamp
+- `user_request`
+- `context_scope`
+- terminal `status`
+- `conversation_id` when it was already known
+
+If the request progressed further before failing, the persisted record may also include assembled context, `files_used`, `tools_called`, duration, and a result/error summary. Very early aborts may contain only the minimum fields above.
 
 **What logs enable over time:**
 - **Debugging.** If a result is wrong, you can trace exactly what happened: which context was used, which tools were called, what the model saw.
