@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -131,8 +132,17 @@ def _timeout_summary(duration_ms: int | None) -> str:
 
 @contextmanager
 def _run_timeout(seconds: int | None) -> object:
-    """Apply a per-request wall-clock timeout on Unix main-thread execution."""
+    """Apply a per-request wall-clock timeout on Unix main-thread execution.
+
+    Signal-based timeout only works in the main thread; in other threads
+    (e.g. under TestClient) this is a no-op so tests do not raise
+    "signal only works in main thread".
+    """
     if not seconds or seconds <= 0:
+        yield
+        return
+
+    if threading.current_thread() is not threading.main_thread():
         yield
         return
 

@@ -332,7 +332,12 @@ class TestBuildOrchestrator:
 
 
 def _make_test_db() -> Database:
-    """Create an in-memory SQLite database with conversation tables only."""
+    """Create an in-memory SQLite database with conversation tables only.
+
+    Run persistence is not tested here (runs table uses PostgreSQL ARRAY);
+    chat tests patch create_run to a no-op so conversation/message behavior
+    is exercised without needing the runs table.
+    """
     db = Database.__new__(Database)
     db.engine = create_engine("sqlite:///:memory:", echo=False)
     db._session_factory = sessionmaker(bind=db.engine, expire_on_commit=False)
@@ -343,6 +348,14 @@ def _make_test_db() -> Database:
 
 class TestOrchestratorChat:
     """Tests for the chat() method with conversation management."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Avoid persisting to runs table; SQLite test DB has no runs table (ARRAY)."""
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
 
     def test_chat_requires_db(self) -> None:
         svc = OrchestratorService(llm_provider=EchoProvider(), db=None)
