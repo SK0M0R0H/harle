@@ -589,6 +589,7 @@ class OrchestratorService:
                     state=state,
                     ended_at=datetime.now(timezone.utc),
                     status="completed",
+                    suppress_persistence_errors=True,
                 )
             except RunTimeoutError:
                 duration_ms = int(
@@ -831,6 +832,7 @@ class OrchestratorService:
                     state=state,
                     ended_at=datetime.now(timezone.utc),
                     status="completed",
+                    suppress_persistence_errors=True,
                 )
             except RunTimeoutError:
                 duration_ms = int(
