@@ -89,9 +89,14 @@ def e2e_base_url() -> str:
 
     try:
         if not _wait_for_health(base_url):
-            stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+            # Terminate first so stderr read doesn't block (process may be stuck in DB init).
             proc.terminate()
-            proc.wait(timeout=5)
+            try:
+                _, stderr_bytes = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                _, stderr_bytes = proc.communicate(timeout=2)
+            stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
             hint = ""
             if "password authentication failed" in stderr or "OperationalError" in stderr:
                 hint = (
