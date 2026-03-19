@@ -364,10 +364,10 @@ second section
 
         real_stat = Path.stat
 
-        def stat_raises(self):
+        def stat_raises(self, *args, **kwargs):
             if self.name == "a.md":
                 raise OSError("no stat")
-            return real_stat(self)
+            return real_stat(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "stat", stat_raises)
         whoosh_index.build_from_scratch(reader, tmp_path / "ix")
