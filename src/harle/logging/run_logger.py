@@ -13,8 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import yaml
-
+from harle.dataset.frontmatter import dump_frontmatter_fields
 from harle.dataset.writer import log_dir_for, write_log_file
 from harle.debug import etrace
 
@@ -70,12 +69,7 @@ def _frontmatter_yaml(
         "status": status,
         "context_scope": context_scope,
     }
-    return yaml.dump(
-        data,
-        default_flow_style=False,
-        allow_unicode=True,
-        sort_keys=False,
-    ).strip()
+    return dump_frontmatter_fields(data)
 
 
 def _result_content(

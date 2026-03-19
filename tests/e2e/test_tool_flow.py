@@ -7,10 +7,10 @@ import httpx
 
 
 @pytest.mark.e2e
-def test_run_completes_with_result(e2e_base_url: str) -> None:
-    """POST /run completes and returns a result (pipeline runs; EchoProvider returns echo)."""
+def test_chat_completes_with_result(e2e_base_url: str) -> None:
+    """POST /chat completes and returns a result (pipeline runs; EchoProvider returns echo)."""
     r = httpx.post(
-        f"{e2e_base_url}/run",
+        f"{e2e_base_url}/chat",
         json={"message": "Search for roadmap and milestones", "context": "work"},
         timeout=60.0,
     )

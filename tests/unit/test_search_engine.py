@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,7 +14,7 @@ from harle.search.engine import (
     _extract_snippet,
     _tokenize,
 )
-from harle.search.types import SearchQuery, SearchResponse
+from harle.search.types import ExpandedQuery, SearchQuery, SearchResponse
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +211,222 @@ class TestSearchReturnsSearchResponse:
         assert response.file_results == []
         assert response.query_metadata.phase == "whoosh"  # default engine
         assert response.query_metadata.original_query == ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Whoosh rebuild when schema is stale
+# ---------------------------------------------------------------------------
+
+
+class TestSearchPhase2WhooshRebuild:
+    def test_rebuilds_when_disk_schema_reported_stale(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from harle.dataset.reader import DatasetReader
+        from harle.search import whoosh_index
+
+        vault = tmp_path / "vault"
+        (vault / "prompts").mkdir(parents=True)
+        (vault / "prompts" / "p0.md").write_text(
+            "---\ntitle: P\ntags: []\ncontext: work\n---\nbody\n",
+            encoding="utf-8",
+        )
+        ix = tmp_path / "ix"
+        reader = DatasetReader(str(vault))
+        whoosh_index.build_from_scratch(reader, ix)
+
+        rebuilds: list[int] = []
+
+        def track_rebuild(_dp, _ip, _log):
+            rebuilds.append(1)
+
+        monkeypatch.setattr("harle.search.engine._rebuild_whoosh_index", track_rebuild)
+        monkeypatch.setattr("harle.search.engine._whoosh_search_safe", lambda *a, **k: [])
+        monkeypatch.setattr(
+            "harle.search.engine.whoosh_index.disk_index_schema_current",
+            lambda _p: False,
+        )
+        monkeypatch.setattr("harle.search.engine.get_all_tags", lambda _s: set())
+        monkeypatch.setattr(
+            "harle.search.engine.expand",
+            lambda q, _tv, _cfg: ExpandedQuery(
+                whoosh_terms=["body"],
+                tag_filters=[],
+                role_terms=[],
+                context_filter=None,
+                raw_query=q.query or "",
+            ),
+        )
+        monkeypatch.setattr(
+            "harle.search.engine.get_candidates_for_search",
+            lambda *_a, **_kw: [],
+        )
+        monkeypatch.setattr("harle.search.engine.get_entries_by_paths", lambda _s, _p: [])
+        monkeypatch.setattr("harle.search.engine.search_memories", lambda *_a, **_kw: [])
+        monkeypatch.setattr("harle.search.engine.search_similar_runs", lambda *_a, **_kw: [])
+
+        @contextmanager
+        def session_cm():
+            yield MagicMock()
+
+        db = MagicMock()
+        db.session = session_cm
+
+        class Cfg:
+            engine = "whoosh"
+            whoosh_index_path = str(ix)
+            max_results = 10
+            max_memories = 10
+            max_prior_runs = 5
+            memory_min_confidence = 0.3
+            bm25_weight = 0.4
+            tag_match_weight = 0.2
+            recency_weight = 0.15
+            source_priority_weight = 0.15
+            prior_run_weight = 0.1
+
+        engine = SearchEngine(str(vault), db, Cfg())
+        engine.search(SearchQuery(query="hello", max_results=10))
+        assert rebuilds == [1]
+
+    def test_rebuilds_when_whoosh_search_fails_then_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from harle.dataset.reader import DatasetReader
+        from harle.search import whoosh_index
+
+        vault = tmp_path / "vault"
+        (vault / "prompts").mkdir(parents=True)
+        (vault / "prompts" / "p0.md").write_text(
+            "---\ntitle: P\ntags: []\ncontext: work\n---\nbody\n",
+            encoding="utf-8",
+        )
+        ix = tmp_path / "ix"
+        reader = DatasetReader(str(vault))
+        whoosh_index.build_from_scratch(reader, ix)
+
+        rebuilds: list[int] = []
+
+        def track_rebuild(*_a):
+            rebuilds.append(1)
+
+        attempt = {"n": 0}
+
+        def flaky_search(*args, **kwargs):
+            attempt["n"] += 1
+            if attempt["n"] == 1:
+                raise ValueError("simulated corrupt index read")
+            return []
+
+        monkeypatch.setattr("harle.search.engine._rebuild_whoosh_index", track_rebuild)
+        monkeypatch.setattr("harle.search.engine.whoosh_index.search", flaky_search)
+        monkeypatch.setattr("harle.search.engine.get_all_tags", lambda _s: set())
+        monkeypatch.setattr(
+            "harle.search.engine.expand",
+            lambda q, _tv, _cfg: ExpandedQuery(
+                whoosh_terms=["body"],
+                tag_filters=[],
+                role_terms=[],
+                context_filter=None,
+                raw_query=q.query or "",
+            ),
+        )
+        monkeypatch.setattr(
+            "harle.search.engine.get_candidates_for_search",
+            lambda *_a, **_kw: [],
+        )
+        monkeypatch.setattr("harle.search.engine.get_entries_by_paths", lambda _s, _p: [])
+        monkeypatch.setattr("harle.search.engine.search_memories", lambda *_a, **_kw: [])
+        monkeypatch.setattr("harle.search.engine.search_similar_runs", lambda *_a, **_kw: [])
+
+        @contextmanager
+        def session_cm():
+            yield MagicMock()
+
+        db = MagicMock()
+        db.session = session_cm
+
+        class Cfg:
+            engine = "whoosh"
+            whoosh_index_path = str(ix)
+            max_results = 10
+            max_memories = 10
+            max_prior_runs = 5
+            memory_min_confidence = 0.3
+            bm25_weight = 0.4
+            tag_match_weight = 0.2
+            recency_weight = 0.15
+            source_priority_weight = 0.15
+            prior_run_weight = 0.1
+
+        engine = SearchEngine(str(vault), db, Cfg())
+        engine.search(SearchQuery(query="hello", max_results=10))
+        assert rebuilds == [1]
+        assert attempt["n"] == 2
+
+    def test_no_rebuild_when_search_safe_returns_empty_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``whoosh_hits = raw_hits`` path: non-None empty list does not trigger rebuild."""
+        from harle.dataset.reader import DatasetReader
+        from harle.search import whoosh_index
+
+        vault = tmp_path / "vault"
+        (vault / "prompts").mkdir(parents=True)
+        (vault / "prompts" / "p0.md").write_text(
+            "---\ntitle: P\ntags: []\ncontext: work\n---\nbody\n",
+            encoding="utf-8",
+        )
+        ix = tmp_path / "ix"
+        reader = DatasetReader(str(vault))
+        whoosh_index.build_from_scratch(reader, ix)
+
+        rebuilds: list[int] = []
+
+        monkeypatch.setattr(
+            "harle.search.engine._rebuild_whoosh_index",
+            lambda *_a: rebuilds.append(1),
+        )
+        monkeypatch.setattr("harle.search.engine._whoosh_search_safe", lambda *a, **k: [])
+        monkeypatch.setattr("harle.search.engine.get_all_tags", lambda _s: set())
+        monkeypatch.setattr(
+            "harle.search.engine.expand",
+            lambda q, _tv, _cfg: ExpandedQuery(
+                whoosh_terms=["body"],
+                tag_filters=[],
+                role_terms=[],
+                context_filter=None,
+                raw_query=q.query or "",
+            ),
+        )
+        monkeypatch.setattr(
+            "harle.search.engine.get_candidates_for_search",
+            lambda *_a, **_kw: [],
+        )
+        monkeypatch.setattr("harle.search.engine.get_entries_by_paths", lambda _s, _p: [])
+        monkeypatch.setattr("harle.search.engine.search_memories", lambda *_a, **_kw: [])
+        monkeypatch.setattr("harle.search.engine.search_similar_runs", lambda *_a, **_kw: [])
+
+        @contextmanager
+        def session_cm():
+            yield MagicMock()
+
+        db = MagicMock()
+        db.session = session_cm
+
+        class Cfg:
+            engine = "whoosh"
+            whoosh_index_path = str(ix)
+            max_results = 10
+            max_memories = 10
+            max_prior_runs = 5
+            memory_min_confidence = 0.3
+            bm25_weight = 0.4
+            tag_match_weight = 0.2
+            recency_weight = 0.15
+            source_priority_weight = 0.15
+            prior_run_weight = 0.1
+
+        engine = SearchEngine(str(vault), db, Cfg())
+        engine.search(SearchQuery(query="hello", max_results=10))
+        assert rebuilds == []

@@ -33,7 +33,7 @@ summary: "Plan for extending Harle E2E tests to run with real OpenAI (and option
 ## CI Strategy
 
 - **Secrets:** Store `OPENAI_API_KEY`, `TAVILY_API_KEY`, `TRELLO_API_KEY`, `TRELLO_API_TOKEN` as repository or environment secrets. Only inject into workflows that are explicitly for pre-release or nightly live E2E.
-- **Cost controls:** Limit live E2E to a few scenarios (e.g. one /run that triggers a tool call, one /chat multi-turn). Use a cheap model (e.g. gpt-4o-mini) and low max_turns where possible.
+- **Cost controls:** Limit live E2E to a few scenarios (e.g. one /chat that triggers a tool call, one /chat multi-turn). Use a cheap model (e.g. gpt-4o-mini) and low max_turns where possible.
 - **Conditional jobs:** In GitHub Actions, run live E2E only when (a) workflow is `workflow_dispatch` or (b) event is `release` or (c) a specific label is present on the PR. Skip cleanly when secrets are missing.
 
 ---

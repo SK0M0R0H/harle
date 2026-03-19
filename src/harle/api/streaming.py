@@ -1,6 +1,6 @@
 """SSE streaming helpers for debug-mode endpoints.
 
-When ``?debug=true`` is passed to ``/run`` or ``/chat``, the response
+When ``?debug=true`` is passed to ``/chat``, the response
 is an SSE stream.  Debug spans arrive as ``event: debug`` and the
 final result is emitted as ``event: result``.
 """

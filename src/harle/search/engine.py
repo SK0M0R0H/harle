@@ -243,8 +243,16 @@ class SearchEngine:
                 # No Whoosh terms or no index: return empty file results but still memory/prior
                 whoosh_hits: list[WhooshSearchHit] = []
             else:
-                if not index_path.exists() or not whoosh_index.exists_in(str(index_path)):
-                    etrace.detail("Whoosh index missing, rebuilding", module="search")
+                need_rebuild = (
+                    not index_path.exists()
+                    or not whoosh_index.exists_in(str(index_path))
+                    or not whoosh_index.disk_index_schema_current(index_path)
+                )
+                if need_rebuild:
+                    etrace.detail(
+                        "Whoosh index missing or schema stale, rebuilding",
+                        module="search",
+                    )
                     _rebuild_whoosh_index(self.dataset_path, index_path, logger)
                     whoosh_hits = _whoosh_search_safe(
                         index_path, expanded.whoosh_terms, candidate_paths, logger,

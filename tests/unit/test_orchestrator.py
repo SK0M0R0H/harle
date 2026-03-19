@@ -12,14 +12,12 @@ from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
 
 from harle.api.models import RunRequest
 from harle.config import Settings
 from harle.context.assembler import ContextAssembler, ContextPackage
 from harle.db.connection import Database
-from harle.db.models import Conversation, Message
+from tests.conftest import make_in_memory_chat_db
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import (
     OrchestratorService,
@@ -30,46 +28,72 @@ from harle.orchestrator.service import (
 
 
 class TestOrchestratorService:
-    def test_run_returns_response(self) -> None:
-        svc = OrchestratorService(llm_provider=EchoProvider())
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
+
+    def test_chat_returns_response(self) -> None:
+        db = make_in_memory_chat_db()
+        svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="hello", context="personal")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
 
         assert resp.status == "completed"
         assert resp.run_id.startswith("run_")
         assert "hello" in resp.result
         assert resp.context == "personal"
 
-    def test_run_preserves_conversation_id(self) -> None:
-        svc = OrchestratorService(llm_provider=EchoProvider())
+    def test_chat_preserves_conversation_id_for_existing_conversation(self) -> None:
+        db = make_in_memory_chat_db()
+        from harle.db.conversations import create_conversation
+
+        with db.session() as session:
+            create_conversation(
+                session,
+                conversation_id="conv-42",
+                context_scope="work",
+                agent_role="researcher",
+            )
+        svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="test", context="work", conversation_id="conv-42")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
 
         assert resp.conversation_id == "conv-42"
 
-    def test_run_id_unique(self) -> None:
-        svc = OrchestratorService(llm_provider=EchoProvider())
+    def test_chat_run_id_unique(self) -> None:
+        db = make_in_memory_chat_db()
+        svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="test", context="personal")
-        ids = {svc.run(request=req).run_id for _ in range(10)}
+        ids = {svc.chat(request=req).run_id for _ in range(10)}
         assert len(ids) == 10
 
-    def test_run_with_work_context(self) -> None:
-        svc = OrchestratorService(llm_provider=EchoProvider())
+    def test_chat_with_work_context(self) -> None:
+        db = make_in_memory_chat_db()
+        svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="deploy", context="work")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
         assert resp.context == "work"
 
-    def test_run_without_context_assembler(self) -> None:
+    def test_chat_without_context_assembler(self) -> None:
         """Orchestrator still works when no context assembler is set."""
-        svc = OrchestratorService(llm_provider=EchoProvider(), context_assembler=None)
+        db = make_in_memory_chat_db()
+        svc = OrchestratorService(
+            llm_provider=EchoProvider(),
+            context_assembler=None,
+            db=db,
+        )
         req = RunRequest(message="hello", context="personal")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
 
         assert resp.status == "completed"
         assert "hello" in resp.result
 
-    def test_run_with_context_assembler_calls_assemble(self) -> None:
-        """When a context assembler is provided, run() calls assemble()."""
+    def test_chat_with_context_assembler_calls_assemble(self) -> None:
+        """When a context assembler is provided, chat() calls assemble()."""
+        db = make_in_memory_chat_db()
         mock_assembler = MagicMock(spec=ContextAssembler)
         mock_assembler.assemble.return_value = ContextPackage(
             system_prompt="You are a test agent.",
@@ -77,25 +101,29 @@ class TestOrchestratorService:
             p0_files=["prompts/test.md"],
             total_tokens=50,
             budget_remaining=100_000,
+            conversation_messages_included=0,
         )
 
         svc = OrchestratorService(
             llm_provider=EchoProvider(),
             context_assembler=mock_assembler,
+            db=db,
         )
         req = RunRequest(message="find tasks", context="work")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
 
         mock_assembler.assemble.assert_called_once_with(
             message="find tasks",
             context="work",
             agent_role="researcher",
+            conversation_history=None,
         )
         assert resp.status == "completed"
         assert "find tasks" in resp.result
 
-    def test_run_with_context_assembler_passes_system_prompt(self) -> None:
+    def test_chat_with_context_assembler_passes_system_prompt(self) -> None:
         """The assembled system prompt is forwarded to the LLM provider."""
+        db = make_in_memory_chat_db()
         mock_assembler = MagicMock(spec=ContextAssembler)
         mock_assembler.assemble.return_value = ContextPackage(
             system_prompt="Custom system prompt from assembler.",
@@ -103,6 +131,7 @@ class TestOrchestratorService:
             p0_files=[],
             total_tokens=10,
             budget_remaining=100_000,
+            conversation_messages_included=0,
         )
 
         mock_provider = MagicMock()
@@ -111,9 +140,10 @@ class TestOrchestratorService:
         svc = OrchestratorService(
             llm_provider=mock_provider,
             context_assembler=mock_assembler,
+            db=db,
         )
         req = RunRequest(message="test", context="personal")
-        svc.run(request=req)
+        svc.chat(request=req)
 
         mock_provider.generate.assert_called_once()
         call_kwargs = mock_provider.generate.call_args.kwargs
@@ -121,7 +151,7 @@ class TestOrchestratorService:
         assert call_kwargs["prompt"] == "test"
         assert call_kwargs["context"] == "personal"
 
-    def test_run_with_real_assembler_and_dataset(self, tmp_path: Path) -> None:
+    def test_chat_with_real_assembler_and_dataset(self, tmp_path: Path) -> None:
         """Integration: assembler loads P0 files from a real dataset."""
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir()
@@ -145,21 +175,24 @@ class TestOrchestratorService:
             dataset_reader=reader,
         )
 
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(
             llm_provider=EchoProvider(),
             context_assembler=assembler,
+            db=db,
         )
         req = RunRequest(message="help me", context="work")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
 
         assert resp.status == "completed"
         assert "help me" in resp.result
 
-    def test_run_response_includes_optional_fields(self) -> None:
+    def test_chat_response_includes_optional_fields(self) -> None:
         """RunResponse includes tools_called and turns_used (None for echo)."""
-        svc = OrchestratorService(llm_provider=EchoProvider())
+        db = make_in_memory_chat_db()
+        svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="hello", context="personal")
-        resp = svc.run(request=req)
+        resp = svc.chat(request=req)
 
         assert resp.tools_called is None
         assert resp.turns_used is None
@@ -210,43 +243,54 @@ class TestRunWithTimeout:
 
 
 class TestOrchestratorRunTimeout:
-    """OrchestratorService.run() applies run_timeout_seconds and raises RunTimeoutError."""
+    """OrchestratorService.chat() applies run_timeout_seconds and raises RunTimeoutError."""
 
-    def test_run_raises_run_timeout_error_when_provider_slow(self) -> None:
-        """run() with a slow provider and run_timeout_seconds raises RunTimeoutError."""
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
+
+    def test_chat_raises_run_timeout_error_when_provider_slow(self) -> None:
+        """chat() with a slow provider and run_timeout_seconds raises RunTimeoutError."""
         slow_provider = MagicMock()
         slow_provider.generate.side_effect = lambda **kwargs: (
             time.sleep(2),
             "too late",
         )[1]
 
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(
             llm_provider=slow_provider,
             run_timeout_seconds=1,
+            db=db,
         )
         req = RunRequest(message="hello", context="personal")
 
         with pytest.raises(RunTimeoutError, match="timed out"):
-            svc.run(request=req)
+            svc.chat(request=req)
 
-    def test_run_raises_run_timeout_error_from_worker_thread(self) -> None:
-        """run() invoked from a worker thread still enforces timeout via executor path."""
+    def test_chat_raises_run_timeout_error_from_worker_thread(self) -> None:
+        """chat() invoked from a worker thread still enforces timeout via executor path."""
         slow_provider = MagicMock()
         slow_provider.generate.side_effect = lambda **kwargs: (
             time.sleep(2),
             "too late",
         )[1]
 
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(
             llm_provider=slow_provider,
             run_timeout_seconds=1,
+            db=db,
         )
         req = RunRequest(message="hello", context="personal")
         exc_holder: list[Exception] = []
 
         def run_in_worker() -> None:
             try:
-                svc.run(request=req)
+                svc.chat(request=req)
             except RunTimeoutError as e:
                 exc_holder.append(e)
 
@@ -259,7 +303,14 @@ class TestOrchestratorRunTimeout:
 
 
 class TestOrchestratorAgentRunnerTrello:
-    def test_run_with_trello_tools_exposes_and_tracks_tool_calls(self) -> None:
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
+
+    def test_chat_with_trello_tools_exposes_and_tracks_tool_calls(self) -> None:
         from harle.tools.registry import ToolRegistry
         from harle.tools.trello.module import TrelloModule
 
@@ -303,15 +354,17 @@ class TestOrchestratorAgentRunnerTrello:
             MaxTurnsExceeded=RuntimeError,
         )
 
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(
             llm_provider=EchoProvider(),
             tool_registry=registry,
             use_agent_runner=True,
             max_iterations=4,
+            db=db,
         )
 
         with patch.dict(sys.modules, {"agents": fake_agents_module}):
-            resp = svc.run(request=RunRequest(
+            resp = svc.chat(request=RunRequest(
                 message="List Trello boards and summarize priorities",
                 context="work",
             ))
@@ -426,21 +479,6 @@ class TestBuildOrchestrator:
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _make_test_db() -> Database:
-    """Create an in-memory SQLite database with conversation tables only.
-
-    Run persistence is not tested here (runs table uses PostgreSQL ARRAY);
-    chat tests patch create_run to a no-op so conversation/message behavior
-    is exercised without needing the runs table.
-    """
-    db = Database.__new__(Database)
-    db.engine = create_engine("sqlite:///:memory:", echo=False)
-    db._session_factory = sessionmaker(bind=db.engine, expire_on_commit=False)
-    Conversation.__table__.create(db.engine, checkfirst=True)
-    Message.__table__.create(db.engine, checkfirst=True)
-    return db
-
-
 class TestOrchestratorChat:
     """Tests for the chat() method with conversation management."""
 
@@ -459,7 +497,7 @@ class TestOrchestratorChat:
             svc.chat(request=req)
 
     def test_chat_creates_new_conversation(self) -> None:
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="hello", context="work")
         resp = svc.chat(request=req)
@@ -470,7 +508,7 @@ class TestOrchestratorChat:
         assert resp.context == "work"
 
     def test_chat_stores_messages(self) -> None:
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="test message", context="personal")
         resp = svc.chat(request=req)
@@ -487,7 +525,7 @@ class TestOrchestratorChat:
         assert "test message" in msgs[1].content
 
     def test_chat_continues_existing_conversation(self) -> None:
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
 
         resp1 = svc.chat(request=RunRequest(message="first", context="work"))
@@ -514,7 +552,7 @@ class TestOrchestratorChat:
         assert msgs[2].content == "second"
 
     def test_chat_nonexistent_conversation_raises(self) -> None:
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(
             message="hello",
@@ -526,7 +564,7 @@ class TestOrchestratorChat:
 
     def test_chat_with_context_assembler(self) -> None:
         """chat() passes conversation history to the context assembler."""
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         mock_assembler = MagicMock(spec=ContextAssembler)
         mock_assembler.assemble.return_value = ContextPackage(
             system_prompt="System prompt.",
@@ -562,7 +600,7 @@ class TestOrchestratorChat:
         assert len(second_call_kwargs["conversation_history"]) == 2
 
     def test_chat_run_id_unique(self) -> None:
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         ids = {
             svc.chat(request=RunRequest(message="hi", context="work")).run_id
@@ -572,7 +610,7 @@ class TestOrchestratorChat:
 
     def test_chat_response_includes_optional_fields(self) -> None:
         """Chat response includes tools_called and turns_used."""
-        db = _make_test_db()
+        db = make_in_memory_chat_db()
         svc = OrchestratorService(llm_provider=EchoProvider(), db=db)
         req = RunRequest(message="hello", context="personal")
         resp = svc.chat(request=req)

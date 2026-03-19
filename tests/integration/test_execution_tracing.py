@@ -1,6 +1,6 @@
 """Integration tests for execution tracing (vault and DB exporters).
 
-Verifies that a full /run request produces a trace file in the vault
+Verifies that a full /chat request produces a trace file in the vault
 and a row in the execution_traces table when tracing is configured.
 """
 
@@ -19,7 +19,8 @@ from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
 
 from harle.api.routes import build_router
 from harle.debug.setup import configure_tracing
-from harle.db.models import ExecutionTrace
+from harle.db.connection import Database
+from harle.db.models import Conversation, ExecutionTrace, Message
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
 
@@ -32,13 +33,14 @@ def _tracer_provider_already_set() -> bool:
 
 @pytest.mark.integration
 class TestExecutionTracingIntegration:
-    """End-to-end: /run with tracing enabled writes to vault and DB."""
+    """End-to-end: /chat with tracing enabled writes to vault and DB."""
 
-    def test_run_produces_vault_trace_and_db_row(
+    def test_chat_produces_vault_trace_and_db_row(
         self,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """POST /run with tracing configured writes _trace.md to vault and a row to execution_traces."""
+        """POST /chat with tracing configured writes _trace.md to vault and a row to execution_traces."""
         if _tracer_provider_already_set():
             pytest.skip(
                 "Global TracerProvider already set (run with pytest tests/integration for isolation)"
@@ -48,7 +50,15 @@ class TestExecutionTracingIntegration:
         db_url = f"sqlite:///{db_path}"
         engine = create_engine(db_url, connect_args={"check_same_thread": False})
         ExecutionTrace.__table__.create(engine, checkfirst=True)
+        Conversation.__table__.create(engine, checkfirst=True)
+        Message.__table__.create(engine, checkfirst=True)
         session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *args, **kwargs: None)
+
+        db = Database.__new__(Database)
+        db.engine = engine
+        db._session_factory = session_factory
 
         configure_tracing(
             vault_path=str(tmp_path),
@@ -60,11 +70,14 @@ class TestExecutionTracingIntegration:
 
         app = FastAPI()
         app.include_router(
-            build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider()))
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=db),
+                db=db,
+            )
         )
         client = TestClient(app)
 
-        response = client.post("/run", json={"message": "Trace me", "context": "work"})
+        response = client.post("/chat", json={"message": "Trace me", "context": "work"})
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "completed"
@@ -79,7 +92,7 @@ class TestExecutionTracingIntegration:
         assert len(trace_files) >= 1, f"Expected at least one _trace.md under {tmp_path}"
         trace_file = next(f for f in trace_files if run_id in f.name)
         content = trace_file.read_text(encoding="utf-8")
-        assert "handle_request" in content
+        assert "handle_chat" in content
         assert run_id in content
 
         with session_factory() as session:
@@ -90,4 +103,4 @@ class TestExecutionTracingIntegration:
         assert row.run_id == run_id
         assert row.total_spans >= 1
         assert "name" in row.trace_json
-        assert row.trace_json["name"] == "handle_request"
+        assert row.trace_json["name"] == "handle_chat"

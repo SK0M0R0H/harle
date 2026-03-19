@@ -117,10 +117,10 @@ class TestLogRunToVault:
         path = tmp_path / "logs" / "2026" / "02" / "run_abc123_result.md"
         assert path.exists()
         content = path.read_text(encoding="utf-8")
-        assert "run_id: run_abc123" in content
-        assert "agent: secretary" in content
-        assert "status: completed" in content
-        assert "context_scope: work" in content
+        assert 'run_id: "run_abc123"' in content
+        assert 'agent: "secretary"' in content
+        assert 'status: "completed"' in content
+        assert 'context_scope: "work"' in content
         assert "# Result" in content
         assert "The agent did something." in content
 

@@ -12,9 +12,12 @@ import pytest
 
 from harle.api.routes import build_router
 from harle.config import Settings
+from harle.db.conversations import create_conversation
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
 from harle.search.types import SearchResult
+
+from tests.conftest import make_in_memory_chat_db
 
 
 def _make_client(
@@ -151,52 +154,6 @@ class TestHealthAllEndpoint:
         assert len(data["tools"]) == 1
         assert data["tools"][0]["name"] == "tools"
         assert data["all_healthy"] is True
-
-
-class TestRunEndpoint:
-    def test_valid_request(self, client: TestClient) -> None:
-        resp = client.post("/run", json={"message": "hello"})
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["status"] == "completed"
-        assert payload["run_id"].startswith("run_")
-        assert "hello" in payload["result"]
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            {"message": ""},
-            {},
-            {"message": "hi", "context": "invalid"},
-        ],
-    )
-    def test_invalid_request_rejected(self, client: TestClient, body: dict[str, str]) -> None:
-        resp = client.post("/run", json=body)
-        assert resp.status_code == 422
-
-    def test_conversation_id_roundtrip(self, client: TestClient) -> None:
-        resp = client.post("/run", json={"message": "hi", "conversation_id": "conv-abc"})
-        assert resp.status_code == 200
-        assert resp.json()["conversation_id"] == "conv-abc"
-
-    def test_504_when_run_timeout(self) -> None:
-        from harle.orchestrator.service import OrchestratorService, RunTimeoutError
-
-        class TimeoutOrchestrator(OrchestratorService):
-            def run(self, request):  # type: ignore[no-untyped-def]
-                raise RunTimeoutError("Run timed out before completion")
-
-        svc = TimeoutOrchestrator(llm_provider=EchoProvider())
-        client = _make_client(orchestrator=svc)
-        resp = client.post("/run", json={"message": "slow"})
-        assert resp.status_code == 504
-        assert "timeout" in resp.json()["detail"].lower()
-
-    def test_debug_true_returns_sse_stream(self, client: TestClient) -> None:
-        resp = client.post("/run", json={"message": "hi"}, params={"debug": "true"})
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers.get("content-type", "")
-        assert "event:" in resp.text or "result" in resp.text
 
 
 class TestInitEndpoint:
@@ -565,6 +522,54 @@ class TestChatEndpoint:
         resp = client.post("/chat", json={"message": "hi"})
         assert resp.status_code == 503
         assert "DATABASE_URL" in resp.json()["detail"]
+
+    def test_valid_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *a, **k: None)
+        db = make_in_memory_chat_db()
+        client = _make_client(
+            db=db,
+            orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=db),
+        )
+        resp = client.post("/chat", json={"message": "hello"})
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["status"] == "completed"
+        assert payload["run_id"].startswith("run_")
+        assert "hello" in payload["result"]
+        assert payload.get("conversation_id")
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"message": ""},
+            {},
+            {"message": "hi", "context": "invalid"},
+        ],
+    )
+    def test_invalid_request_rejected(self, client: TestClient, body: dict) -> None:
+        resp = client.post("/chat", json=body)
+        assert resp.status_code == 422
+
+    def test_conversation_id_roundtrip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *a, **k: None)
+        db = make_in_memory_chat_db()
+        with db.session() as session:
+            create_conversation(
+                session,
+                conversation_id="conv-abc",
+                context_scope="work",
+                agent_role="researcher",
+            )
+        client = _make_client(
+            db=db,
+            orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=db),
+        )
+        resp = client.post(
+            "/chat",
+            json={"message": "hi", "conversation_id": "conv-abc"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["conversation_id"] == "conv-abc"
 
     def test_504_when_chat_timeout(self) -> None:
         from harle.orchestrator.service import OrchestratorService, RunTimeoutError

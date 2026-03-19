@@ -17,7 +17,7 @@ func newExecCommand(serverURL *string, contextValue *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			httpClient := client.NewHTTPClient(*serverURL)
 			message := strings.Join(args, " ")
-			response, err := httpClient.Run(
+			response, err := httpClient.Chat(
 				context.Background(),
 				client.RunRequest{
 					Message: message,

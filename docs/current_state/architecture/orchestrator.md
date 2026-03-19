@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Current State"
 tags: [orchestrator, current-state, architecture, fastapi, context-assembly, implementation-status]
 context: global
-last_updated: 2026-03-12
+last_updated: 2026-03-19
 summary: "Tracks what the Orchestrator implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Orchestrator — Architecture & Functionality](../../trd/a
 
 ## Overall Status
 
-The Orchestrator is **partially implemented**. The request lifecycle works end-to-end: HTTP API accepts `/run` and `/chat`, the Context Assembler builds a token-budgeted system prompt (P0 + P1 + P4), the Agent Runner executes via the OpenAI Agents SDK (or legacy provider) with optional tools, and the Run Logger writes to the vault and PostgreSQL. **Missing** are: a dedicated Router (all requests use a fixed "researcher" role), the Clarifier (no ambiguity check or clarification questions), richer run logging (no clarification/routing/execution detail in the TRD shape), SSE streaming, approval flow in the request path, and several TRD guardrails and error-handling behaviours. Config covers a subset of the TRD (no timeout, token budget cap, or approval settings).
+The Orchestrator is **partially implemented**. The request lifecycle works end-to-end: HTTP API accepts **`POST /chat` only** for user-initiated work (database required); one-shot tasks use a new conversation with a single exchange. The Context Assembler builds a token-budgeted system prompt (P0 + P1 + P4), the Agent Runner executes via the OpenAI Agents SDK (or legacy provider) with optional tools, and the Run Logger writes to the vault and PostgreSQL. **`GET /run/{run_id}`** returns run metadata for a run produced by a chat turn (not a separate “run mode”). **Missing** are: a dedicated Router (all requests use a fixed "researcher" role), the Clarifier (no ambiguity check or clarification questions), richer run logging (no clarification/routing/execution detail in the TRD shape), SSE streaming, approval flow in the request path, and several TRD guardrails and error-handling behaviours. Config covers a subset of the TRD (no timeout, token budget cap, or approval settings).
 
 ---
 
@@ -24,15 +24,15 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 
 | TRD area | Current status | Notes |
 |----------|----------------|-------|
-| 1. HTTP API (FastAPI) | Implemented | `api/routes.py`: POST /run, POST /chat, GET /run/{id}, GET /health. Request/response models in `api/models.py`. Additional endpoints: /init, /reindex, /search. |
+| 1. HTTP API (FastAPI) | Implemented | `api/routes.py`: **POST /chat** (user tasks; requires DB), GET /run/{id}, GET /health. Request/response models in `api/models.py`. Additional endpoints: /init, /reindex, /search. |
 | 2. Router | Not implemented | No `router/` package. Agent role is fixed as `DEFAULT_AGENT_ROLE = "researcher"`. No explicit override, context-based rules, workflow template match, or LLM fallback. |
 | 3. Clarifier | Not implemented | No `clarifier/` package. No ambiguity check, no clarification questions, no round-trip before execution. |
 | 4. Context Assembler | Implemented | `context/assembler.py`: P0 (prompts + policies), P1 (dataset search), P4 (conversation history). 80/20 budget, tiktoken. No P2 (external data), P3 (prior runs, memories). |
 | 5. Agent Runner | Partially implemented | Execution in `orchestrator/service.py`: Agents SDK Runner when OpenAI key set, else echo provider. Single role, tools from registry, max_turns. No separate `agents/` package, no handoffs, no timeout/token-budget guardrails, no output validation. |
 | 6. Tool Module Layer | Implemented | See current-state tools.md. Registry, skills, constraints; vault and web search modules. Approval attributes exist on tools; orchestrator does not pause for approval in the request path. |
 | 7. Run Logger | Partially implemented | `logging/run_logger.py`: vault logs (result + optional context). `db/runs.create_run`: run_id, request, context, agent, status, files_used, tools_called, result_summary, paths, duration. No TRD-style clarification/routing/context_assembled/execution/approval_actions structure. |
-| Request lifecycle | Partially implemented | run + chat flow: assemble → execute → log → return. No router or clarifier steps. |
-| Conversation mode | Implemented | `db/conversations`: create_conversation, add_message, get_recent_messages. Chat path passes conversation_history to assembler. |
+| Request lifecycle | Partially implemented | Single **chat** path: create/load conversation → assemble → execute → persist messages → log → return. No router or clarifier steps. |
+| Conversation mode | Implemented | All user messages go through chat; one-shot = new conversation + single exchange. `db/conversations`: create_conversation, add_message, get_recent_messages. `conversation_history` passed to assembler (P4). |
 | SSE streaming | Not implemented | No Server-Sent Events for streaming responses. |
 | Configuration | Partially implemented | `config.py` Settings: host, port, LLM provider/model, dataset path, DB URL, max_iterations, run_log_store_context. No timeout_seconds, max_tokens_per_run, approval.*, search.max_context_pages, etc. |
 | Error handling | Partially implemented | Some HTTP 503/404; no LLM retry/backoff, token-budget pause, or TRD error table. |
@@ -44,7 +44,7 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 
 ### 1. HTTP API and request/response shape
 
-- **Endpoints:** POST `/run`, POST `/chat`, GET `/run/{run_id}`, GET `/health`, plus POST `/init`, POST `/reindex`, GET `/search`.
+- **Endpoints:** POST `/chat` (only path for user-initiated work; returns 503 if DB not configured), GET `/run/{run_id}`, GET `/health`, plus POST `/init`, POST `/reindex`, GET `/search`.
 - **RunRequest:** `message`, `context` (work/personal), `conversation_id`.
 - **RunResponse:** `run_id`, `status`, `result`, `context`, `conversation_id`, `tools_called`, `turns_used`.
 - **RunDetail:** run metadata for GET /run/{id} (run_id, timestamp, user_request, context_scope, agent, status, routing_method, files_used, tools_called, result_summary, result_path, context_path, conversation_id, duration_ms).
@@ -55,7 +55,7 @@ FastAPI is used; validation and docs align with the TRD’s “first version” 
 
 - **P0 (mandatory):** Loads prompts and policies from the vault; filters by context (work/personal/global); when `agent_role` is set, keeps only the matching prompt file (e.g. prompts/secretary.md for role secretary) plus all policies.
 - **P1 (critical):** Calls the search engine with the user message and context; formats search results into the system prompt until the token budget is reached; excludes paths already in P0.
-- **P4 (background):** In the chat path, recent conversation history is loaded from the DB and appended, trimmed to fit the remaining budget.
+- **P4 (background):** For every chat turn, recent conversation history is loaded from the DB (when continuing) and appended, trimmed to fit the remaining budget.
 - **Budget:** Configurable context window (default 128k) and input ratio (default 80%); token counting via tiktoken.
 
 This matches the TRD’s priority-based packing and 80/20 rule. P2 (external data) and P3 (prior runs, memories) are not yet wired.
@@ -75,9 +75,10 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ### 5. Conversation mode
 
+- **OrchestratorService.chat()** is the only entry for processing a user message (no separate `run()`).
 - New conversation: `create_conversation` with conversation_id, context_scope, agent_role.
 - Continuing: `get_conversation`, `get_recent_messages`; messages are appended after each exchange via `add_message` (user and assistant); `touch_conversation` updates timestamps.
-- The chat path passes `conversation_history` into the Context Assembler for P4 inclusion.
+- `conversation_history` is passed into the Context Assembler for P4 inclusion.
 
 ### 6. Tool integration
 
@@ -86,7 +87,7 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ### 7. Debug tracing (Phase 1)
 
-- `run()` and `chat()` are wrapped in `etrace.span` root spans (`handle_request` / `handle_chat`) with `run_id` attributes. STEP-level entries are emitted for context assembly and agent execution completion. See [execution tracing current-state](../execution_tracing.md) for the full execution tracing module status.
+- `chat()` is wrapped in `etrace.span` root span **`handle_chat`** with `run_id` attributes. STEP-level entries are emitted for context assembly and agent execution completion. See [execution tracing current-state](../execution_tracing.md) for the full execution tracing module status.
 
 ---
 

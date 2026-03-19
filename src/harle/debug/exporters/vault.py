@@ -2,7 +2,8 @@
 
 Receives completed spans from the OTel ``BatchSpanProcessor``,
 reconstructs the parent-child tree, and writes a human-readable
-``<run_id>_trace.md`` file alongside the Run Logger's output.
+``<sanitized_run_id>_trace.md`` file alongside the Run Logger's output
+    (the YAML ``run_id`` field keeps the full value).
 
 The file is written once when all spans for a trace are flushed
 (at the end of a request or when the batch processor flushes).
@@ -11,14 +12,15 @@ The file is written once when all spans for a trace are flushed
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
-import yaml
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+from harle.dataset.frontmatter import dump_frontmatter_fields
 from harle.dataset.writer import log_dir_for, write_log_file
 from harle.debug.exporters._spans import (
     build_tree,
@@ -32,6 +34,15 @@ from harle.debug.exporters._spans import (
 from harle.debug.levels import TraceLevel
 
 logger = logging.getLogger(__name__)
+
+_TRACE_FILENAME_MAX = 120
+
+
+def _safe_trace_filename_stem(run_id: str) -> str:
+    """Make *run_id* safe for log filenames (no ``/``, colons, or wide unicode)."""
+    stem = re.sub(r"[^\w.\-]+", "_", run_id, flags=re.UNICODE)
+    stem = stem.strip("._") or "trace"
+    return stem[:_TRACE_FILENAME_MAX]
 
 
 class VaultExporter(SpanExporter):
@@ -79,7 +90,7 @@ class VaultExporter(SpanExporter):
         if root is None:
             return
 
-        run_id = extract_run_id(root)
+        run_id = extract_run_id(filtered)
         timestamp = span_start_time(root)
 
         tree = build_tree(filtered)
@@ -95,7 +106,8 @@ class VaultExporter(SpanExporter):
         )
 
         log_dir = log_dir_for(timestamp)
-        rel_path = f"{log_dir}/{run_id}_trace.md"
+        safe_stem = _safe_trace_filename_stem(run_id)
+        rel_path = f"{log_dir}/{safe_stem}_trace.md"
         write_log_file(self._vault_path, rel_path, content)
 
 
@@ -116,12 +128,7 @@ def _render_markdown(
         "total_spans": total_spans,
         "duration_ms": duration_ms,
     }
-    fm_yaml = yaml.dump(
-        fm,
-        default_flow_style=False,
-        allow_unicode=True,
-        sort_keys=False,
-    ).strip()
+    fm_yaml = dump_frontmatter_fields(fm)
     lines = [
         "---",
         fm_yaml,

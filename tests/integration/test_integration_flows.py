@@ -73,15 +73,25 @@ def _write_vault_file(path: Path, content: str) -> None:
 
 @pytest.mark.integration
 class TestApiPipelines:
-    """HTTP API flows: /run, /chat, /health, /search, /run/{run_id}."""
+    """HTTP API flows: /chat, /health, /search, /run/{run_id}."""
 
-    def test_run_endpoint_pipeline_returns_completed(self) -> None:
-        """POST /run with valid payload returns 200, completed status, and echo in result."""
+    def test_chat_endpoint_pipeline_returns_completed(
+        self, chat_db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """POST /chat with valid payload returns 200, completed status, and echo in result."""
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *args, **kwargs: None)
         app = FastAPI()
-        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=chat_db),
+                db=chat_db,
+            )
+        )
         client = TestClient(app)
 
-        response = client.post("/run", json={"message": "Find stalled tasks", "context": "work"})
+        response = client.post(
+            "/chat", json={"message": "Find stalled tasks", "context": "work"}
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -89,18 +99,19 @@ class TestApiPipelines:
         assert data["run_id"].startswith("run_")
         assert data["context"] == "work"
         assert "Find stalled tasks" in data["result"]
+        assert data.get("conversation_id")
 
-    def test_run_validates_request(self) -> None:
-        """POST /run returns 422 for empty message or invalid context."""
+    def test_chat_validates_request(self) -> None:
+        """POST /chat returns 422 for empty message or invalid context."""
         app = FastAPI()
         app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
         client = TestClient(app)
 
-        empty_message = client.post("/run", json={"message": "", "context": "work"})
+        empty_message = client.post("/chat", json={"message": "", "context": "work"})
         assert empty_message.status_code == 422
 
         invalid_context = client.post(
-            "/run", json={"message": "Hello", "context": "invalid_scope"}
+            "/chat", json={"message": "Hello", "context": "invalid_scope"}
         )
         assert invalid_context.status_code == 422
 
@@ -197,12 +208,12 @@ class TestApiPipelines:
         assert response.status_code == 503
         assert "Database" in response.json()["detail"]
 
-    def test_context_assembly_is_wired_into_orchestrator_run(
+    def test_context_assembly_is_wired_into_orchestrator_chat(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Orchestrator run uses context assembler: role, policies, and dataset files in system prompt."""
+        """Orchestrator chat uses context assembler: role, policies, and dataset files in system prompt."""
         _write_vault_file(
             tmp_path / "prompts/researcher.md",
             """
@@ -235,15 +246,23 @@ class TestApiPipelines:
         )
 
         monkeypatch.setattr("harle.context.assembler.count_tokens", lambda text: max(1, len(text.split())))
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *args, **kwargs: None)
+
+        from tests.conftest import make_in_memory_chat_db
 
         provider = _CapturingProvider()
         assembler = ContextAssembler(
             search_engine=_StaticSearchEngine(),
             dataset_reader=DatasetReader(str(tmp_path)),
         )
-        orchestrator = OrchestratorService(llm_provider=provider, context_assembler=assembler)
+        db = make_in_memory_chat_db()
+        orchestrator = OrchestratorService(
+            llm_provider=provider,
+            context_assembler=assembler,
+            db=db,
+        )
 
-        response = orchestrator.run(request=RunRequest(message="What is the roadmap?", context="work"))
+        response = orchestrator.chat(request=RunRequest(message="What is the roadmap?", context="work"))
 
         assert response.status == "completed"
         assert response.result == "ok::work::What is the roadmap?"

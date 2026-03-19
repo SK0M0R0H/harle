@@ -26,6 +26,7 @@ Typical usage::
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 from dataclasses import dataclass
@@ -276,9 +277,16 @@ def load_module_skills(
 def get_builtin_skills_dir(module_name: str) -> Path:
     """Return the conventional built-in skills directory for a module.
 
-    The convention is ``src/harle/tools/<module_name>/skills/``.
-    This function computes the path relative to the ``harle.tools``
-    package location.
+    The convention is ``<harle.tools.<module_name>>/skills/`` on disk.
+
+    Resolution prefers the filesystem location of the importable package
+    ``harle.tools.<module_name>`` (via :func:`importlib.util.find_spec`).
+    That matches editable installs where this file may live under
+    ``site-packages`` while tool packages (and their ``skills/*.md`` files)
+    still resolve from the source tree.
+
+    If that package is not importable, falls back to
+    ``Path(__file__).parent / <module_name> / "skills"``.
 
     Args:
         module_name: The module's unique identifier.
@@ -287,5 +295,9 @@ def get_builtin_skills_dir(module_name: str) -> Path:
         Path to the module's built-in ``skills/`` directory (may not
         exist on disk).
     """
+    spec = importlib.util.find_spec(f"harle.tools.{module_name}")
+    if spec is not None and spec.submodule_search_locations:
+        root = Path(next(iter(spec.submodule_search_locations)))
+        return root / "skills"
     tools_package_dir = Path(__file__).parent
     return tools_package_dir / module_name / "skills"

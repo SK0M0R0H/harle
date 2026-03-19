@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 from opentelemetry.sdk.trace.export import SpanExportResult
 
 from harle.debug import etrace
 from harle.debug.levels import TraceLevel
 from harle.debug.setup import configure_tracing
 from harle.debug.exporters._spans import (
+    _span_name_usable_as_run_id_fallback,
     build_tree,
     extract_run_id,
     filter_by_level,
@@ -21,6 +27,7 @@ from harle.debug.exporters._spans import (
     span_start_time,
 )
 from harle.debug.exporters.vault import VaultExporter, _render_attrs
+from harle.db.models import ExecutionTrace
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +133,7 @@ class TestDtraceWithProvider:
         debug_files = list(tmp_path.rglob("*_trace.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
-        assert "run_id: run_unittest1" in content
+        assert 'run_id: "run_unittest1"' in content
         assert "handle_request" in content
         assert "Context assembled" in content
         assert "Search query" in content
@@ -234,7 +241,7 @@ class TestVaultExporterIntegration:
         debug_files = list(tmp_path.rglob("*_trace.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
-        assert "run_id: run_vault_test" in content
+        assert 'run_id: "run_vault_test"' in content
         assert "handle_request" in content
         assert "child_span" in content
         assert "tokens: 100" in content or "100" in content
@@ -354,7 +361,7 @@ class TestVaultHelpers:
         provider.force_flush()
         root = find_root(exporter.spans)
         assert root is not None
-        assert extract_run_id(root) == "run_abc123"
+        assert extract_run_id(exporter.spans) == "run_abc123"
 
     def test_extract_run_id_falls_back_to_name(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
@@ -363,7 +370,48 @@ class TestVaultHelpers:
         provider.force_flush()
         root = find_root(exporter.spans)
         assert root is not None
-        assert extract_run_id(root) == "run_xyz789"
+        assert extract_run_id(exporter.spans) == "run_xyz789"
+
+    def test_extract_run_id_prefers_attribute_on_any_span_when_root_is_tool(
+        self,
+    ) -> None:
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("Tool: trello_list_boards") as tool:
+            with tracer.start_as_current_span("child") as child:
+                child.set_attribute("run_id", "run_from_child")
+        provider.force_flush()
+        assert extract_run_id(exporter.spans) == "run_from_child"
+
+    def test_extract_run_id_unknown_when_only_labeled_root_name(self) -> None:
+        """Span names with ':' are labels, not run ids — do not use as fallback."""
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("Module: some_step"):
+            pass
+        provider.force_flush()
+        assert extract_run_id(exporter.spans) == "unknown_trace"
+
+    def test_extract_run_id_empty_spans(self) -> None:
+        assert extract_run_id([]) == "unknown_trace"
+
+    def test_filter_by_level_defaults_when_attributes_none(self) -> None:
+        span = MagicMock()
+        span.attributes = None
+        assert filter_by_level([span], TraceLevel.DETAIL) == [span]
+
+    def test_filter_by_level_invalid_level_name_falls_back_to_step(self) -> None:
+        span = MagicMock()
+        span.attributes = {"harle.level": "NOT_A_REAL_LEVEL"}
+        assert filter_by_level([span], TraceLevel.DETAIL) == [span]
+
+    def test_find_root_uses_earliest_when_all_have_parent(self) -> None:
+        parent_ctx = MagicMock()
+        c1 = MagicMock()
+        c1.parent = parent_ctx
+        c1.start_time = 200
+        c2 = MagicMock()
+        c2.parent = parent_ctx
+        c2.start_time = 100
+        assert find_root([c1, c2]) is c2
 
     def test_span_start_time_from_timestamp(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
@@ -371,6 +419,12 @@ class TestVaultHelpers:
             pass
         provider.force_flush()
         span = exporter.spans[0]
+        ts = span_start_time(span)
+        assert ts.tzinfo is not None
+
+    def test_span_start_time_falsy_timestamp_uses_now(self) -> None:
+        span = MagicMock()
+        span.start_time = 0
         ts = span_start_time(span)
         assert ts.tzinfo is not None
 
@@ -383,6 +437,17 @@ class TestVaultHelpers:
         duration = span_duration_ms(span)
         assert isinstance(duration, int)
         assert duration >= 0
+
+    def test_span_duration_ms_without_end_time(self) -> None:
+        span = MagicMock()
+        span.start_time = 100
+        span.end_time = None
+        assert span_duration_ms(span) == 0
+
+    def test_span_name_usable_rejects_blank_and_colon(self) -> None:
+        assert _span_name_usable_as_run_id_fallback("") is False
+        assert _span_name_usable_as_run_id_fallback("   ") is False
+        assert _span_name_usable_as_run_id_fallback("a: b") is False
 
     def test_build_tree_parent_child(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
@@ -477,6 +542,126 @@ class TestPostgresExporterSerialisation:
         exporter = PostgresExporter("sqlite:///:memory:", min_level=TraceLevel.TRACE)
         exporter.shutdown()
         assert exporter._engine is None
+
+    def test_get_engine_lazy_singleton(self) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        exporter = PostgresExporter("sqlite:///:memory:", min_level=TraceLevel.TRACE)
+        assert exporter._engine is None
+        e1 = exporter._get_engine()
+        e2 = exporter._get_engine()
+        assert e1 is e2
+        exporter.shutdown()
+
+    def test_export_writes_trace_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        ExecutionTrace.__table__.create(engine)
+        exporter = PostgresExporter("unused", min_level=TraceLevel.TRACE)
+        monkeypatch.setattr(exporter, "_get_engine", lambda: engine)
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("root") as root:
+            root.set_attribute("harle.level", "STEP")
+            root.set_attribute("run_id", "run_db_test")
+        provider.force_flush()
+
+        assert exporter.export(collecting.spans) == SpanExportResult.SUCCESS
+        with Session(engine) as session:
+            rows = list(session.scalars(select(ExecutionTrace)).all())
+        assert len(rows) == 1
+        assert rows[0].run_id == "run_db_test"
+        exporter.shutdown()
+
+    def test_export_logs_and_continues_when_write_trace_fails(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        def boom(_spans: object) -> None:
+            raise RuntimeError("write failed")
+
+        exporter = PostgresExporter("sqlite:///:memory:", min_level=TraceLevel.TRACE)
+        monkeypatch.setattr(exporter, "_write_trace", boom)
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("a"):
+            pass
+        provider.force_flush()
+        caplog.set_level(logging.ERROR)
+        assert exporter.export(collecting.spans) == SpanExportResult.SUCCESS
+        assert any("Failed to write execution trace" in r.message for r in caplog.records)
+
+    def test_export_skips_write_when_min_level_filters_all_spans(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        ExecutionTrace.__table__.create(engine)
+        exporter = PostgresExporter("unused", min_level=TraceLevel.STEP)
+        monkeypatch.setattr(exporter, "_get_engine", lambda: engine)
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("internal_only") as s:
+            s.set_attribute("harle.level", "INTERNAL")
+        provider.force_flush()
+
+        assert exporter.export(collecting.spans) == SpanExportResult.SUCCESS
+        with Session(engine) as session:
+            assert list(session.scalars(select(ExecutionTrace)).all()) == []
+        exporter.shutdown()
+
+    def test_export_skips_insert_when_find_root_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from harle.debug.exporters.db import PostgresExporter
+
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        ExecutionTrace.__table__.create(engine)
+        exporter = PostgresExporter("unused", min_level=TraceLevel.TRACE)
+        monkeypatch.setattr(exporter, "_get_engine", lambda: engine)
+        monkeypatch.setattr("harle.debug.exporters.db.find_root", lambda _s: None)
+
+        tracer, collecting, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("root"):
+            pass
+        provider.force_flush()
+
+        assert exporter.export(collecting.spans) == SpanExportResult.SUCCESS
+        with Session(engine) as session:
+            assert list(session.scalars(select(ExecutionTrace)).all()) == []
+        exporter.shutdown()
+
+    def test_get_level_defaults_without_attributes(self) -> None:
+        from harle.debug.exporters.db import _get_level
+
+        span = MagicMock()
+        span.attributes = None
+        assert _get_level(span) == "STEP"
+
+    def test_json_safe_nested_and_fallback(self) -> None:
+        from harle.debug.exporters.db import _json_safe
+
+        assert _json_safe({"a": [1, {"b": 2}]}) == {"a": [1, {"b": 2}]}
+
+        class Weird:
+            def __str__(self) -> str:
+                return "weird"
+
+        assert _json_safe(Weird()) == "weird"
 
 
 # ---------------------------------------------------------------------------
