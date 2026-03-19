@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from textwrap import dedent
+
+import pytest
 
 from harle.dataset.frontmatter import dump_frontmatter_fields, parse_frontmatter
 
@@ -56,6 +59,14 @@ class TestParseFrontmatter:
         assert meta == {}
         assert body == content
 
+    def test_invalid_yaml_logs_source_path(self, caplog: pytest.LogCaptureFixture) -> None:
+        content = "---\n: invalid: yaml: here\n---\nBody.\n"
+        caplog.set_level(logging.WARNING)
+        meta, body = parse_frontmatter(content, source_path="notes/broken.md")
+        assert meta == {}
+        assert body == content
+        assert any("notes/broken.md" in r.message for r in caplog.records)
+
     def test_non_dict_frontmatter(self) -> None:
         content = "---\n- item1\n- item2\n---\nBody.\n"
         meta, body = parse_frontmatter(content)
@@ -91,6 +102,16 @@ class TestParseFrontmatter:
 
 
 class TestDumpFrontmatterFields:
+    def test_float_and_list_values_use_json(self) -> None:
+        raw = dump_frontmatter_fields({"score": 0.5, "items": [1, 2]})
+        assert "0.5" in raw
+        assert "[1, 2]" in raw or "1, 2" in raw
+
+    def test_bool_and_none_scalars(self) -> None:
+        assert "true" in dump_frontmatter_fields({"flag": True})
+        assert "false" in dump_frontmatter_fields({"flag": False})
+        assert "null" in dump_frontmatter_fields({"empty": None})
+
     def test_colon_in_string_value_round_trips_via_parse(self) -> None:
         raw = dump_frontmatter_fields(
             {"run_id": "Tool: notion_search", "total_spans": 3}

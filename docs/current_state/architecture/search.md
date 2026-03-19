@@ -35,7 +35,7 @@ The Search Algorithm supports **Phase 1 (keyword) and Phase 2 (Whoosh)**. The de
 | Step 4: Metadata enrichment | Implemented | `get_entries_by_paths`; SearchResult has token_count, summary, last_modified; ranker and engine populate them. |
 | Step 5: Memory and history lookup | Implemented | `memories.search_memories`, `runs.search_similar_runs`; MemoryResult, PriorRunResult in SearchResponse. → Best practices §7. |
 | Step 6: Ranking and fusion | Implemented | `ranker.py`: normalized BM25 + tag_match + recency + source_priority + prior_run_bonus; per-chunk keys; cap chunks per file; configurable weights. → Best practices §4.4. |
-| Whoosh index management | Implemented | Build on init/reindex when engine=whoosh; incremental update/remove in indexer sync; rebuild on missing/corrupt in engine. |
+| Whoosh index management | Implemented | Build on init/reindex when engine=whoosh; incremental update/remove in indexer sync; full rebuild when on-disk schema is stale (indexer, bootstrap ensure, Phase 2); rebuild on missing/corrupt search in engine. |
 | Chunking strategy | Implemented | `indexing/chunker.py` + `get_chunking_config()`; H2 sections (workflows, long knowledge), paragraphs (logs), whole-file (prompts/policies/examples, short knowledge); TRD §5.3 context block at index time. → Best practices §5. |
 | Phase 3: Semantic search (pgvector) | Not implemented | Not started. → Best practices §6 (hybrid: pgvector). |
 | SearchResponse / QueryMetadata | Implemented | file_results, memory_results, prior_runs, query_metadata; Context Assembler and API use `response.file_results`. |

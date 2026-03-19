@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from types import SimpleNamespace
 from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -274,14 +275,14 @@ def update_document(
         write_file_to_index(writer, file_obj, modified, chunking, delete_existing=True)
         return
 
-    class _F:
-        relative_path = path
-        title = title
-        tags = tags
-        content = content
-        context = context
-
-    write_file_to_index(writer, _F(), modified, chunking, delete_existing=True)
+    pseudo_file = SimpleNamespace(
+        relative_path=path,
+        title=title,
+        tags=tags,
+        content=content,
+        context=context,
+    )
+    write_file_to_index(writer, pseudo_file, modified, chunking, delete_existing=True)
 
 
 def remove_document(writer, path: str) -> None:
