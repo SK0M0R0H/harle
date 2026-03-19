@@ -38,6 +38,9 @@ test = [
 ]
 
 [tool.pytest.ini_options]
+# importlib mode (pytest 8+) does not put the repo root on sys.path; tests that
+# import shared helpers as ``from tests.conftest import ...`` need the root.
+pythonpath = ["."]
 testpaths = ["tests/unit", "tests/integration"]
 markers = [
   "integration: multi-component tests with real module wiring",
