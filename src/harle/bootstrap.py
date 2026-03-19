@@ -430,10 +430,12 @@ def _whoosh_index_path_if_enabled() -> Path | None:
 
 
 def _ensure_whoosh_index(dataset_path: str, index_path: Path) -> None:
-    """Build Whoosh index from scratch if it is missing or empty."""
+    """Build Whoosh from scratch if missing or on-disk schema is not current."""
     from harle.search import whoosh_index
 
-    if not index_path.exists() or not whoosh_index.exists_in(str(index_path)):
+    present = index_path.exists() and whoosh_index.exists_in(str(index_path))
+    need_build = not present or not whoosh_index.disk_index_schema_current(index_path)
+    if need_build:
         try:
             reader = DatasetReader(dataset_path)
             whoosh_index.build_from_scratch(reader, index_path)

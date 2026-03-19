@@ -163,8 +163,9 @@ second section
         ix_old = create_in(str(idx_path), legacy)
         ix_old.close()
 
-        ix = whoosh_index.get_or_create_index(idx_path)
+        ix, schema_reset = whoosh_index.get_or_create_index(idx_path)
         try:
+            assert schema_reset is True
             assert frozenset(ix.schema.names()) == frozenset(whoosh_index.SCHEMA.names())
         finally:
             ix.close()

@@ -62,6 +62,14 @@ class Indexer:
         whoosh_updated: list = []  # DatasetFile for add/update
         whoosh_deleted: list[str] = []
 
+        whoosh_schema_stale = False
+        if self.whoosh_index_path:
+            from harle.search import whoosh_index
+
+            p = self.whoosh_index_path
+            if p.exists() and whoosh_index.exists_in(str(p)):
+                whoosh_schema_stale = not whoosh_index.disk_index_schema_current(p)
+
         with self.db.session() as session:
             existing: dict[str, FileIndex] = {
                 row.file_path: row
@@ -114,17 +122,25 @@ class Indexer:
                 whoosh_deleted.append(path)
                 changes += 1
 
-        if self.whoosh_index_path and (whoosh_updated or whoosh_deleted):
+        if self.whoosh_index_path:
             from harle.config import get_chunking_config
 
             chunking = self._chunking if self._chunking is not None else get_chunking_config()
-            _sync_whoosh(
-                self.whoosh_index_path,
-                whoosh_updated,
-                whoosh_deleted,
-                now,
-                chunking,
-            )
+            if whoosh_schema_stale:
+                from harle.search import whoosh_index
+
+                whoosh_index.build_from_scratch(
+                    self.reader, self.whoosh_index_path, chunking
+                )
+            elif whoosh_updated or whoosh_deleted:
+                _sync_whoosh(
+                    self.whoosh_index_path,
+                    self.reader,
+                    whoosh_updated,
+                    whoosh_deleted,
+                    now,
+                    chunking,
+                )
 
         logger.info(
             "Sync complete: %d change(s), %d file(s) in dataset.",
@@ -136,6 +152,7 @@ class Indexer:
 
 def _sync_whoosh(
     index_path: Path,
+    reader: DatasetReader,
     updated: list,
     deleted: list[str],
     modified: datetime,
@@ -145,21 +162,19 @@ def _sync_whoosh(
     from harle.search import whoosh_index
 
     if not index_path.exists():
-        try:
-            from harle.dataset.reader import DatasetReader
-            # Build from scratch requires a reader; we don't have dataset_path here.
-            # So we only do incremental updates when the index already exists.
-            logger.debug("Whoosh index path does not exist; skip incremental update.")
-            return
-        except Exception:  # noqa: S110
-            return
+        logger.debug("Whoosh index path does not exist; skip incremental update.")
+        return
 
     if not whoosh_index.exists_in(str(index_path)):
         logger.debug("Whoosh index not present at %s; skip incremental update.", index_path)
         return
 
     try:
-        ix = whoosh_index.get_or_create_index(index_path)
+        ix, schema_reset = whoosh_index.get_or_create_index(index_path)
+        if schema_reset:
+            ix.close()
+            whoosh_index.build_from_scratch(reader, index_path, chunking)
+            return
         writer = ix.writer()
         for f in updated:
             whoosh_index.update_document(

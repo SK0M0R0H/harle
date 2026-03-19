@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -142,12 +143,41 @@ def _whoosh_schema_matches(ix) -> bool:
     return existing == frozenset(SCHEMA.names())
 
 
-def get_or_create_index(index_path: Path):
+def disk_index_schema_current(index_path: Path) -> bool:
+    """True if there is no Whoosh index at *index_path* or it matches :data:`SCHEMA`.
+
+    Used by :class:`harle.indexing.indexer.Indexer` to trigger a full
+    :func:`build_from_scratch` before incremental updates, so schema upgrades
+    do not leave a partial index.
+    """
+    p = Path(index_path)
+    if not _whoosh_exists_in(str(p)):
+        return True
+    try:
+        ix = open_dir(str(p))
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        return _whoosh_schema_matches(ix)
+    finally:
+        ix.close()
+
+
+def get_or_create_index(index_path: Path) -> tuple[Any, bool]:
     """Open an existing Whoosh index or create one with the standard schema.
 
     If an older index directory exists with a different schema (e.g. missing
     ``chunk_index`` / ``file_path``), the directory is removed and a fresh
-    index is created so incremental updates do not fail at runtime.
+    empty index is created so incremental updates do not fail at runtime.
+
+    Returns:
+        ``(index, schema_was_reset)``. When ``schema_was_reset`` is True,
+        :func:`harle.indexing.indexer._sync_whoosh` runs :func:`build_from_scratch`
+        so the index is fully repopulated (incremental sync only passes
+        changed files).
+
+    Indexer also checks :func:`disk_index_schema_current` before incremental
+    work so a stale schema triggers a full rebuild even when no files changed.
     """
     index_path = Path(index_path)
     index_path.mkdir(parents=True, exist_ok=True)
@@ -155,16 +185,15 @@ def get_or_create_index(index_path: Path):
         ix = open_dir(str(index_path))
         if not _whoosh_schema_matches(ix):
             logger.info(
-                "Whoosh schema at %s is outdated; removing and recreating index "
-                "(re-run /reindex or restart after sync to refill).",
+                "Whoosh schema at %s is outdated; recreating index (full re-index follows).",
                 index_path,
             )
             ix.close()
             shutil.rmtree(index_path)
             index_path.mkdir(parents=True, exist_ok=True)
-            return create_in(str(index_path), SCHEMA)
-        return ix
-    return create_in(str(index_path), SCHEMA)
+            return create_in(str(index_path), SCHEMA), True
+        return ix, False
+    return create_in(str(index_path), SCHEMA), False
 
 
 def build_from_scratch(
