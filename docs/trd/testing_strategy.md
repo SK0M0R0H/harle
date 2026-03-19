@@ -2,7 +2,7 @@
 title: "Harle Testing Strategy — Best Practices & Implementation Plan"
 tags: [testing, strategy, ci-cd, automation, ai-testing, quality, pytest, cursor]
 context: global
-last_updated: 2026-02-27
+last_updated: 2026-03-19
 summary: "Comprehensive testing strategy for Harle covering unit, integration, semantic, and E2E testing layers, AI-assisted workflows with Cursor, and CI/CD automation with GitHub Actions."
 ---
 
@@ -219,7 +219,7 @@ Integration tests verify that multiple components work together correctly. They 
 @pytest.mark.integration
 class TestRunEndpoint:
     def test_post_run_returns_completed(self, test_client):
-        response = test_client.post("/run", json={
+        response = test_client.post("/chat", json={
             "message": "Find stalled tasks",
             "context": "work",
         })
@@ -229,7 +229,7 @@ class TestRunEndpoint:
         assert data["run_id"].startswith("run_")
 
     def test_post_run_invalid_context_returns_422(self, test_client):
-        response = test_client.post("/run", json={
+        response = test_client.post("/chat", json={
             "message": "hello",
             "context": "invalid_context",
         })

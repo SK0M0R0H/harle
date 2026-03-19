@@ -140,54 +140,6 @@ def build_router(
             all_healthy=conn_healthy and tool_healthy,
         )
 
-    @router.post("/run", response_model=RunResponse)
-    async def run_task(
-        http_request: Request,
-        request: RunRequest,
-        debug: bool = Query(default=False, description="Enable SSE debug event stream"),
-    ) -> RunResponse | EventSourceResponse:
-        if await http_request.is_disconnected():
-            run_id = orchestrator.record_aborted_request(request=request)
-            logger.warning(
-                "Client disconnected before /run execution (run_id=%s conversation_id=%s)",
-                run_id,
-                request.conversation_id,
-            )
-            raise HTTPException(
-                status_code=499,
-                detail=(
-                    "Client disconnected before request execution started. "
-                    f"Recorded aborted run {run_id}."
-                ),
-            )
-
-        logger.info(
-            "Received /run request",
-            extra={
-                "path": str(http_request.url.path),
-                "context_scope": request.context,
-                "conversation_id": request.conversation_id,
-            },
-        )
-        try:
-            response = await run_in_threadpool(orchestrator.run, request=request)
-        except RunTimeoutError as exc:
-            raise HTTPException(
-                status_code=504,
-                detail="Run exceeded the server-side timeout before completion.",
-            ) from exc
-        except asyncio.CancelledError:
-            # Best-effort disconnect detection is limited here because the
-            # synchronous orchestrator work is already running in a threadpool.
-            logger.warning(
-                "Client disconnected during /run request handling (conversation_id=%s)",
-                request.conversation_id,
-            )
-            raise
-        if debug:
-            return _sse_response(response)
-        return response
-
     @router.get("/run/{run_id}", response_model=RunDetail)
     def get_run(run_id: str) -> RunDetail:
         """Return metadata for a single run by run_id."""
@@ -224,11 +176,12 @@ def build_router(
         request: RunRequest,
         debug: bool = Query(default=False, description="Enable SSE debug event stream"),
     ) -> RunResponse | EventSourceResponse:
-        """Send a message in a multi-turn conversation.
+        """Submit a task or send a message in a conversation.
 
         If ``conversation_id`` is ``null``, a new conversation is
-        created.  Otherwise the existing conversation is continued
-        and recent history is included in the LLM context.
+        created (one-shot tasks use a single exchange in that
+        conversation).  Otherwise the existing conversation is
+        continued and recent history is included in the LLM context.
 
         Requires a configured database connection.
         """

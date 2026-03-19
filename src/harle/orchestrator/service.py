@@ -1,15 +1,17 @@
 """Request orchestrator for Harle.
 
 Coordinates context assembly, conversation management, and LLM
-generation.  Supports two execution paths:
+generation for every user request via the chat pipeline (create or
+load conversation, assemble context including history when present,
+execute, persist messages).
 
-1. **Agent Runner** (Level 1+): Uses the OpenAI Agents SDK ``Runner``
-   for multi-step reasoning with tool calls.  Enabled when an OpenAI
-   API key is available.
+Execution uses one of two LLM backends:
 
-2. **Legacy provider** (fallback): Single LLM call via the
-   ``LLMProvider`` protocol.  Used when no API key is set (echo
-   provider).
+1. **Agent Runner** (Level 1+): OpenAI Agents SDK ``Runner`` for
+   multi-step reasoning with tool calls when an OpenAI API key is set.
+
+2. **Legacy provider** (fallback): Single LLM call via
+   ``LLMProvider`` (e.g. echo provider when no API key).
 
 When a :class:`ToolRegistry` is provided, the agent receives
 SDK-compatible tool functions and can call them during reasoning.
@@ -493,184 +495,7 @@ class OrchestratorService:
         )
         return state.run_id
 
-    # ── one-shot execution ────────────────────────────────────────────
-
-    def _run_core(self, request: RunRequest, state: _RunState) -> _AgentResult:
-        """Assembly + execute + state update only; caller is responsible for finalize."""
-        if self.context_assembler is not None:
-            package = self.context_assembler.assemble(
-                message=request.message,
-                context=request.context,
-                agent_role=DEFAULT_AGENT_ROLE,
-            )
-            state.system_prompt = package.system_prompt
-            state.files_used = _files_used_from_package(
-                package.p0_files,
-                package.search_results,
-            )
-            logger.info(
-                "Context assembled: %d tokens, %d search results, "
-                "%d P0 files, %d budget remaining",
-                package.total_tokens,
-                len(package.search_results),
-                len(package.p0_files),
-                package.budget_remaining,
-            )
-            etrace.step(
-                "Context assembled",
-                module="orchestrator",
-                tokens=package.total_tokens,
-                search_results=len(package.search_results),
-                p0_files=len(package.p0_files),
-                budget_remaining=package.budget_remaining,
-            )
-
-        agent_result = self._execute(
-            user_message=request.message,
-            context=request.context,
-            conversation_id=state.conversation_id,
-            system_prompt=state.system_prompt,
-        )
-        state.result_text = agent_result.text
-        state.tools_called = agent_result.tools_called or None
-        state.turns_used = agent_result.turns_used or None
-        etrace.step(
-            "Agent execution complete",
-            module="orchestrator",
-            tools_called=agent_result.tools_called,
-            turns_used=agent_result.turns_used,
-        )
-        return agent_result
-
-    def run(self, *, request: RunRequest) -> RunResponse:
-        """Process a run request end-to-end.
-
-        Steps:
-            1. If a context assembler is available, build a
-               :class:`ContextPackage`.
-            2. Execute via the Runner or legacy provider.
-            3. Log the run to the vault and (if db is set) the
-               ``runs`` table.
-            4. Return the response.
-
-        Args:
-            request: Incoming run request from the API.
-
-        Returns:
-            A :class:`RunResponse` with the generated result.
-        """
-        state = _RunState(
-            run_id=f"run_{uuid.uuid4().hex[:12]}",
-            started_at=datetime.now(timezone.utc),
-            message=request.message,
-            context=request.context,
-            conversation_id=request.conversation_id,
-        )
-        agent_result: _AgentResult | None = None
-
-        with etrace.span(
-            "handle_request",
-            level=etrace.STEP,
-            module="orchestrator",
-            run_id=state.run_id,
-        ):
-            etrace.step(
-                "Routed to agent",
-                module="orchestrator",
-                agent=DEFAULT_AGENT_ROLE,
-                routing_method="default",
-            )
-            try:
-                agent_result = _run_with_timeout(
-                    self.run_timeout_seconds,
-                    lambda: self._run_core(request, state),
-                )
-                self._finalize_run(
-                    state=state,
-                    ended_at=datetime.now(timezone.utc),
-                    status="completed",
-                    suppress_persistence_errors=True,
-                )
-            except RunTimeoutError:
-                duration_ms = int(
-                    (datetime.now(timezone.utc) - state.started_at).total_seconds() * 1000
-                )
-                error_summary = _timeout_summary(duration_ms)
-                logger.warning(
-                    "Run timed out (run_id=%s conversation_id=%s)",
-                    state.run_id,
-                    state.conversation_id,
-                    extra={
-                        "run_id": state.run_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "user_message": state.message,
-                        "context_scope": state.context,
-                        "conversation_id": state.conversation_id,
-                        "system_prompt": state.system_prompt,
-                        "files_used": state.files_used,
-                        "tools_called": state.tools_called,
-                        "result_text": state.result_text,
-                    },
-                )
-                self._finalize_run_safely(
-                    state=state,
-                    ended_at=datetime.now(timezone.utc),
-                    status="timeout",
-                    error_summary=error_summary,
-                    result_body=error_summary,
-                )
-                raise
-            except ValueError as exc:
-                error_summary = _safe_error_summary(exc)
-                logger.warning(
-                    "Run failed with ValueError (run_id=%s conversation_id=%s): %s",
-                    state.run_id,
-                    state.conversation_id,
-                    error_summary,
-                )
-                self._finalize_run_safely(
-                    state=state,
-                    ended_at=datetime.now(timezone.utc),
-                    status="failed",
-                    error_summary=error_summary,
-                    result_body=error_summary,
-                )
-                raise
-            except Exception as exc:
-                error_summary = _safe_error_summary(exc)
-                logger.warning(
-                    "Run failed (run_id=%s conversation_id=%s): %s",
-                    state.run_id,
-                    state.conversation_id,
-                    error_summary,
-                )
-                self._finalize_run_safely(
-                    state=state,
-                    ended_at=datetime.now(timezone.utc),
-                    status="failed",
-                    error_summary=error_summary,
-                    result_body=error_summary,
-                )
-                raise
-
-            if agent_result and agent_result.tools_called:
-                logger.info(
-                    "Run %s used %d turn(s), tools: %s",
-                    state.run_id, agent_result.turns_used, agent_result.tools_called,
-                )
-
-        return RunResponse(
-            run_id=state.run_id,
-            status="completed",
-            result=state.result_text or "",
-            context=request.context,
-            agent=DEFAULT_AGENT_ROLE,
-            conversation_id=state.conversation_id,
-            tools_called=state.tools_called,
-            turns_used=state.turns_used,
-        )
-
-    # ── multi-turn chat ───────────────────────────────────────────────
+    # ── chat (single entry: new or continuing conversation) ───────────
 
     def _chat_core(self, request: RunRequest, state: _RunState) -> _AgentResult:
         """Load/create conversation, assembly, execute, persist messages; no finalize."""
@@ -775,14 +600,13 @@ class OrchestratorService:
         return agent_result
 
     def chat(self, *, request: RunRequest) -> RunResponse:
-        """Process a chat message with full conversation management.
+        """Process a user message: create or continue a conversation.
 
-        Unlike :meth:`run`, this method persists every exchange into
-        the ``conversations`` / ``messages`` tables and feeds recent
-        conversation history into the context assembler (P4 tier).
-
-        When *conversation_id* is ``None`` a new conversation is
-        created and its ID returned in the response.
+        Persists every exchange into the ``conversations`` / ``messages``
+        tables and feeds recent conversation history into the context
+        assembler (P4 tier). A one-shot task is a new conversation
+        (*conversation_id* ``None``) with a single user message and
+        assistant reply.
 
         Requires a database connection (``self.db``).
 
@@ -798,7 +622,7 @@ class OrchestratorService:
         """
         if self.db is None:
             raise RuntimeError(
-                "Database is required for chat mode. "
+                "Database is required for the chat pipeline. "
                 "Set DATABASE_URL in the configuration."
             )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textwrap import dedent
 
-from harle.dataset.frontmatter import parse_frontmatter
+from harle.dataset.frontmatter import dump_frontmatter_fields, parse_frontmatter
 
 
 class TestParseFrontmatter:
@@ -88,3 +88,15 @@ class TestParseFrontmatter:
         meta, body = parse_frontmatter("")
         assert meta == {}
         assert body == ""
+
+
+class TestDumpFrontmatterFields:
+    def test_colon_in_string_value_round_trips_via_parse(self) -> None:
+        raw = dump_frontmatter_fields(
+            {"run_id": "Tool: notion_search", "total_spans": 3}
+        )
+        wrapped = f"---\n{raw}\n---\n\nbody\n"
+        meta, body = parse_frontmatter(wrapped)
+        assert meta["run_id"] == "Tool: notion_search"
+        assert meta["total_spans"] == 3
+        assert body == "body"

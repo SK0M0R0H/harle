@@ -52,4 +52,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "harle.tools.dummy" = ["skills/*.md"]
+"harle.tools.notion" = ["skills/*.md"]
+"harle.tools.trello" = ["skills/*.md"]
 "harle.tools.web_search" = ["skills/*.md"]

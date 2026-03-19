@@ -48,13 +48,42 @@ def find_root(spans: list[ReadableSpan]) -> ReadableSpan | None:
     return min(spans, key=lambda s: s.start_time or 0) if spans else None
 
 
-def extract_run_id(root: ReadableSpan) -> str:
-    """Extract run_id from the root span name or attributes."""
-    if root.attributes:
-        rid = root.attributes.get("run_id")
-        if rid:
-            return str(rid)
-    return root.name
+def _span_name_usable_as_run_id_fallback(name: str) -> bool:
+    """True if *name* looks like an opaque id, not a structured span label.
+
+    Span names often use ``Category: detail`` (tools, modules, steps). Those
+    contain ``:`` and must not be used as ``run_id`` in YAML frontmatter or
+    filenames without quoting — and they are not Harle ``run_*`` ids anyway.
+    """
+    n = (name or "").strip()
+    if not n:
+        return False
+    # Any colon makes the string a label, not a safe bare run_id fallback.
+    if ":" in n:
+        return False
+    return True
+
+
+def extract_run_id(spans: Sequence[ReadableSpan]) -> str:
+    """Extract run_id from any span attributes, then from a sensible root name.
+
+    Batches may lack ``run_id`` on the root while using labeled span names
+    (e.g. ``Tool: …``, ``Step: …``); we scan *all* spans for ``run_id`` first,
+    and only fall back to the root name when it has no ``:`` (not a label).
+    """
+    if not spans:
+        return "unknown_trace"
+    for s in spans:
+        if s.attributes:
+            rid = s.attributes.get("run_id")
+            if rid is not None and str(rid).strip():
+                return str(rid)
+    root = find_root(list(spans))
+    if root is not None:
+        name = root.name or ""
+        if _span_name_usable_as_run_id_fallback(name):
+            return name.strip()
+    return "unknown_trace"
 
 
 def span_start_time(span: ReadableSpan) -> datetime:

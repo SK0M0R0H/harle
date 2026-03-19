@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Architecture & Functionality"
 tags: [orchestrator, architecture, fastapi, agents, routing, context-assembly, tools]
 context: global
-last_updated: 2026-02-24
+last_updated: 2026-03-19
 summary: "Describes the Orchestrator's internal modules, request lifecycle, conversation mode, and technology choices for Harle's central coordination component."
 ---
 
@@ -75,9 +75,8 @@ Flask is simpler but synchronous by default. Since every Orchestrator request in
 
 | Endpoint | Method | What it does |
 |---|---|---|
-| `POST /run` | POST | Submit a new task. Returns the result (or a run ID for long tasks). |
-| `POST /chat` | POST | Send a message in an ongoing conversation. Supports multi-turn dialogue. |
-| `GET /run/{id}` | GET | Check the status and result of a previously submitted task. |
+| `POST /chat` | POST | **Single entry point** for user-initiated work: submit a task or continue a conversation. Same JSON body for one-shot and multi-turn. **Requires a configured database** (conversations and messages are persisted). Returns the result (and `run_id`, `conversation_id`, etc.). |
+| `GET /run/{id}` | GET | Look up **run** metadata for a run produced by a chat turn (e.g. polling or audit). Not a separate “run mode” entry point — every run is tied to a conversation/message. |
 | `GET /health` | GET | Simple health check — returns "ok" if the service is running. |
 
 **Request format (example):**
@@ -91,7 +90,9 @@ Flask is simpler but synchronous by default. Since every Orchestrator request in
 
 - `message` — what the user wants.
 - `context` — "work" or "personal" (determines which dataset scope and policies apply).
-- `conversation_id` — `null` for a new task, or an ID to continue an existing conversation.
+- `conversation_id` — `null` starts a **new conversation** (including one-shot tasks: one user message, one assistant reply in that conversation), or pass an ID to continue an existing conversation.
+
+**One-shot usage:** `POST /chat` with `conversation_id: null` and a single exchange. There is no separate “run vs chat” API — only chat, with multi-turn as the general case and one-shot as the special case.
 
 **Response format (example):**
 ```json
@@ -555,9 +556,10 @@ Here is the full lifecycle of a request, from the moment you hit Enter to the mo
 ```
  YOU (CLI)                        ORCHESTRATOR (server)
     │
-    │  POST /run
-    │  {"message": "...", "context": "work"}
+    │  POST /chat
+    │  {"message": "...", "context": "work", "conversation_id": null}
     │──────────────────────────>│
+    │     (one-shot = new conversation + single exchange)
     │                          │
     │                    1. HTTP API
     │                       Validates request, extracts fields
@@ -600,15 +602,17 @@ Here is the full lifecycle of a request, from the moment you hit Enter to the mo
  YOU see the result
 ```
 
+> **Note:** The lifecycle is the same for every user message: **Router → Clarifier → Context Assembler → Agent Runner → Run Logger**. There is no alternate “run-only” pipeline. One-shot tasks use `POST /chat` with `conversation_id: null`.
+
 ---
 
-## Conversation Mode (multi-turn chat)
+## Conversation mode (all interactions)
 
-Not every interaction is a one-shot task. Sometimes you want to have a conversation — ask follow-up questions, refine the result, or explore a topic step by step, similar to ChatGPT.
+**Every** user-initiated request is a **conversation**: the server creates or loads a conversation, appends the user message, runs the same pipeline, persists the assistant reply, and returns a response (including `run_id` and `conversation_id`). **Multi-turn** chat is the general case; a **one-shot** task is the special case of a conversation that (typically) has one user message and one assistant response.
 
 **How it works:**
 
-1. The first message creates a **conversation** with a unique ID.
+1. The first message (with `conversation_id: null`) creates a **conversation** with a unique ID.
 2. Subsequent messages include this conversation ID.
 3. The Orchestrator loads the conversation history from PostgreSQL and includes it in the context.
 4. The Router and Clarifier can use conversation history to make better decisions (e.g. if you already said "let's work on the Japan trip," the Clarifier does not need to ask which project you mean).
@@ -721,7 +725,7 @@ harle/                                 ← This repository (application code onl
 │       ├── main.py             # FastAPI app entry point
 │       │
 │       ├── api/                # HTTP API layer
-│       │   ├── routes.py       # Endpoint definitions (/run, /chat, etc.)
+│       │   ├── routes.py       # Endpoint definitions (/chat, GET /run/{id}, etc.)
 │       │   └── models.py       # Request/response Pydantic models
 │       │
 │       ├── router/             # Agent routing logic

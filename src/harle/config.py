@@ -66,7 +66,7 @@ class Settings:
     HARLE_TRACING_VAULT_ENABLED: bool = True
     HARLE_TRACING_DB_ENABLED: bool = True
     HARLE_TRACING_MIN_STORAGE_LEVEL: str = "TRACE"
-    # SSE streaming of trace events for ?debug=true on /run and /chat
+    # SSE streaming of trace events for ?debug=true on /chat
     HARLE_TRACING_SSE_ENABLED: bool = False
     HARLE_TRACING_DEBUG_LEVEL: str = "STEP"
 

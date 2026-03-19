@@ -1,4 +1,4 @@
-"""E2E tests: health, /run, and /chat session lifecycle."""
+"""E2E tests: health and /chat session lifecycle (including one-shot)."""
 
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ def test_health_returns_ok(e2e_base_url: str) -> None:
 
 
 @pytest.mark.e2e
-def test_run_returns_completed(e2e_base_url: str) -> None:
-    """POST /run with valid payload returns 200, completed status, and echo in result."""
+def test_chat_one_shot_returns_completed(e2e_base_url: str) -> None:
+    """POST /chat with new conversation returns 200, completed status, and echo in result."""
     r = httpx.post(
-        f"{e2e_base_url}/run",
+        f"{e2e_base_url}/chat",
         json={"message": "Find stalled tasks", "context": "work"},
         timeout=30.0,
     )
@@ -28,6 +28,7 @@ def test_run_returns_completed(e2e_base_url: str) -> None:
     assert data["run_id"].startswith("run_")
     assert data["context"] == "work"
     assert "Find stalled tasks" in data["result"]
+    assert data.get("conversation_id")
 
 
 @pytest.mark.e2e

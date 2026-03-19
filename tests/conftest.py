@@ -6,6 +6,32 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from harle.db.connection import Database
+from harle.db.models import Conversation, Message
+
+
+def make_in_memory_chat_db() -> Database:
+    """SQLite in-memory DB with conversation tables (for /chat unit tests).
+
+    Uses :class:`StaticPool` so all connections (including worker threads)
+    share one in-memory database. Run persistence is often patched out
+    (``runs`` uses PostgreSQL ARRAY).
+    """
+    db = Database.__new__(Database)
+    db.engine = create_engine(
+        "sqlite://",
+        echo=False,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    db._session_factory = sessionmaker(bind=db.engine, expire_on_commit=False)
+    Conversation.__table__.create(db.engine, checkfirst=True)
+    Message.__table__.create(db.engine, checkfirst=True)
+    return db
 
 
 # ---------------------------------------------------------------------------

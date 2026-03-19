@@ -2,7 +2,7 @@
 title: "Harle Execution Tracing — Current State"
 tags: [execution-tracing, tracing, observability, opentelemetry, current-state, implementation-status]
 context: global
-last_updated: 2026-03-12
+last_updated: 2026-03-19
 summary: "Tracks what the execution tracing system implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -32,13 +32,13 @@ Reference TRD: [Harle Execution Tracing — Architecture & Functionality](../trd
 | `CliSseExporter` (`exporters/cli.py`) | Implemented | Pushes qualifying spans to a shared `Queue` for SSE streaming. Level-filtered. |
 | `ExecutionTrace` model (`db/models.py`) | Implemented | SQLAlchemy model with `run_id`, `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`. |
 | `execution_traces` CRUD (`db/execution_traces.py`) | Implemented | `create_execution_trace()` and `get_execution_trace()` helpers. |
-| SSE `debug` event type in API | Implemented | `/run` and `/chat` accept `?debug=true` and return `EventSourceResponse` with `event: debug` and `event: result` events. |
+| SSE `debug` event type in API | Implemented | `/chat` accepts `?debug=true` and returns `EventSourceResponse` with `event: debug` and `event: result` events. |
 | Shared span helpers (`exporters/_spans.py`) | Implemented | Extracted from vault exporter: `group_by_trace`, `filter_by_level`, `find_root`, `extract_run_id`, `span_start_time`, `span_duration_ms`, `build_tree`. |
 | Trace queue (`debug/queue.py`) | Implemented | `init_trace_queue()` / `get_trace_queue()` for shared SSE event queue. |
 | SSE streaming helpers (`api/streaming.py`) | Implemented | `drain_debug_events()` and `result_event()`. |
 | Config fields | Implemented | `HARLE_TRACING_VAULT_ENABLED`, `HARLE_TRACING_DB_ENABLED`, `HARLE_TRACING_MIN_STORAGE_LEVEL` in `Settings`. |
 | Startup wiring (`main.py`) | Implemented | `configure_tracing()` called with vault, DB, and optional SSE queue parameters. |
-| Root spans in orchestrator | Implemented | `run()` and `chat()` wrapped in root spans with `run_id` attribute. |
+| Root spans in orchestrator | Implemented | `chat()` wrapped in root span `handle_chat` with `run_id` attribute. |
 | CLI `--debug` flag | Not implemented | Go CLI work. The API-side SSE support is ready. |
 | Subsystem instrumentation (Phase 3) | Implemented | Router (routed to agent), context assembler (P0/P1/P4, budget), search (query, result count, scores), run logger (paths written), tools (Tool: name span + invoked/completed). |
 | API endpoint for trace retrieval | Not implemented | Phase 4. |
@@ -73,12 +73,11 @@ Reference TRD: [Harle Execution Tracing — Architecture & Functionality](../trd
 ### API SSE support
 
 - **`api/streaming.py`** — `drain_debug_events()` yields queued debug events as SSE-formatted dicts; `result_event()` wraps a `RunResponse` as an SSE `result` event.
-- **`api/routes.py`** — `/run` and `/chat` accept `?debug=true` query parameter. When set, the response is an `EventSourceResponse` with `event: debug` events followed by `event: result`.
+- **`api/routes.py`** — `/chat` accepts `?debug=true` query parameter. When set, the response is an `EventSourceResponse` with `event: debug` events followed by `event: result`.
 
 ### Orchestrator instrumentation
 
-- `OrchestratorService.run()` — root span `handle_request` with `run_id`; STEP "Routed to agent" (agent, routing_method); context assembly; STEP "Context assembled"; DETAIL "Agent execution started" (model, max_turns, has_tools); agent execution; STEP "Agent execution complete"; STEP "Run logged".
-- `OrchestratorService.chat()` — same pattern with root span `handle_chat`; conversation load/create; context assembly; execution; message persist; run persist; STEP "Run logged".
+- `OrchestratorService.chat()` — root span `handle_chat` with `run_id`; STEP "Routed to agent" (agent, routing_method); conversation load/create; context assembly; STEP "Context assembled"; DETAIL "Agent execution started" (model, max_turns, has_tools); agent execution; STEP "Agent execution complete"; message persist; run persist; STEP "Run logged".
 
 ### Subsystem instrumentation (Phase 3)
 

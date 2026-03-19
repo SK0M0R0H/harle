@@ -7,6 +7,7 @@ remaining body content.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -62,3 +63,25 @@ def parse_frontmatter(content: str, source_path: str | None = None) -> tuple[dic
         return {}, content
 
     return metadata, body
+
+
+def dump_frontmatter_fields(data: dict[str, Any]) -> str:
+    """Serialize *data* to YAML-safe frontmatter lines.
+
+    String values are emitted as JSON double-quoted scalars so values
+    containing ``:`` (e.g. ``Tool: name``) or newlines do not break YAML
+    parsing when files are read back.
+    """
+    lines: list[str] = []
+    for key, val in data.items():
+        if isinstance(val, str):
+            lines.append(f"{key}: {json.dumps(val)}")
+        elif isinstance(val, bool):
+            lines.append(f"{key}: {'true' if val else 'false'}")
+        elif isinstance(val, int):
+            lines.append(f"{key}: {val}")
+        elif val is None:
+            lines.append(f"{key}: null")
+        else:
+            lines.append(f"{key}: {json.dumps(val, default=str)}")
+    return "\n".join(lines)

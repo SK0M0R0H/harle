@@ -9,6 +9,7 @@ be split into multiple documents (chunks) with composite ``path`` ids;
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,12 +133,37 @@ def write_file_to_index(
     return num
 
 
+def _whoosh_schema_matches(ix) -> bool:
+    """True if an opened index has the same field names as :data:`SCHEMA`."""
+    try:
+        existing = frozenset(ix.schema.names())
+    except Exception:  # noqa: BLE001
+        return False
+    return existing == frozenset(SCHEMA.names())
+
+
 def get_or_create_index(index_path: Path):
-    """Open an existing Whoosh index or create one with the standard schema."""
+    """Open an existing Whoosh index or create one with the standard schema.
+
+    If an older index directory exists with a different schema (e.g. missing
+    ``chunk_index`` / ``file_path``), the directory is removed and a fresh
+    index is created so incremental updates do not fail at runtime.
+    """
     index_path = Path(index_path)
     index_path.mkdir(parents=True, exist_ok=True)
     if _whoosh_exists_in(str(index_path)):
-        return open_dir(str(index_path))
+        ix = open_dir(str(index_path))
+        if not _whoosh_schema_matches(ix):
+            logger.info(
+                "Whoosh schema at %s is outdated; removing and recreating index "
+                "(re-run /reindex or restart after sync to refill).",
+                index_path,
+            )
+            ix.close()
+            shutil.rmtree(index_path)
+            index_path.mkdir(parents=True, exist_ok=True)
+            return create_in(str(index_path), SCHEMA)
+        return ix
     return create_in(str(index_path), SCHEMA)
 
 

@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from whoosh.fields import DATETIME, ID, KEYWORD, Schema, TEXT
+from whoosh.index import create_in
+
 from harle.search import whoosh_index
 
 
@@ -144,3 +147,24 @@ second section
         assert any(p.startswith("workflows/w.md#") for p in paths)
         hit = next(r for r in results if r.chunk_index is not None)
         assert hit.file_path == "workflows/w.md"
+
+    def test_get_or_create_index_rebuilds_when_schema_differs(self, tmp_path: Path) -> None:
+        """Pre-chunking Whoosh layouts must not break incremental updates."""
+        idx_path = tmp_path / "legacy"
+        idx_path.mkdir(parents=True, exist_ok=True)
+        legacy = Schema(
+            path=ID(stored=True, unique=True),
+            title=TEXT(stored=True),
+            tags=KEYWORD(stored=True, commas=True),
+            content=TEXT(stored=False),
+            context=ID(stored=True),
+            modified=DATETIME(stored=True),
+        )
+        ix_old = create_in(str(idx_path), legacy)
+        ix_old.close()
+
+        ix = whoosh_index.get_or_create_index(idx_path)
+        try:
+            assert frozenset(ix.schema.names()) == frozenset(whoosh_index.SCHEMA.names())
+        finally:
+            ix.close()

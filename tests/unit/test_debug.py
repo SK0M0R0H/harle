@@ -126,7 +126,7 @@ class TestDtraceWithProvider:
         debug_files = list(tmp_path.rglob("*_trace.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
-        assert "run_id: run_unittest1" in content
+        assert 'run_id: "run_unittest1"' in content
         assert "handle_request" in content
         assert "Context assembled" in content
         assert "Search query" in content
@@ -234,7 +234,7 @@ class TestVaultExporterIntegration:
         debug_files = list(tmp_path.rglob("*_trace.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
-        assert "run_id: run_vault_test" in content
+        assert 'run_id: "run_vault_test"' in content
         assert "handle_request" in content
         assert "child_span" in content
         assert "tokens: 100" in content or "100" in content
@@ -354,7 +354,7 @@ class TestVaultHelpers:
         provider.force_flush()
         root = find_root(exporter.spans)
         assert root is not None
-        assert extract_run_id(root) == "run_abc123"
+        assert extract_run_id(exporter.spans) == "run_abc123"
 
     def test_extract_run_id_falls_back_to_name(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
@@ -363,7 +363,25 @@ class TestVaultHelpers:
         provider.force_flush()
         root = find_root(exporter.spans)
         assert root is not None
-        assert extract_run_id(root) == "run_xyz789"
+        assert extract_run_id(exporter.spans) == "run_xyz789"
+
+    def test_extract_run_id_prefers_attribute_on_any_span_when_root_is_tool(
+        self,
+    ) -> None:
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("Tool: trello_list_boards") as tool:
+            with tracer.start_as_current_span("child") as child:
+                child.set_attribute("run_id", "run_from_child")
+        provider.force_flush()
+        assert extract_run_id(exporter.spans) == "run_from_child"
+
+    def test_extract_run_id_unknown_when_only_labeled_root_name(self) -> None:
+        """Span names with ':' are labels, not run ids — do not use as fallback."""
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("Module: some_step"):
+            pass
+        provider.force_flush()
+        assert extract_run_id(exporter.spans) == "unknown_trace"
 
     def test_span_start_time_from_timestamp(self) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()

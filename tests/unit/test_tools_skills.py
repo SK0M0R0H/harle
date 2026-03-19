@@ -433,6 +433,15 @@ class TestGetBuiltinSkillsDir:
         assert result.parent.name == "trello"
         assert "harle/tools/trello/skills" in str(result)
 
+    def test_matches_harle_tools_package_root(self) -> None:
+        """Anchor is harle.tools.<module>, not the directory containing skills.py."""
+        import harle.tools.trello as trello_pkg
+
+        from pathlib import Path
+
+        expected = Path(next(iter(trello_pkg.__path__))) / "skills"
+        assert get_builtin_skills_dir("trello") == expected
+
     def test_dummy_module_exists(self) -> None:
         result = get_builtin_skills_dir("dummy")
         assert result.is_dir()

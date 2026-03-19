@@ -78,7 +78,7 @@ class PostgresExporter(SpanExporter):
         if root is None:
             return
 
-        run_id = extract_run_id(root)
+        run_id = extract_run_id(filtered)
         duration = span_duration_ms(root)
         tree = build_tree(filtered)
         trace_json = _serialise_tree(root, tree)

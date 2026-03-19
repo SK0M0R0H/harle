@@ -2,7 +2,7 @@
 title: "Harle CLI — Architecture & Functionality"
 tags: [cli, architecture, go, session, interface, cobra, bubbletea]
 context: global
-last_updated: 2026-02-19
+last_updated: 2026-03-19
 summary: "Describes the CLI's session-first interaction model, internal modules, technology choices, and project structure for Harle's primary user interface."
 ---
 
@@ -397,7 +397,7 @@ The Orchestrator sends **Server-Sent Events (SSE)** — a standard HTTP streamin
 ```
 CLI                                    Orchestrator
  │                                         │
- │  POST /run (Accept: text/event-stream)  │
+ │  POST /chat (Accept: text/event-stream)  │
  │────────────────────────────────────────>│
  │                                         │
  │  HTTP 200 (Content-Type: text/event-stream)
@@ -420,7 +420,7 @@ CLI                                    Orchestrator
 
 **Why SSE (not WebSockets):**
 - **Simpler.** SSE is plain HTTP — it works through proxies, load balancers, and Tailscale without special configuration. WebSockets require a protocol upgrade and are harder to debug.
-- **One-directional is enough.** During a `run`, data only flows from server to client. SSE is designed for exactly this. WebSockets are bidirectional, which adds complexity Harle does not need for streaming.
+- **One-directional is enough.** During a response turn, data only flows from server to client. SSE is designed for exactly this. WebSockets are bidirectional, which adds complexity Harle does not need for streaming.
 - **Reconnection built-in.** SSE clients automatically reconnect if the connection drops. With WebSockets, you have to implement this yourself.
 
 Inside a session, each message you send is a separate HTTP call. Streaming (SSE) is used within each turn to show the response as it generates. Between turns, the connection is idle and the CLI waits for your next input.

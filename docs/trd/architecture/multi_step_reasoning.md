@@ -2,7 +2,7 @@
 title: "Multi-Step Reasoning — Design & Incremental Implementation Plan"
 tags: [orchestrator, multi-step-reasoning, agentic-loop, tool-use, planning, react, agents]
 context: global
-last_updated: 2026-02-26
+last_updated: 2026-03-19
 summary: "Describes multi-step reasoning patterns for the orchestrator, how leading AI companies implement them, and a step-by-step plan from simplest to most complex."
 ---
 
@@ -423,7 +423,7 @@ The plan is organized into seven levels. Each level is a **self-contained, deplo
 **What exists today:**
 
 ```
-POST /run → ContextAssembler.assemble() → LLMProvider.generate() → Response
+POST /chat → ContextAssembler.assemble() → LLMProvider.generate() → Response
 ```
 
 - Single LLM call per request.
@@ -455,7 +455,7 @@ POST /run → ContextAssembler.assemble() → LLMProvider.generate() → Respons
 **Architecture:**
 
 ```
-POST /run → ContextAssembler.assemble()
+POST /chat → ContextAssembler.assemble()
           → Agent(instructions=system_prompt, tools=[dataset_search, dataset_read])
           → Runner.run_sync(agent, user_message, max_turns=5)
                │
@@ -496,7 +496,7 @@ POST /run → ContextAssembler.assemble()
 **Architecture:**
 
 ```
-POST /run → ContextAssembler.assemble() + registry.get_skills_for_tools()
+POST /chat → ContextAssembler.assemble() + registry.get_skills_for_tools()
           → registry.get_agent_tools(filtered_tool_names)
           → Agent(instructions=system_prompt + skills, tools=filtered_tools)
           → Runner.run_sync(agent, user_message, max_turns=10)
@@ -543,7 +543,7 @@ POST /run → ContextAssembler.assemble() + registry.get_skills_for_tools()
 **Architecture:**
 
 ```
-POST /run → ContextAssembler.assemble()
+POST /chat → ContextAssembler.assemble()
           → ComplexityClassifier.classify(request)
               │
               ├─ Simple → direct to Runner (Level 2 flow)
@@ -640,7 +640,7 @@ ExecutionLoop produces initial_result
 **Architecture:**
 
 ```
-POST /run → Router.route(request)
+POST /chat → Router.route(request)
           → ContextAssembler.assemble(agent_role=routed_role)
           → Agent definitions loaded (with handoff targets)
           → Runner.run_sync(starting_agent, user_message, max_turns=15)
