@@ -43,6 +43,8 @@ class SearchResult:
         summary: Short summary (from file_index).
         source: Origin of the result (e.g. "whoosh", "metadata").
         last_modified: File last modified time (for recency ranking).
+        chunk_index: When set, this hit is a section/chunk (Whoosh composite id).
+        heading_path: Cascading heading path for chunk hits (HiQA-style).
     """
 
     file_path: str
@@ -55,6 +57,8 @@ class SearchResult:
     summary: str | None = None
     source: str = "whoosh"
     last_modified: datetime | None = None
+    chunk_index: int | None = None
+    heading_path: str | None = None
 
 
 @dataclass(frozen=True)

@@ -165,6 +165,8 @@ class SearchResultItem(BaseModel):
     context: str | None = None
     tags: list[str] = Field(default_factory=list)
     snippet: str | None = None
+    chunk_index: int | None = None
+    heading_path: str | None = None
 
 
 class SearchResponse(BaseModel):

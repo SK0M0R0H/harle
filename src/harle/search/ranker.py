@@ -1,8 +1,9 @@
 """Multi-source result ranker for Phase 2.
 
 Combines Whoosh BM25 scores with metadata signals (tag match, recency,
-source priority, prior-run bonus) into a single weighted score and
-deduplicates by file path.
+source priority, prior-run bonus) into a single weighted score. Chunk
+hits are keyed by composite doc path; optional cap limits chunks per
+vault file in the ranked list.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 from math import exp
 
 from harle.search.types import SearchResult
+from harle.search.whoosh_index import WhooshSearchHit
 
 # Vault directory -> priority score (0–1). TRD: prompts/policies P0, workflows P1, etc.
 _SOURCE_PRIORITY: dict[str, float] = {
@@ -40,7 +42,6 @@ def _recency_score(last_modified: datetime | None) -> float:
         last_modified = last_modified.replace(tzinfo=timezone.utc)
     delta = now - last_modified
     days = max(0, delta.total_seconds() / 86400)
-    # Decay: 1.0 at 0 days, ~0.37 at 30 days (e^(-1))
     return exp(-days / 30.0)
 
 
@@ -58,8 +59,26 @@ def _prior_run_bonus(file_path: str, prior_run_files: set[str]) -> float:
     return 1.0 if file_path in prior_run_files else 0.0
 
 
+def _cap_chunks_per_file(
+    results: list[SearchResult],
+    max_per_file: int,
+) -> list[SearchResult]:
+    """Keep global score order; skip once a file has max_per_file results."""
+    if max_per_file <= 0:
+        max_per_file = 3
+    counts: dict[str, int] = {}
+    out: list[SearchResult] = []
+    for r in results:
+        n = counts.get(r.file_path, 0)
+        if n >= max_per_file:
+            continue
+        counts[r.file_path] = n + 1
+        out.append(r)
+    return out
+
+
 def rank(
-    whoosh_results: list[tuple[str, float]],
+    whoosh_hits: list[WhooshSearchHit],
     path_to_metadata: dict[str, object],
     *,
     tag_filters: list[str],
@@ -69,51 +88,32 @@ def rank(
     recency_weight: float = 0.15,
     source_priority_weight: float = 0.63,
     prior_run_weight: float = 0.10,
+    max_chunks_per_file: int = 3,
 ) -> list[SearchResult]:
-    """Combine Whoosh scores with metadata and return ranked SearchResults.
-
-    Args:
-        whoosh_results: List of (path, bm25_score) from Whoosh.
-        path_to_metadata: Map path -> object with .title, .tags, .context,
-            .token_count, .summary, .last_modified (e.g. FileIndex).
-        tag_filters: Query tag filters for tag_match_score.
-        prior_run_files: Set of paths that appeared in similar prior runs.
-        bm25_weight: Weight for normalized BM25.
-        tag_match_weight: Weight for tag overlap.
-        recency_weight: Weight for recency decay.
-        source_priority_weight: Weight for vault directory priority.
-        prior_run_weight: Weight for prior-run bonus.
-
-    Returns:
-        List of :class:`SearchResult` sorted by final score descending,
-        deduplicated by path.
-    """
-    if not whoosh_results:
+    """Combine Whoosh scores with metadata and return ranked SearchResults."""
+    if not whoosh_hits:
         return []
 
     prior_run_files = prior_run_files or set()
-
-    # Normalize BM25 to 0–1 (min-max).
-    scores_only = [s for _, s in whoosh_results]
+    scores_only = [h.score for h in whoosh_hits]
     min_bm25 = min(scores_only)
     max_bm25 = max(scores_only)
     bm25_range = max_bm25 - min_bm25 if max_bm25 > min_bm25 else 1.0
 
-    by_path: dict[str, float] = {}
+    by_doc: dict[str, float] = {}
     meta_by_path: dict[str, object] = dict(path_to_metadata)
+    hit_by_doc: dict[str, WhooshSearchHit] = {h.doc_path: h for h in whoosh_hits}
 
-    for path, bm25 in whoosh_results:
-        norm_bm25 = (bm25 - min_bm25) / bm25_range if bm25_range else 0.0
-        meta = meta_by_path.get(path)
-        title = getattr(meta, "title", None) or path
+    for hit in whoosh_hits:
+        norm_bm25 = (hit.score - min_bm25) / bm25_range if bm25_range else 0.0
+        meta = meta_by_path.get(hit.file_path)
         tags = getattr(meta, "tags", None) or []
-        context = getattr(meta, "context", None)
         last_mod = getattr(meta, "last_modified", None)
 
         tag_s = _tag_match_score(tags, tag_filters)
         rec_s = _recency_score(last_mod)
-        src_s = _source_priority_score(path)
-        prior_s = _prior_run_bonus(path, prior_run_files)
+        src_s = _source_priority_score(hit.file_path)
+        prior_s = _prior_run_bonus(hit.file_path, prior_run_files)
 
         final = (
             bm25_weight * norm_bm25
@@ -122,24 +122,25 @@ def rank(
             + source_priority_weight * src_s
             + prior_run_weight * prior_s
         )
-        by_path[path] = final
+        by_doc[hit.doc_path] = final
 
-    # Deduplicate and sort; build SearchResult for each path (keep order by score).
-    sorted_paths = sorted(by_path.keys(), key=lambda p: by_path[p], reverse=True)
+    sorted_docs = sorted(by_doc.keys(), key=lambda d: by_doc[d], reverse=True)
     results: list[SearchResult] = []
-    for path in sorted_paths:
-        meta = meta_by_path.get(path)
-        title = getattr(meta, "title", None) or path
+    for doc_path in sorted_docs:
+        hit = hit_by_doc[doc_path]
+        meta = meta_by_path.get(hit.file_path)
+        title = getattr(meta, "title", None) or hit.file_path
         tags = getattr(meta, "tags", None) or []
         context = getattr(meta, "context", None)
         token_count = getattr(meta, "token_count", None)
         summary = getattr(meta, "summary", None)
         last_modified = getattr(meta, "last_modified", None)
+        hp = (hit.heading_path or "").strip() or None
         results.append(
             SearchResult(
-                file_path=path,
+                file_path=hit.file_path,
                 title=title,
-                score=by_path[path],
+                score=by_doc[doc_path],
                 context=context,
                 tags=tags or [],
                 snippet=None,
@@ -147,6 +148,9 @@ def rank(
                 summary=summary,
                 source="whoosh",
                 last_modified=last_modified,
+                chunk_index=hit.chunk_index,
+                heading_path=hp,
             )
         )
-    return results
+
+    return _cap_chunks_per_file(results, max_chunks_per_file)

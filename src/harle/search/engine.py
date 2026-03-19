@@ -31,6 +31,7 @@ from harle.search.types import (
     SearchResult,
 )
 from harle.search import whoosh_index
+from harle.search.whoosh_index import WhooshSearchHit
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def _whoosh_search_safe(
     whoosh_terms: list[str],
     candidate_paths: set[str],
     log: logging.Logger,
-) -> list[tuple[str, float]] | None:
+) -> list[WhooshSearchHit] | None:
     """Run Whoosh search; return None on failure (e.g. corrupt index)."""
     try:
         return whoosh_index.search(
@@ -240,26 +241,30 @@ class SearchEngine:
 
             if not expanded.whoosh_terms or not index_path:
                 # No Whoosh terms or no index: return empty file results but still memory/prior
-                whoosh_results = []
+                whoosh_hits: list[WhooshSearchHit] = []
             else:
                 if not index_path.exists() or not whoosh_index.exists_in(str(index_path)):
                     etrace.detail("Whoosh index missing, rebuilding", module="search")
                     _rebuild_whoosh_index(self.dataset_path, index_path, logger)
-                    whoosh_results = _whoosh_search_safe(
+                    whoosh_hits = _whoosh_search_safe(
                         index_path, expanded.whoosh_terms, candidate_paths, logger,
                     ) or []
                 else:
-                    whoosh_results = _whoosh_search_safe(
+                    raw_hits = _whoosh_search_safe(
                         index_path, expanded.whoosh_terms, candidate_paths, logger,
                     )
-                    if whoosh_results is None:
+                    if raw_hits is None:
                         etrace.detail("Whoosh index corrupt, rebuilding", module="search")
                         _rebuild_whoosh_index(self.dataset_path, index_path, logger)
-                        whoosh_results = _whoosh_search_safe(
+                        whoosh_hits = _whoosh_search_safe(
                             index_path, expanded.whoosh_terms, candidate_paths, logger,
                         ) or []
+                    else:
+                        whoosh_hits = raw_hits
 
-            top_paths = [p for p, _ in whoosh_results[: max_results * 2]]
+            top_paths = list(
+                {h.file_path for h in whoosh_hits[: max_results * 3]}
+            )
             enriched = get_entries_by_paths(session, top_paths)
             for e in enriched:
                 candidates_by_path[e.file_path] = e
@@ -301,8 +306,11 @@ class SearchEngine:
                 if r.files_used:
                     prior_run_files.update(r.files_used)
 
+            from harle.config import get_chunking_config
+
+            chunking_cfg = get_chunking_config()
             ranked = rank(
-                whoosh_results,
+                whoosh_hits,
                 candidates_by_path,
                 tag_filters=expanded.tag_filters or [],
                 prior_run_files=prior_run_files,
@@ -311,6 +319,7 @@ class SearchEngine:
                 recency_weight=getattr(config, "recency_weight", 0.15),
                 source_priority_weight=getattr(config, "source_priority_weight", 0.15),
                 prior_run_weight=getattr(config, "prior_run_weight", 0.10),
+                max_chunks_per_file=chunking_cfg.max_chunks_per_file_in_results,
             )
             limited = ranked[:max_results]
 

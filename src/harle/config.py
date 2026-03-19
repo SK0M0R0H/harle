@@ -346,3 +346,55 @@ def get_search_config() -> SearchConfig:
         match_tag_vocabulary=_expansion_bool("match_tag_vocabulary", True),
         use_stemming=_expansion_bool("use_stemming", True),
     )
+
+
+# ---------------------------------------------------------------------------
+# Chunking config (Best Practices §5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChunkingConfig:
+    """Vault chunking for Whoosh indexing and retrieval."""
+
+    enabled: bool = True
+    knowledge_token_threshold: int = 2000
+    contextual_enrichment: bool = True
+    paragraph_max_tokens: int = 600
+    max_chunks_per_file_in_results: int = 3
+
+
+def get_chunking_config() -> ChunkingConfig:
+    """Load ``chunking`` section from config.yaml (defaults if absent)."""
+    load_environment()
+    data = _load_yaml(_resolve_config_path())
+    raw = data.get("chunking")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _bool(key: str, default: bool) -> bool:
+        val = raw.get(key)
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in {"1", "true", "yes"}
+        return default
+
+    def _int(key: str, default: int) -> int:
+        val = raw.get(key)
+        if val is None:
+            return default
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return default
+
+    return ChunkingConfig(
+        enabled=_bool("enabled", True),
+        knowledge_token_threshold=_int("knowledge_token_threshold", 2000),
+        contextual_enrichment=_bool("contextual_enrichment", True),
+        paragraph_max_tokens=_int("paragraph_max_tokens", 600),
+        max_chunks_per_file_in_results=_int("max_chunks_per_file_in_results", 3),
+    )
