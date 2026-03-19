@@ -112,6 +112,19 @@ class TestSearchResultItem:
         assert item.context is None
         assert item.tags == []
         assert item.snippet is None
+        assert item.chunk_index is None
+        assert item.heading_path is None
+
+    def test_chunk_fields(self) -> None:
+        item = SearchResultItem(
+            file_path="w.md",
+            title="W",
+            score=1.0,
+            chunk_index=2,
+            heading_path="W > Beta",
+        )
+        assert item.chunk_index == 2
+        assert item.heading_path == "W > Beta"
 
 
 class TestSearchResponse:

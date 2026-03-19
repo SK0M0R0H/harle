@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from harle.search import whoosh_index
 
 
@@ -21,7 +19,7 @@ class TestWhooshIndex:
                 tags=["x", "y"],
                 content="body a",
                 context="work",
-                raw_content="",
+                raw_content="---\n---\nbody a",
             ),
         ]
         reader.dataset_path = tmp_path
@@ -32,7 +30,7 @@ class TestWhooshIndex:
         assert (tmp_path / "idx").exists()
         assert whoosh_index.exists_in(str(tmp_path / "idx"))
 
-    def test_search_returns_paths_and_scores(self, tmp_path: Path) -> None:
+    def test_search_returns_hits_with_paths(self, tmp_path: Path) -> None:
         reader = MagicMock()
         reader.read_all.return_value = [
             MagicMock(
@@ -41,7 +39,7 @@ class TestWhooshIndex:
                 tags=["trello"],
                 content="stalled tasks in Trello",
                 context="work",
-                raw_content="",
+                raw_content="---\n---\nstalled tasks in Trello",
             ),
         ]
         reader.dataset_path = tmp_path
@@ -55,8 +53,10 @@ class TestWhooshIndex:
         )
 
         assert len(results) == 1
-        assert results[0][0] == "doc.md"
-        assert results[0][1] > 0
+        assert results[0].doc_path == "doc.md"
+        assert results[0].file_path == "doc.md"
+        assert results[0].chunk_index is None
+        assert results[0].score > 0
 
     def test_search_empty_terms_returns_empty(self, tmp_path: Path) -> None:
         reader = MagicMock()
@@ -82,7 +82,7 @@ class TestWhooshIndex:
                 tags=[],
                 content="word",
                 context="work",
-                raw_content="",
+                raw_content="word",
             ),
             MagicMock(
                 relative_path="b.md",
@@ -90,7 +90,7 @@ class TestWhooshIndex:
                 tags=[],
                 content="word",
                 context="work",
-                raw_content="",
+                raw_content="word",
             ),
         ]
         reader.dataset_path = tmp_path
@@ -104,4 +104,43 @@ class TestWhooshIndex:
         )
 
         assert len(results) == 1
-        assert results[0][0] == "a.md"
+        assert results[0].file_path == "a.md"
+
+    def test_workflow_multi_chunk_doc_paths(self, tmp_path: Path) -> None:
+        reader = MagicMock()
+        body = """# W
+
+Intro.
+
+## One
+
+first section uniquephrase
+
+## Two
+
+second section
+"""
+        reader.read_all.return_value = [
+            MagicMock(
+                relative_path="workflows/w.md",
+                title="W",
+                tags=[],
+                content=body,
+                context="work",
+                raw_content=body,
+            ),
+        ]
+        reader.dataset_path = tmp_path
+        whoosh_index.build_from_scratch(reader, tmp_path / "idx")
+
+        results = whoosh_index.search(
+            tmp_path / "idx",
+            whoosh_terms=["uniquephrase"],
+            candidate_paths={"workflows/w.md"},
+            limit=10,
+        )
+        assert results, "expected BM25 hit on chunked workflow"
+        paths = {r.doc_path for r in results}
+        assert any(p.startswith("workflows/w.md#") for p in paths)
+        hit = next(r for r in results if r.chunk_index is not None)
+        assert hit.file_path == "workflows/w.md"

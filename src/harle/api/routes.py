@@ -362,6 +362,8 @@ def build_router(
                     context=r.context,
                     tags=r.tags,
                     snippet=r.snippet,
+                    chunk_index=getattr(r, "chunk_index", None),
+                    heading_path=getattr(r, "heading_path", None),
                 )
                 for r in results
             ],

@@ -20,8 +20,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from harle.config import get_chunking_config
 from harle.context.tokenizer import count_tokens
 from harle.dataset.reader import DatasetFile, DatasetReader
+from harle.indexing.chunker import chunk_file, get_strategy
 from harle.debug import etrace
 from harle.search.engine import SearchEngine
 from harle.search.types import SearchQuery, SearchResult
@@ -521,17 +523,62 @@ class ContextAssembler:
         """
         body: str | None = None
         if full_content:
-            body = self._load_file_content(result.file_path)
+            body = self._load_search_result_body(result)
         if body is None:
             body = result.snippet or ""
 
         tags_line = f"Tags: {', '.join(result.tags)}" if result.tags else ""
-        heading = f"### {result.title} ({result.file_path})"
+        display_title = result.heading_path or result.title
+        heading = f"### {display_title} ({result.file_path})"
         pieces = [heading]
         if tags_line:
             pieces.append(tags_line)
         pieces.append(f"\n{body.strip()}")
+        if result.chunk_index is not None:
+            hint_scope = f" — {result.heading_path}" if result.heading_path else ""
+            pieces.append(
+                f"\n\n_Excerpt from `{result.file_path}`{hint_scope}. "
+                f"For the full document, read that path._"
+            )
         return "\n".join(pieces)
+
+    def _load_search_result_body(self, result: SearchResult) -> str | None:
+        """Load file body or the matching chunk (deterministic re-chunk)."""
+        if self.dataset_reader is None:
+            return None
+        try:
+            df = self.dataset_reader.read_file(result.file_path)
+        except (FileNotFoundError, UnicodeDecodeError, OSError):
+            return None
+
+        body = df.content or ""
+        if result.chunk_index is None:
+            return body
+
+        cfg = get_chunking_config()
+        token_count = count_tokens(body)
+        strategy = get_strategy(
+            result.file_path,
+            token_count,
+            chunking_enabled=cfg.enabled,
+            knowledge_token_threshold=cfg.knowledge_token_threshold,
+        )
+        chunks = chunk_file(
+            content=df.content or "",
+            title=df.title,
+            tags=list(df.tags or []),
+            context=df.context,
+            relative_path=result.file_path,
+            strategy=strategy,
+            contextual_enrichment=cfg.contextual_enrichment,
+            paragraph_max_tokens=cfg.paragraph_max_tokens,
+        )
+        for c in chunks:
+            if c.chunk_index == result.chunk_index:
+                if cfg.contextual_enrichment and c.context_block:
+                    return (c.context_block + c.content).strip()
+                return c.content.strip()
+        return body
 
     def _load_file_content(self, relative_path: str) -> str | None:
         """Load full Markdown body for a dataset file.

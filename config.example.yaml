@@ -35,6 +35,14 @@ HARLE_RUN_LOG_STORE_CONTEXT: true   # Set true to save assembled prompt in logs/
 # Vault tools (dataset_search, dataset_read_file) are enabled automatically
 # when HARLE_DATASET_PATH is configured.
 
+# --- Chunking ---
+# chunking:
+#   enabled: true                      # false = one Whoosh doc per file (whole body)
+#   knowledge_token_threshold: 2000    # knowledge/ files at or above → H2 section chunks
+#   contextual_enrichment: true        # prepend [Source]/[Section]/[Tags]/[Summary] to indexed text
+#   paragraph_max_tokens: 600          # logs/ paragraph merge target
+#   max_chunks_per_file_in_results: 3  # cap chunks from the same file in ranked results
+
 # --- Vault imports ---
 # Options for import sources (harle import ...). Loaded from the vault_imports key.
 # vault_imports:

@@ -17,6 +17,7 @@ from sqlalchemy import select
 from harle.dataset.reader import DatasetReader
 from harle.db.connection import Database
 from harle.db.models import FileIndex
+from harle.context.tokenizer import count_tokens
 from harle.indexing.hasher import compute_hash
 
 logger = logging.getLogger(__name__)
@@ -37,10 +38,12 @@ class Indexer:
         db: Database,
         reader: DatasetReader,
         whoosh_index_path: str | Path | None = None,
+        chunking=None,
     ) -> None:
         self.db = db
         self.reader = reader
         self.whoosh_index_path = Path(whoosh_index_path).expanduser() if whoosh_index_path else None
+        self._chunking = chunking
 
     def sync(self) -> int:
         """Perform a full incremental sync.
@@ -80,7 +83,7 @@ class Indexer:
                     row.context = f.context
                     row.content_hash = content_hash
                     row.char_count = len(f.raw_content)
-                    row.token_count = len(f.raw_content) // 4
+                    row.token_count = count_tokens(f.raw_content or "")
                     row.last_modified = now
                     row.last_indexed = now
                     logger.info("Updated index for %s", f.relative_path)
@@ -95,7 +98,7 @@ class Indexer:
                             context=f.context,
                             content_hash=content_hash,
                             char_count=len(f.raw_content),
-                            token_count=len(f.raw_content) // 4,
+                            token_count=count_tokens(f.raw_content or ""),
                             last_modified=now,
                             last_indexed=now,
                         )
@@ -112,11 +115,15 @@ class Indexer:
                 changes += 1
 
         if self.whoosh_index_path and (whoosh_updated or whoosh_deleted):
+            from harle.config import get_chunking_config
+
+            chunking = self._chunking if self._chunking is not None else get_chunking_config()
             _sync_whoosh(
                 self.whoosh_index_path,
                 whoosh_updated,
                 whoosh_deleted,
                 now,
+                chunking,
             )
 
         logger.info(
@@ -132,6 +139,7 @@ def _sync_whoosh(
     updated: list,
     deleted: list[str],
     modified: datetime,
+    chunking,
 ) -> None:
     """Update the Whoosh index for the given added/updated and deleted paths."""
     from harle.search import whoosh_index
@@ -162,10 +170,16 @@ def _sync_whoosh(
                 content=(f.content or "").strip(),
                 context=(f.context or "").strip(),
                 modified=modified,
+                chunking=chunking,
+                file_obj=f,
             )
         for path in deleted:
-            whoosh_index.remove_document(writer, path)
+            whoosh_index.remove_documents_by_file_path(writer, path)
         writer.commit()
-        logger.info("Whoosh index updated: %d doc(s), %d removed.", len(updated), len(deleted))
+        logger.info(
+            "Whoosh index updated: %d file(s) re-indexed, %d file(s) removed.",
+            len(updated),
+            len(deleted),
+        )
     except Exception as e:
         logger.warning("Whoosh index update failed: %s", e)

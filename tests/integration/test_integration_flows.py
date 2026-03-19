@@ -335,7 +335,7 @@ class TestSearchPhase2Pipeline:
             limit=10,
         )
         assert len(whoosh_results) >= 1
-        assert whoosh_results[0][0] == "knowledge/work/fixture.md"
+        assert whoosh_results[0].file_path == "knowledge/work/fixture.md"
 
         path_to_metadata = {}
         for f in reader.read_all():
