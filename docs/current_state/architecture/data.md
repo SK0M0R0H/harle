@@ -18,7 +18,7 @@ Reference TRD: [Harle Data Layer — Architecture & Functionality](../../trd/arc
 
 The Data Layer is **partially implemented**. The fundamental principle (data external to the repo) is respected via config and env vars. The **User Dataset** has a working reader, writer, frontmatter parser, and sync convention; the **Indexer** has the full six-table schema, hash-based sync for `file_index`, **tiktoken `token_count`**, and optional **chunk-aware Whoosh** updates when `whoosh_index_path` is set; the **Run Logger** writes result and optional context files to `logs/YYYY/MM/` and records runs in the DB. The **Search Algorithm** supports Phase 1 (keyword) and Phase 2 (Whoosh with **chunking**); Phase 3 (pgvector / hybrid RRF) is not implemented. LLM auto-summary for `file_index.summary` is not wired.
 
-From the **Data Layer Best Practices** TRD: token budgeting, P0/P1 assembly, frontmatter, the files-vs-DB split, **chunking** (`indexing/chunker.py`), **chunk-aware Whoosh indexing**, and **contextual enrichment at index time** (prepended metadata block per §5.3) are in place. Gaps include hybrid/semantic retrieval (pgvector), memory integration in context assembly, auto-generated LLM summaries, and explicit lost-in-the-middle ordering.
+From the **Data Layer Best Practices** TRD: token budgeting, explicit §4.2 context ordering (top/supporting split + end-positioned conversation history), frontmatter, the files-vs-DB split, **chunking** (`indexing/chunker.py`), **chunk-aware Whoosh indexing**, and **contextual enrichment at index time** (prepended metadata block per §5.3) are in place. Gaps include hybrid/semantic retrieval (pgvector), memory/prior-run retrieval integration, and auto-generated LLM summaries.
 
 ---
 
@@ -55,7 +55,7 @@ From the **Data Layer Best Practices** TRD: token budgeting, P0/P1 assembly, fro
 |------------------|----------------|-------|
 | §2 How to structure Markdown files | Partially implemented | Frontmatter (title, tags, context) parsed and used. Heading hierarchy and file-length sweet spot are conventions only; no enforcement. |
 | §3 PostgreSQL vs. files split | Implemented | Files as source of truth; file_index mirrors metadata; runs/artifacts/memories/conversations/embeddings in DB; logs in vault + runs row. |
-| §4 Context Assembly: order (lost in the middle) | Partially implemented | P0 first, user request last; no explicit “supporting results in middle, conversation + request at end”; no memories/prior runs in assembly. |
+| §4 Context Assembly: order (lost in the middle) | Implemented | Assembler now uses explicit order: P0, top search results, supporting search results, prior-run slot, memory slot, conversation history; user request remains last as the user-role message. |
 | §4 Context Assembly: token budget | Implemented | Context assembler uses context_window and input_ratio; P0 always included, P1 until budget exhausted. |
 | §4 Context Assembly: relevance scoring | Implemented | Weighted ranker in Phase 2 uses the six-term formula (search_relevance + metadata_match + recency + source_priority + memory_confidence + prior_run_success); `memory_confidence` is currently stubbed to 0.0 for file-only ranking. See [search.md](./search.md). |
 | §5 Chunking strategy | Implemented | `indexing/chunker.py`: prompts/policies/examples + short knowledge whole-file; workflows + long knowledge H2 sections with cascading `heading_path`; logs paragraph chunks; context block prepended for BM25; Whoosh multi-doc per file; assembler re-chunks for P1. LLM per-chunk summary not implemented. |
@@ -66,9 +66,9 @@ From the **Data Layer Best Practices** TRD: token budgeting, P0/P1 assembly, fro
 | §7 Memory: summarize old conversation | Partially implemented | Conversation history can be included; no multi-resolution summarization of older turns. |
 | §8 Metadata: required frontmatter | Partially implemented | title, tags, context supported; priority, summary, last_updated optional; not enforced. |
 | §8 Auto-generated metadata | Partially implemented | `token_count` via tiktoken; content_hash present; no LLM summary, key_entities, or questions_answered. |
-| §9 Failure-mode mitigations | Partially implemented | Token budget and P0/P1 reduce over-retrieval; no deduplication by content hash; no explicit lost-in-the-middle ordering. |
+| §9 Failure-mode mitigations | Partially implemented | Token budget and explicit start/middle/end ordering mitigate lost-in-the-middle; no deduplication by content hash; no reranking. |
 | §11 Actionable (file authoring) | Convention / docs | Docs and cursor rules encourage frontmatter, headings, length; not enforced by code. |
-| §11 Actionable (data layer) | Partially implemented | Chunking and index-time context blocks implemented; pgvector hybrid and LLM summaries not implemented; ordering and budget partially there. |
+| §11 Actionable (data layer) | Partially implemented | Chunking and index-time context blocks implemented; explicit assembly ordering implemented; pgvector hybrid and LLM summaries not implemented. |
 
 ---
 
@@ -129,7 +129,7 @@ Missing file: row removed from file_index. TRD also describes Whoosh rebuild on 
 
 ### 5. Memory and metadata (Best Practices §7, §8)
 
-- **Memory (§7):** Memories table exists and can store preferences/decisions; search and context assembler do not yet query memories or include them in context. No confidence scoring, evolution, or save_memory tool. **Unlock:** Personalized context and fewer repeated questions.
+- **Memory (§7):** Memories table exists and can store preferences/decisions; assembler has a dedicated memory slot in the middle section, but search does not yet populate `memory_results` in normal flow. No confidence scoring, evolution, or save_memory tool. **Unlock:** Personalized context and fewer repeated questions.
 - **Metadata and tagging (§8):** Required/recommended frontmatter (title, tags, context) are supported but not enforced; priority, summary, last_updated in frontmatter are optional. No auto-generated summary, key_entities, or questions_answered. **Unlock:** Better retrieval and multi-hop query performance without reading full files.
 
 ---
@@ -168,7 +168,7 @@ Missing file: row removed from file_index. TRD also describes Whoosh rebuild on 
 
 ### 6. Failure-mode mitigations (Best Practices §9)
 
-**Missing:** Explicit placement of high-priority content at start and end of context (lost-in-the-middle); deduplication by content hash in assembly; optional reranking to reduce orphaned-chunk and over-retrieval issues.
+**Missing:** Deduplication by content hash in assembly; optional reranking to reduce orphaned-chunk and over-retrieval issues.
 
 **What this would unlock:** More robust behaviour with long context and many candidates.
 
@@ -182,7 +182,7 @@ Missing file: row removed from file_index. TRD also describes Whoosh rebuild on 
 
 **From Data Layer Best Practices:**
 
-- **Context order:** Assembler does not implement the full “lost in the middle” order (supporting results in middle, conversation + request at end); it focuses on P0 then P1 and user request last.
+- **Context order:** Explicit start/middle/end ordering is implemented; prior-run and memory slots are present but currently populated only when upstream retrieval provides `prior_runs` / `memory_results`.
 - **Memory:** Memories table is not yet used by search or context assembly; no save_memory tool or confidence/evolution logic.
 - **Chunking:** Implemented for Whoosh + assembler; LLM-generated per-chunk summaries (Anthropic-style) are not implemented—context block uses heading path and first sentence/line heuristics.
 

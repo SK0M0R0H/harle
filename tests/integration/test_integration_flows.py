@@ -305,7 +305,7 @@ class TestApiPipelines:
         assert provider.last_system_prompt is not None
         assert "## Active Role" in provider.last_system_prompt
         assert "## Active Policies" in provider.last_system_prompt
-        assert "## Relevant Dataset Files" in provider.last_system_prompt
+        assert "## Top Search Results" in provider.last_system_prompt
         assert "Q2 milestone is integration testing." in provider.last_system_prompt
 
     def test_context_assembler_orders_p1_by_relevance_score(
