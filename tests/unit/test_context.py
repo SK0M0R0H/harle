@@ -443,6 +443,26 @@ class TestAssembleP1:
 
         assert "Tags:" not in pkg.system_prompt
 
+    def test_search_results_are_ordered_by_score(self) -> None:
+        low = _make_search_result(
+            file_path="knowledge/work/low.md",
+            title="Low Score",
+            score=1.0,
+        )
+        high = _make_search_result(
+            file_path="knowledge/work/high.md",
+            title="High Score",
+            score=9.0,
+        )
+        engine = self._mock_engine([low, high])
+        asm = ContextAssembler(search_engine=engine)
+        pkg = asm.assemble(message="order by score", context="work")
+
+        assert [r.file_path for r in pkg.search_results] == [
+            "knowledge/work/high.md",
+            "knowledge/work/low.md",
+        ]
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ContextAssembler — P0/P1 deduplication

@@ -205,12 +205,19 @@ class SearchEngine:
 
     def _search_phase2(self, query: SearchQuery, config: object, t0: float) -> SearchResponse:
         """Phase 2: expand -> pre-filter -> Whoosh -> enrich -> memory/prior -> rank."""
+        from harle.config import SearchConfig
+
+        defaults = SearchConfig()
         index_path_str = getattr(config, "whoosh_index_path", "") or ""
         index_path = Path(index_path_str).expanduser() if index_path_str else None
-        max_results = query.max_results if query.max_results is not None and query.max_results > 0 else (getattr(config, "max_results", 10) or 10)
-        max_mem = getattr(config, "max_memories", 10) or 10
-        max_runs = getattr(config, "max_prior_runs", 5) or 5
-        min_conf = getattr(config, "memory_min_confidence", 0.3) or 0.0
+        max_results = (
+            query.max_results
+            if query.max_results is not None and query.max_results > 0
+            else (getattr(config, "max_results", defaults.max_results) or defaults.max_results)
+        )
+        max_mem = getattr(config, "max_memories", defaults.max_memories) or defaults.max_memories
+        max_runs = getattr(config, "max_prior_runs", defaults.max_prior_runs) or defaults.max_prior_runs
+        min_conf = getattr(config, "memory_min_confidence", defaults.memory_min_confidence) or 0.0
 
         etrace.detail(
             "Search query",
@@ -322,11 +329,14 @@ class SearchEngine:
                 candidates_by_path,
                 tag_filters=expanded.tag_filters or [],
                 prior_run_files=prior_run_files,
-                bm25_weight=getattr(config, "bm25_weight", 0.40),
-                tag_match_weight=getattr(config, "tag_match_weight", 0.20),
-                recency_weight=getattr(config, "recency_weight", 0.15),
-                source_priority_weight=getattr(config, "source_priority_weight", 0.15),
-                prior_run_weight=getattr(config, "prior_run_weight", 0.10),
+                bm25_weight=getattr(config, "bm25_weight", defaults.bm25_weight),
+                tag_match_weight=getattr(config, "tag_match_weight", defaults.tag_match_weight),
+                recency_weight=getattr(config, "recency_weight", defaults.recency_weight),
+                source_priority_weight=getattr(config, "source_priority_weight", defaults.source_priority_weight),
+                memory_confidence_weight=getattr(
+                    config, "memory_confidence_weight", defaults.memory_confidence_weight,
+                ),
+                prior_run_weight=getattr(config, "prior_run_weight", defaults.prior_run_weight),
                 max_chunks_per_file=chunking_cfg.max_chunks_per_file_in_results,
             )
             limited = ranked[:max_results]

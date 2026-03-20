@@ -2,7 +2,7 @@
 title: "Harle Search Algorithm — Current State"
 tags: [search, current-state, architecture, whoosh, retrieval, implementation-status]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-20
 summary: "Tracks what the Search Algorithm implements vs the TRD (search.md and data.md), and what each missing part would unlock."
 ---
 
@@ -47,7 +47,7 @@ The Search Algorithm supports **Phase 1 (keyword) and Phase 2 (Whoosh)**. The de
 
 | Best practices § | Current status | Notes |
 |------------------|----------------|-------|
-| §4.4 Context Assembly: relevance scoring | Implemented | Weighted formula in ranker (bm25 + tag_match + recency + source_priority + prior_run). |
+| §4.4 Context Assembly: relevance scoring | Implemented | Six-term weighted formula in ranker (search_relevance/bm25 + metadata_match/tag_match + recency + source_priority + memory_confidence + prior_run_success); `memory_confidence` is currently stubbed to 0.0 for file-only ranking. |
 | §5 Chunking strategy | Implemented | Section/paragraph chunking, cascading paths, index-time enrichment; assembler re-chunk for P1. |
 | §6 Retrieval: hybrid search | Partially implemented | BM25 (Whoosh) implemented; pgvector and RRF for hybrid not yet. |
 | §6 Metadata pre-filter (scope, tags, P0) | Implemented | get_candidates_for_search with context/global, tag overlap, P0 injection. |
@@ -71,7 +71,7 @@ The Search Algorithm supports **Phase 1 (keyword) and Phase 2 (Whoosh)**. The de
 - **query_expander.py:** Tokenize, stopwords, Whoosh stemming, tag vocabulary match, optional role terms; returns `ExpandedQuery`.
 - **file_index:** `get_all_tags`, `get_candidates_for_search` (context + global, tag overlap, P0 injection), `get_entries_by_paths`.
 - **whoosh_index.py:** Schema (incl. chunk fields), `build_from_scratch`, `update_document` / `write_file_to_index`, `remove_documents_by_file_path`, `search` → `list[WhooshSearchHit]`, candidate filter on `file_path`.
-- **ranker.py:** Input `list[WhooshSearchHit]`; normalized BM25 + tag_match + recency + source_priority + prior_run_bonus; cap chunks per file; returns `list[SearchResult]`.
+- **ranker.py:** Input `list[WhooshSearchHit]`; normalized BM25 + tag_match + recency + source_priority + memory_confidence + prior_run_bonus; cap chunks per file; returns `list[SearchResult]`.
 
 ### 4. Memory and prior-run lookup
 
@@ -115,11 +115,11 @@ SearchResponse includes `memory_results` and `prior_runs`; the Context Assembler
 
 **What this would unlock:** Personalized and run-history context without extra tool rounds.
 
-### 4. Ranking: RRF and full Best Practices §4.4 formula
+### 4. Ranking: RRF across retrievers
 
-**Missing:** Reciprocal Rank Fusion across retrievers; explicit `memory_confidence` and `prior_run_success` terms in the ranker score.
+**Missing:** Reciprocal Rank Fusion across retrievers.
 
-**What this would unlock:** Stable fusion when Phase 3 adds a second ranked list; closer match to TRD scoring narrative.
+**What this would unlock:** Stable fusion when Phase 3 adds a second ranked list.
 
 ### 5. TRD-level error handling
 
