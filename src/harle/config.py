@@ -236,11 +236,12 @@ class SearchConfig:
     whoosh_index_path: str = ""
     title_boost: float = 2.0
     tag_boost: float = 1.5
-    bm25_weight: float = 0.40
+    bm25_weight: float = 0.35
     tag_match_weight: float = 0.20
     recency_weight: float = 0.15
     source_priority_weight: float = 0.15
-    prior_run_weight: float = 0.10
+    memory_confidence_weight: float = 0.10
+    prior_run_weight: float = 0.05
     memory_min_confidence: float = 0.3
     max_memories: int = 10
     max_prior_runs: int = 5
@@ -271,45 +272,36 @@ def get_search_config() -> SearchConfig:
     """
     load_environment()
     raw = _get_search_config_raw()
+    defaults = SearchConfig()
 
-    def _str(key: str, default: str) -> str:
+    def _str(key: str, fallback: str) -> str:
         env_key = "HARLE_SEARCH_ENGINE" if key == "engine" else "HARLE_WHOOSH_INDEX_PATH"
         env_val = os.getenv(env_key)
         if env_val is not None:
             return env_val.strip()
         val = raw.get(key)
-        return str(val).strip() if val is not None else default
+        return str(val).strip() if val is not None else fallback
 
-    def _int(key: str, default: int) -> int:
+    def _int(key: str, fallback: int) -> int:
         val = raw.get(key)
         if val is None:
-            return default
+            return fallback
         try:
             return int(val)
         except (TypeError, ValueError):
-            return default
+            return fallback
 
-    def _float(key: str, default: float) -> float:
+    def _float(key: str, fallback: float) -> float:
         val = raw.get(key)
         if val is None:
-            return default
+            return fallback
         try:
             return float(val)
         except (TypeError, ValueError):
-            return default
+            return fallback
 
-    def _bool(key: str, default: bool) -> bool:
-        val = raw.get(key)
-        if val is None:
-            return default
-        if isinstance(val, bool):
-            return val
-        if isinstance(val, str):
-            return val.lower() in {"1", "true", "yes"}
-        return default
-
-    engine = _str("engine", "whoosh")
-    whoosh_index_path = _str("whoosh_index_path", _default_whoosh_index_path())
+    engine = _str("engine", defaults.engine)
+    whoosh_index_path = _str("whoosh_index_path", defaults.whoosh_index_path)
     if not whoosh_index_path:
         whoosh_index_path = _default_whoosh_index_path()
 
@@ -317,34 +309,35 @@ def get_search_config() -> SearchConfig:
     if not isinstance(expansion, dict):
         expansion = {}
 
-    def _expansion_bool(key: str, default: bool) -> bool:
+    def _expansion_bool(key: str, fallback: bool) -> bool:
         val = expansion.get(key)
         if val is None:
-            return default
+            return fallback
         if isinstance(val, bool):
             return val
         if isinstance(val, str):
             return val.lower() in {"1", "true", "yes"}
-        return default
+        return fallback
 
     return SearchConfig(
         engine=engine,
-        max_results=_int("max_results", 10),
-        min_score=_float("min_score", 0.1),
+        max_results=_int("max_results", defaults.max_results),
+        min_score=_float("min_score", defaults.min_score),
         whoosh_index_path=whoosh_index_path,
-        title_boost=_float("title_boost", 2.0),
-        tag_boost=_float("tag_boost", 1.5),
-        bm25_weight=_float("bm25_weight", 0.40),
-        tag_match_weight=_float("tag_match_weight", 0.20),
-        recency_weight=_float("recency_weight", 0.15),
-        source_priority_weight=_float("source_priority_weight", 0.15),
-        prior_run_weight=_float("prior_run_weight", 0.10),
-        memory_min_confidence=_float("memory_min_confidence", 0.3),
-        max_memories=_int("max_memories", 10),
-        max_prior_runs=_int("max_prior_runs", 5),
-        add_role_terms=_expansion_bool("add_role_terms", True),
-        match_tag_vocabulary=_expansion_bool("match_tag_vocabulary", True),
-        use_stemming=_expansion_bool("use_stemming", True),
+        title_boost=_float("title_boost", defaults.title_boost),
+        tag_boost=_float("tag_boost", defaults.tag_boost),
+        bm25_weight=_float("bm25_weight", defaults.bm25_weight),
+        tag_match_weight=_float("tag_match_weight", defaults.tag_match_weight),
+        recency_weight=_float("recency_weight", defaults.recency_weight),
+        source_priority_weight=_float("source_priority_weight", defaults.source_priority_weight),
+        memory_confidence_weight=_float("memory_confidence_weight", defaults.memory_confidence_weight),
+        prior_run_weight=_float("prior_run_weight", defaults.prior_run_weight),
+        memory_min_confidence=_float("memory_min_confidence", defaults.memory_min_confidence),
+        max_memories=_int("max_memories", defaults.max_memories),
+        max_prior_runs=_int("max_prior_runs", defaults.max_prior_runs),
+        add_role_terms=_expansion_bool("add_role_terms", defaults.add_role_terms),
+        match_tag_vocabulary=_expansion_bool("match_tag_vocabulary", defaults.match_tag_vocabulary),
+        use_stemming=_expansion_bool("use_stemming", defaults.use_stemming),
     )
 
 

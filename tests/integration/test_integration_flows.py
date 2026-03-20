@@ -48,6 +48,42 @@ class _StaticSearchEngine:
         )
 
 
+class _UnorderedSearchEngine:
+    """Search engine stub returning unsorted results by score."""
+
+    def search(self, query: SearchQuery) -> SearchResponse:
+        return SearchResponse(
+            file_results=[
+                SearchResult(
+                    file_path="knowledge/work/low.md",
+                    title="Low Priority",
+                    score=0.2,
+                    context=query.context,
+                    tags=["low"],
+                    snippet="Low relevance snippet.",
+                ),
+                SearchResult(
+                    file_path="knowledge/work/high.md",
+                    title="High Priority",
+                    score=0.9,
+                    context=query.context,
+                    tags=["high"],
+                    snippet="High relevance snippet.",
+                ),
+            ],
+            memory_results=[],
+            prior_runs=[],
+            query_metadata=QueryMetadata(
+                original_query=query.query,
+                expanded_terms=[],
+                tags_matched=[],
+                candidates_count=2,
+                search_time_ms=0.0,
+                phase="keyword",
+            ),
+        )
+
+
 class _CapturingProvider:
     """Deterministic provider that records the latest system prompt."""
 
@@ -271,6 +307,59 @@ class TestApiPipelines:
         assert "## Active Policies" in provider.last_system_prompt
         assert "## Relevant Dataset Files" in provider.last_system_prompt
         assert "Q2 milestone is integration testing." in provider.last_system_prompt
+
+    def test_context_assembler_orders_p1_by_relevance_score(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Assembler uses relevance score ordering even if search returns unsorted results."""
+        _write_vault_file(
+            tmp_path / "knowledge/work/high.md",
+            """
+            ---
+            title: High Priority
+            context: work
+            ---
+            High relevance body.
+            """,
+        )
+        _write_vault_file(
+            tmp_path / "knowledge/work/low.md",
+            """
+            ---
+            title: Low Priority
+            context: work
+            ---
+            Low relevance body.
+            """,
+        )
+
+        monkeypatch.setattr("harle.context.assembler.count_tokens", lambda text: max(1, len(text.split())))
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *args, **kwargs: None)
+
+        from tests.conftest import make_in_memory_chat_db
+
+        provider = _CapturingProvider()
+        assembler = ContextAssembler(
+            search_engine=_UnorderedSearchEngine(),
+            dataset_reader=DatasetReader(str(tmp_path)),
+        )
+        db = make_in_memory_chat_db()
+        orchestrator = OrchestratorService(
+            llm_provider=provider,
+            context_assembler=assembler,
+            db=db,
+        )
+
+        response = orchestrator.chat(request=RunRequest(message="Prioritize results", context="work"))
+
+        assert response.status == "completed"
+        assert provider.last_system_prompt is not None
+
+        high_ix = provider.last_system_prompt.index("High Priority (knowledge/work/high.md)")
+        low_ix = provider.last_system_prompt.index("Low Priority (knowledge/work/low.md)")
+        assert high_ix < low_ix
 
     def test_import_endpoint_full_pipeline_writes_vault(self, tmp_path: Path) -> None:
         """POST /import with dummy source runs full pipeline and writes files to vault."""

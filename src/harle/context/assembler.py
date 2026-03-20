@@ -453,7 +453,22 @@ class ContextAssembler:
             max_results=self.max_search_results,
         )
         response = self.search_engine.search(query)
-        return getattr(response, "file_results", response)
+        results = list(getattr(response, "file_results", response))
+        results.sort(key=lambda r: r.score, reverse=True)
+        if results:
+            top_score = results[0].score
+            bottom_score = results[-1].score
+        else:
+            top_score = 0.0
+            bottom_score = 0.0
+        etrace.detail(
+            "P1 results scored",
+            module="context_assembler",
+            results_count=len(results),
+            top_score=round(top_score, 4),
+            bottom_score=round(bottom_score, 4),
+        )
+        return results
 
     def _format_search_results(
         self,

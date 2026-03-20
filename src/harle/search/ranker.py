@@ -11,8 +11,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from math import exp
 
+from harle.config import SearchConfig
 from harle.search.types import SearchResult
 from harle.search.whoosh_index import WhooshSearchHit
+
+_DEFAULT_SEARCH_CONFIG = SearchConfig()
 
 # Vault directory -> priority score (0–1). TRD: prompts/policies P0, workflows P1, etc.
 _SOURCE_PRIORITY: dict[str, float] = {
@@ -83,11 +86,12 @@ def rank(
     *,
     tag_filters: list[str],
     prior_run_files: set[str] | None = None,
-    bm25_weight: float = 0.25,
-    tag_match_weight: float = 0.20,
-    recency_weight: float = 0.15,
-    source_priority_weight: float = 0.63,
-    prior_run_weight: float = 0.10,
+    bm25_weight: float = _DEFAULT_SEARCH_CONFIG.bm25_weight,
+    tag_match_weight: float = _DEFAULT_SEARCH_CONFIG.tag_match_weight,
+    recency_weight: float = _DEFAULT_SEARCH_CONFIG.recency_weight,
+    source_priority_weight: float = _DEFAULT_SEARCH_CONFIG.source_priority_weight,
+    memory_confidence_weight: float = _DEFAULT_SEARCH_CONFIG.memory_confidence_weight,
+    prior_run_weight: float = _DEFAULT_SEARCH_CONFIG.prior_run_weight,
     max_chunks_per_file: int = 3,
 ) -> list[SearchResult]:
     """Combine Whoosh scores with metadata and return ranked SearchResults."""
@@ -113,6 +117,8 @@ def rank(
         tag_s = _tag_match_score(tags, tag_filters)
         rec_s = _recency_score(last_mod)
         src_s = _source_priority_score(hit.file_path)
+        # Files currently have no memory-linked confidence signal.
+        mem_conf = 0.0
         prior_s = _prior_run_bonus(hit.file_path, prior_run_files)
 
         final = (
@@ -120,6 +126,7 @@ def rank(
             + tag_match_weight * tag_s
             + recency_weight * rec_s
             + source_priority_weight * src_s
+            + memory_confidence_weight * mem_conf
             + prior_run_weight * prior_s
         )
         by_doc[hit.doc_path] = final

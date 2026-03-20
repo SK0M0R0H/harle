@@ -1,0 +1,19 @@
+---
+description: Best-effort test environment setup and execution
+alwaysApply: true
+---
+# Best-Effort Test Setup
+
+When running tests, do best-effort environment setup before reporting failure.
+
+- Verify local prerequisites first (working directory, `PYTHONPATH`, virtual environment, required env vars).
+- If tests fail due to missing local setup, retry with safe adjustments (for example setting `PYTHONPATH=src` in this repo).
+- If failures suggest sandbox or network restrictions, rerun with required permissions (`full_network` first, `all` only when clearly needed).
+- If elevated permissions are required, explicitly request them and explain why they are needed.
+- When blocked by external constraints (proxy, credentials, private service), ask the user for the minimum required input (token, env var, permission approval).
+- Do not stop at the first setup-related failure; attempt at least one reasonable remediation path.
+- Distinguish clearly between:
+  1) environment/setup failures,
+  2) unrelated pre-existing test failures,
+  3) regressions introduced by current changes.
+- In final status, report what was attempted, what succeeded, what remains blocked, and exact next command the user can run.

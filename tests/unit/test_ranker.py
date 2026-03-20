@@ -90,5 +90,42 @@ class TestRank:
             "knowledge/x.md": _meta("knowledge/x.md"),
             "prompts/y.md": _meta("prompts/y.md"),
         }
-        results = rank(whoosh_results, path_to_metadata, tag_filters=[])
+        results = rank(
+            whoosh_results,
+            path_to_metadata,
+            tag_filters=[],
+            bm25_weight=0.05,
+            source_priority_weight=0.95,
+        )
         assert results[0].file_path == "prompts/y.md"
+
+    def test_memory_confidence_weight_is_accepted(self) -> None:
+        whoosh_results = [_hit("a.md", 1.0), _hit("b.md", 0.9)]
+        path_to_metadata = {
+            "a.md": _meta("a.md"),
+            "b.md": _meta("b.md"),
+        }
+        results = rank(
+            whoosh_results,
+            path_to_metadata,
+            tag_filters=[],
+            memory_confidence_weight=0.50,
+        )
+        assert len(results) == 2
+
+    def test_memory_confidence_stub_keeps_scores_unchanged(self) -> None:
+        whoosh_results = [_hit("a.md", 1.0), _hit("b.md", 0.9)]
+        path_to_metadata = {
+            "a.md": _meta("a.md"),
+            "b.md": _meta("b.md"),
+        }
+        baseline = rank(whoosh_results, path_to_metadata, tag_filters=[])
+        weighted = rank(
+            whoosh_results,
+            path_to_metadata,
+            tag_filters=[],
+            memory_confidence_weight=0.80,
+        )
+
+        assert [r.file_path for r in baseline] == [r.file_path for r in weighted]
+        assert [r.score for r in baseline] == pytest.approx([r.score for r in weighted])

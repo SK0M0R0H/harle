@@ -2,7 +2,7 @@
 title: "Harle Data Layer — Current State"
 tags: [data-layer, current-state, architecture, dataset, indexer, search, implementation-status]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-20
 summary: "Tracks what the Data Layer (User Dataset, Indexer, Search) implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -57,7 +57,7 @@ From the **Data Layer Best Practices** TRD: token budgeting, P0/P1 assembly, fro
 | §3 PostgreSQL vs. files split | Implemented | Files as source of truth; file_index mirrors metadata; runs/artifacts/memories/conversations/embeddings in DB; logs in vault + runs row. |
 | §4 Context Assembly: order (lost in the middle) | Partially implemented | P0 first, user request last; no explicit “supporting results in middle, conversation + request at end”; no memories/prior runs in assembly. |
 | §4 Context Assembly: token budget | Implemented | Context assembler uses context_window and input_ratio; P0 always included, P1 until budget exhausted. |
-| §4 Context Assembly: relevance scoring | Partially implemented | Weighted ranker in Phase 2 (BM25 + tag + recency + source + prior run); memory_confidence and prior_run_success not in formula. See [search.md](./search.md). |
+| §4 Context Assembly: relevance scoring | Implemented | Weighted ranker in Phase 2 uses the six-term formula (search_relevance + metadata_match + recency + source_priority + memory_confidence + prior_run_success); `memory_confidence` is currently stubbed to 0.0 for file-only ranking. See [search.md](./search.md). |
 | §5 Chunking strategy | Implemented | `indexing/chunker.py`: prompts/policies/examples + short knowledge whole-file; workflows + long knowledge H2 sections with cascading `heading_path`; logs paragraph chunks; context block prepended for BM25; Whoosh multi-doc per file; assembler re-chunks for P1. LLM per-chunk summary not implemented. |
 | §6 Retrieval: hybrid search | Partially implemented | BM25 (Whoosh) + chunking; no pgvector, RRF, or reranking. See [search.md](./search.md). |
 | §6 Metadata pre-filter (scope, tags, P0) | Implemented | See [search.md](./search.md): context + global, tag overlap, P0 prompts/policies. |
