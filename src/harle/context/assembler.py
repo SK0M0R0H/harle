@@ -26,7 +26,12 @@ from harle.dataset.reader import DatasetFile, DatasetReader
 from harle.indexing.chunker import chunk_file, get_strategy
 from harle.debug import etrace
 from harle.search.engine import SearchEngine
-from harle.search.types import SearchQuery, SearchResult
+from harle.search.types import (
+    MemoryResult,
+    PriorRunResult,
+    SearchQuery,
+    SearchResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONTEXT_WINDOW: int = 128_000
 DEFAULT_INPUT_RATIO: float = 0.80
 DEFAULT_MAX_SEARCH_RESULTS: int = 10
+DEFAULT_TOP_RESULTS_COUNT: int = 5
 
 # Vault directories whose files are always loaded as P0.
 _P0_DIRECTORIES: tuple[str, ...] = ("prompts/", "policies/")
@@ -69,10 +75,13 @@ class ContextPackage:
 
     system_prompt: str
     search_results: list[SearchResult] = field(default_factory=list)
+    supporting_results: list[SearchResult] = field(default_factory=list)
     p0_files: list[str] = field(default_factory=list)
     total_tokens: int = 0
     budget_remaining: int = 0
     conversation_messages_included: int = 0
+    memories_included: int = 0
+    prior_runs_included: int = 0
 
 
 # ── Assembler ─────────────────────────────────────────────────────────
@@ -86,9 +95,8 @@ class ContextAssembler:
     * **P0 (mandatory):** Agent prompts + policies — always included.
     * **P1 (critical):** Dataset search results — added within budget.
 
-    Higher-priority tiers (P2–P4: external data, memories,
-    conversation history) are not yet implemented and will be added
-    as the corresponding modules become available.
+    Additional middle/end tiers (supporting results, prior runs,
+    memories, conversation history) are included when data is available.
 
     Args:
         search_engine: Search engine for querying the indexed dataset.
@@ -132,6 +140,9 @@ class ContextAssembler:
         context: str,
         agent_role: str | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        memory_results: list[MemoryResult] | None = None,
+        prior_run_results: list[PriorRunResult] | None = None,
+        top_results_count: int = DEFAULT_TOP_RESULTS_COUNT,
     ) -> ContextPackage:
         """Build a complete context package for an LLM request.
 
@@ -162,7 +173,9 @@ class ContextAssembler:
             and metadata about what was included.
         """
         budget = self.token_budget
-        sections: list[str] = []
+        start_sections: list[str] = []
+        middle_sections: list[str] = []
+        end_sections: list[str] = []
         tokens_used = 0
 
         # ── P0: agent prompt + policies (mandatory) ──────────────────
@@ -173,7 +186,7 @@ class ContextAssembler:
             )
         p0_text = self._format_p0(p0_files, context=context, agent_role=agent_role)
         p0_tokens = count_tokens(p0_text)
-        sections.append(p0_text)
+        start_sections.append(p0_text)
         tokens_used += p0_tokens
         logger.debug("P0 (prompt + policies): %d tokens", p0_tokens)
         etrace.detail(
@@ -193,36 +206,51 @@ class ContextAssembler:
             r for r in search_results if r.file_path not in p0_paths
         ]
 
-        included_results: list[SearchResult] = []
+        top_results: list[SearchResult] = []
+        supporting_results: list[SearchResult] = []
+        p1_supporting_text = ""
         if search_results:
-            p1_text, included_results = self._format_search_results(
-                results=search_results,
+            split_index = max(0, top_results_count)
+            top_candidates = search_results[:split_index]
+            supporting_candidates = search_results[split_index:]
+
+            p1_top_text, top_results = self._format_search_results(
+                results=top_candidates,
                 budget_remaining=budget - tokens_used,
+                section_header="## Top Search Results",
             )
-            if p1_text:
-                p1_tokens = count_tokens(p1_text)
-                sections.append(p1_text)
-                tokens_used += p1_tokens
+            if p1_top_text:
+                p1_top_tokens = count_tokens(p1_top_text)
+                start_sections.append(p1_top_text)
+                tokens_used += p1_top_tokens
                 logger.debug(
-                    "P1 (search results): %d tokens, %d files",
-                    p1_tokens,
-                    len(included_results),
+                    "P1-top (search results): %d tokens, %d files",
+                    p1_top_tokens,
+                    len(top_results),
                 )
                 etrace.detail(
-                    "P1 loaded",
+                    "P1 top results loaded",
                     module="context_assembler",
-                    results_included=len(included_results),
-                    tokens=p1_tokens,
+                    results_included=len(top_results),
+                    tokens=p1_top_tokens,
                 )
-                for i, r in enumerate(included_results[:5]):
-                    etrace.trace_entry(
-                        "Search result included",
-                        module="context_assembler",
-                        file_path=r.file_path,
-                        score=round(r.score, 2),
-                    )
+            p1_supporting_text, supporting_results = self._format_search_results(
+                results=supporting_candidates,
+                budget_remaining=budget - tokens_used,
+                section_header="## Supporting Search Results",
+            )
+            if p1_supporting_text:
+                p1_supporting_tokens = count_tokens(p1_supporting_text)
 
-        # ── P4: conversation history (background) ────────────────────
+            for r in (top_results + supporting_results)[:5]:
+                etrace.trace_entry(
+                    "Search result included",
+                    module="context_assembler",
+                    file_path=r.file_path,
+                    score=round(r.score, 2),
+                )
+
+        # ── End: conversation history (high-priority) ─────────────────
         conv_messages_included = 0
         if conversation_history:
             p4_text, conv_messages_included = self._format_conversation_history(
@@ -231,7 +259,7 @@ class ContextAssembler:
             )
             if p4_text:
                 p4_tokens = count_tokens(p4_text)
-                sections.append(p4_text)
+                end_sections.append(p4_text)
                 tokens_used += p4_tokens
                 logger.debug(
                     "P4 (conversation history): %d tokens, %d messages",
@@ -243,6 +271,62 @@ class ContextAssembler:
                     module="context_assembler",
                     messages_included=conv_messages_included,
                     tokens=p4_tokens,
+                )
+
+        # ── Middle: supporting + prior runs + memories (lower-priority) ──
+        if p1_supporting_text:
+            p1_supporting_tokens = count_tokens(p1_supporting_text)
+            if tokens_used + p1_supporting_tokens <= budget:
+                middle_sections.append(p1_supporting_text)
+                tokens_used += p1_supporting_tokens
+                logger.debug(
+                    "P1-supporting (search results): %d tokens, %d files",
+                    p1_supporting_tokens,
+                    len(supporting_results),
+                )
+                etrace.detail(
+                    "P1 supporting results loaded",
+                    module="context_assembler",
+                    results_included=len(supporting_results),
+                    tokens=p1_supporting_tokens,
+                )
+            else:
+                supporting_results = []
+
+        prior_runs_included = 0
+        prior_runs = prior_run_results or []
+        if prior_runs:
+            prior_runs_text, prior_runs_included = self._format_prior_runs(
+                prior_runs=prior_runs,
+                budget_remaining=budget - tokens_used,
+            )
+            if prior_runs_text:
+                prior_runs_tokens = count_tokens(prior_runs_text)
+                middle_sections.append(prior_runs_text)
+                tokens_used += prior_runs_tokens
+                etrace.detail(
+                    "Prior runs loaded",
+                    module="context_assembler",
+                    prior_runs_included=prior_runs_included,
+                    tokens=prior_runs_tokens,
+                )
+
+        memories_included = 0
+        memories = memory_results or []
+        if memories:
+            memories_text, memories_included = self._format_memories(
+                memories=memories,
+                budget_remaining=budget - tokens_used,
+            )
+            if memories_text:
+                memories_tokens = count_tokens(memories_text)
+                middle_sections.append(memories_text)
+                tokens_used += memories_tokens
+                etrace.detail(
+                    "Memories loaded",
+                    module="context_assembler",
+                    memories_included=memories_included,
+                    tokens=memories_tokens,
                 )
 
         budget_remaining = budget - tokens_used
@@ -260,14 +344,18 @@ class ContextAssembler:
             remaining=budget_remaining,
         )
 
+        sections = [*start_sections, *middle_sections, *end_sections]
         system_prompt = "\n\n".join(sections)
         return ContextPackage(
             system_prompt=system_prompt,
-            search_results=included_results,
+            search_results=top_results + supporting_results,
+            supporting_results=supporting_results,
             p0_files=[f.relative_path for f in p0_files],
             total_tokens=tokens_used,
             budget_remaining=budget_remaining,
             conversation_messages_included=conv_messages_included,
+            memories_included=memories_included,
+            prior_runs_included=prior_runs_included,
         )
 
     # ── P0 helpers ────────────────────────────────────────────────────
@@ -475,6 +563,7 @@ class ContextAssembler:
         *,
         results: list[SearchResult],
         budget_remaining: int,
+        section_header: str,
     ) -> tuple[str, list[SearchResult]]:
         """Format search results into context text within *budget_remaining*.
 
@@ -489,7 +578,7 @@ class ContextAssembler:
         if not results:
             return "", []
 
-        header = "## Relevant Dataset Files"
+        header = section_header
         header_tokens = count_tokens(header)
         if header_tokens > budget_remaining:
             return "", []
@@ -521,6 +610,79 @@ class ContextAssembler:
             return "", []
 
         return "\n\n".join(parts), included
+
+    @staticmethod
+    def _format_prior_runs(
+        *,
+        prior_runs: list[PriorRunResult],
+        budget_remaining: int,
+    ) -> tuple[str, int]:
+        """Format similar prior runs into a context section."""
+        if not prior_runs:
+            return "", 0
+
+        header = "## Prior Run Results"
+        header_tokens = count_tokens(header)
+        if header_tokens >= budget_remaining:
+            return "", 0
+
+        remaining = budget_remaining - header_tokens
+        entries: list[str] = []
+        included = 0
+        for run in prior_runs:
+            summary = run.result_summary or "No summary available."
+            files_used = ", ".join(run.files_used) if run.files_used else "None"
+            entry = (
+                f"### Run {run.run_id}\n"
+                f"- Agent: {run.agent}\n"
+                f"- User request: {run.user_request}\n"
+                f"- Summary: {summary}\n"
+                f"- Files used: {files_used}"
+            )
+            entry_tokens = count_tokens(entry)
+            if entry_tokens > remaining:
+                break
+            entries.append(entry)
+            included += 1
+            remaining -= entry_tokens
+
+        if not entries:
+            return "", 0
+        return "\n\n".join([header, *entries]), included
+
+    @staticmethod
+    def _format_memories(
+        *,
+        memories: list[MemoryResult],
+        budget_remaining: int,
+    ) -> tuple[str, int]:
+        """Format relevant memory entries into a context section."""
+        if not memories:
+            return "", 0
+
+        header = "## Relevant Memories"
+        header_tokens = count_tokens(header)
+        if header_tokens >= budget_remaining:
+            return "", 0
+
+        remaining = budget_remaining - header_tokens
+        entries: list[str] = []
+        included = 0
+        for memory in memories:
+            entry = (
+                f"- [{memory.category}] (confidence: {memory.confidence:.2f}) "
+                f"{memory.content}"
+            )
+            entry_tokens = count_tokens(entry)
+            if entry_tokens > remaining:
+                break
+            entries.append(entry)
+            included += 1
+            remaining -= entry_tokens
+
+        if not entries:
+            return "", 0
+        return "\n\n".join([header, *entries]), included
 
     def _render_result_entry(
         self,

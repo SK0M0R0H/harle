@@ -17,7 +17,7 @@ from harle.context.assembler import (
 )
 from harle.context.tokenizer import count_tokens
 from harle.dataset.reader import DatasetReader
-from harle.search.types import SearchResult
+from harle.search.types import MemoryResult, PriorRunResult, SearchResult
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -66,6 +66,30 @@ def _write_vault_file(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return target
+
+
+def _make_memory_result(
+    content: str = "User prefers concise bullets.",
+    category: str = "preference",
+    confidence: float = 0.9,
+) -> MemoryResult:
+    return MemoryResult(content=content, category=category, confidence=confidence)
+
+
+def _make_prior_run_result(
+    run_id: str = "run-1",
+    user_request: str = "Plan sprint goals",
+    result_summary: str | None = "Drafted sprint goals summary.",
+    files_used: list[str] | None = None,
+    agent: str = "secretary",
+) -> PriorRunResult:
+    return PriorRunResult(
+        run_id=run_id,
+        user_request=user_request,
+        result_summary=result_summary,
+        files_used=files_used or ["knowledge/work/sprint.md"],
+        agent=agent,
+    )
 
 
 def _assemble_without_dependencies(context: str = "work") -> ContextPackage:
@@ -122,23 +146,32 @@ class TestContextPackage:
         pkg = ContextPackage(system_prompt="prompt")
         assert pkg.system_prompt == "prompt"
         assert pkg.search_results == []
+        assert pkg.supporting_results == []
         assert pkg.p0_files == []
         assert pkg.total_tokens == 0
         assert pkg.budget_remaining == 0
+        assert pkg.memories_included == 0
+        assert pkg.prior_runs_included == 0
 
     def test_all_fields(self) -> None:
         result = _make_search_result()
         pkg = ContextPackage(
             system_prompt="sys",
             search_results=[result],
+            supporting_results=[result],
             p0_files=["prompts/agent.md"],
             total_tokens=100,
             budget_remaining=500,
+            memories_included=1,
+            prior_runs_included=1,
         )
         assert pkg.search_results == [result]
+        assert pkg.supporting_results == [result]
         assert pkg.p0_files == ["prompts/agent.md"]
         assert pkg.total_tokens == 100
         assert pkg.budget_remaining == 500
+        assert pkg.memories_included == 1
+        assert pkg.prior_runs_included == 1
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -377,7 +410,7 @@ class TestAssembleP1:
         pkg = asm.assemble(message="find stuff", context="work")
 
         assert "Important File" in pkg.system_prompt
-        assert "Relevant Dataset Files" in pkg.system_prompt
+        assert "Top Search Results" in pkg.system_prompt
 
     def test_snippet_used_when_no_reader(self) -> None:
         result = _make_search_result(snippet="this is the snippet text")
@@ -413,7 +446,7 @@ class TestAssembleP1:
         pkg = asm.assemble(message="nothing", context="work")
 
         assert pkg.search_results == []
-        assert "Relevant Dataset Files" not in pkg.system_prompt
+        assert "Top Search Results" not in pkg.system_prompt
 
     def test_search_engine_receives_correct_query(self) -> None:
         engine = self._mock_engine([])
@@ -462,6 +495,60 @@ class TestAssembleP1:
             "knowledge/work/high.md",
             "knowledge/work/low.md",
         ]
+
+    def test_top_and_supporting_sections_are_explicit(self) -> None:
+        results = [
+            _make_search_result(
+                file_path=f"knowledge/work/file-{i}.md",
+                title=f"File {i}",
+                score=float(20 - i),
+            )
+            for i in range(8)
+        ]
+        engine = self._mock_engine(results)
+        asm = ContextAssembler(search_engine=engine)
+        pkg = asm.assemble(
+            message="organize files",
+            context="work",
+            top_results_count=3,
+        )
+
+        assert "## Top Search Results" in pkg.system_prompt
+        assert "## Supporting Search Results" in pkg.system_prompt
+        assert len(pkg.search_results) == 8
+        assert len(pkg.supporting_results) == 5
+        assert pkg.supporting_results[0].file_path == "knowledge/work/file-3.md"
+
+    def test_middle_slots_are_between_supporting_and_conversation(self) -> None:
+        engine = self._mock_engine(
+            [_make_search_result(file_path="knowledge/work/top.md", title="Top", score=10.0)]
+        )
+        asm = ContextAssembler(search_engine=engine)
+        history = [{"role": "user", "content": "latest question"}]
+        pkg = asm.assemble(
+            message="follow-up",
+            context="work",
+            top_results_count=0,
+            prior_run_results=[_make_prior_run_result()],
+            memory_results=[_make_memory_result()],
+            conversation_history=history,
+        )
+
+        supporting_pos = pkg.system_prompt.index("## Supporting Search Results")
+        prior_runs_pos = pkg.system_prompt.index("## Prior Run Results")
+        memories_pos = pkg.system_prompt.index("## Relevant Memories")
+        conversation_pos = pkg.system_prompt.index("## Conversation History")
+        assert supporting_pos < prior_runs_pos < memories_pos < conversation_pos
+
+    def test_conversation_section_is_last_when_present(self) -> None:
+        engine = self._mock_engine([_make_search_result(title="Top File")])
+        asm = ContextAssembler(search_engine=engine)
+        pkg = asm.assemble(
+            message="next step",
+            context="work",
+            conversation_history=[{"role": "user", "content": "recency matters"}],
+        )
+        assert pkg.system_prompt.rstrip().endswith("**User:** recency matters")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -804,7 +891,9 @@ class TestFormatSearchResults:
     def test_empty_results(self) -> None:
         asm = ContextAssembler()
         text, included = asm._format_search_results(
-            results=[], budget_remaining=10_000
+            results=[],
+            budget_remaining=10_000,
+            section_header="## Top Search Results",
         )
         assert text == ""
         assert included == []
@@ -813,18 +902,22 @@ class TestFormatSearchResults:
         asm = ContextAssembler()
         result = _make_search_result(title="My File", snippet="content here")
         text, included = asm._format_search_results(
-            results=[result], budget_remaining=10_000
+            results=[result],
+            budget_remaining=10_000,
+            section_header="## Top Search Results",
         )
 
         assert len(included) == 1
         assert "My File" in text
-        assert "## Relevant Dataset Files" in text
+        assert "## Top Search Results" in text
 
     def test_zero_budget_returns_empty(self) -> None:
         asm = ContextAssembler()
         result = _make_search_result()
         text, included = asm._format_search_results(
-            results=[result], budget_remaining=0
+            results=[result],
+            budget_remaining=0,
+            section_header="## Supporting Search Results",
         )
         assert text == ""
         assert included == []
@@ -841,9 +934,47 @@ class TestFormatSearchResults:
         ]
         # Small budget: header + maybe one result
         text, included = asm._format_search_results(
-            results=results, budget_remaining=300
+            results=results,
+            budget_remaining=300,
+            section_header="## Supporting Search Results",
         )
         assert len(included) < 20
+
+
+class TestFormatPriorRuns:
+    def test_empty_prior_runs(self) -> None:
+        text, count = ContextAssembler._format_prior_runs(
+            prior_runs=[], budget_remaining=10_000
+        )
+        assert text == ""
+        assert count == 0
+
+    def test_prior_runs_rendered(self) -> None:
+        text, count = ContextAssembler._format_prior_runs(
+            prior_runs=[_make_prior_run_result()],
+            budget_remaining=10_000,
+        )
+        assert count == 1
+        assert "## Prior Run Results" in text
+        assert "Plan sprint goals" in text
+
+
+class TestFormatMemories:
+    def test_empty_memories(self) -> None:
+        text, count = ContextAssembler._format_memories(
+            memories=[], budget_remaining=10_000
+        )
+        assert text == ""
+        assert count == 0
+
+    def test_memories_rendered(self) -> None:
+        text, count = ContextAssembler._format_memories(
+            memories=[_make_memory_result()],
+            budget_remaining=10_000,
+        )
+        assert count == 1
+        assert "## Relevant Memories" in text
+        assert "User prefers concise bullets." in text
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1129,7 +1260,7 @@ class TestAssembleEndToEnd:
         # Structural sections present.
         assert "Agent Roles" in pkg.system_prompt
         assert "Active Policies" in pkg.system_prompt
-        assert "Relevant Dataset Files" in pkg.system_prompt
+        assert "Top Search Results" in pkg.system_prompt
 
         # Token accounting.
         assert pkg.total_tokens > 0
