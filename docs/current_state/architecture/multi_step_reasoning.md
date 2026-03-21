@@ -69,7 +69,7 @@ This matches the TRD’s Level 1 architecture: one agentic loop, tools called mi
 
 ### 4. Level 4: Reflection and self-critique
 
-- **Trigger:** `should_reflect()` in `orchestrator/reflection.py` — master switch `HARLE_REFLECTION_ENABLED`, minimum tool-call count, comma-separated keywords/roles in config, `planned` routing, OR logic. Keyword/role lists empty in config disable those rules.
+- **Trigger:** `should_reflect()` in `orchestrator/reflection.py` — master switch `HARLE_REFLECTION_ENABLED`, minimum **tool-invocation** count (`HARLE_REFLECTION_MIN_TOOL_CALLS`: planning + execution runs, each `tool_call_item` counted; repeated calls to the same tool count), comma-separated keywords/roles in config, `planned` routing, OR logic. Keyword/role lists empty in config disable those rules.
 - **Reflection call:** `run_reflection` builds a critic `Agent` (no tools, `max_turns=1`); JSON verdict `pass` / `improve`; malformed output fails open (pass).
 - **Improvement pass:** `run_improvement` / `apply_reflection_pipeline` — at most one follow-up `Runner.run_sync` with execution tools; `HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS` defaults to `HARLE_MAX_ITERATIONS`; does not re-enter reflection.
 - **Think tool:** `harle.tools.think.module` — async `think(reasoning)` returning `""`; registered in `factory._register_think` when `think_tool_enabled` is true (`main.py` passes `HARLE_THINK_TOOL_ENABLED`).

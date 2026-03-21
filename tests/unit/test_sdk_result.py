@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from harle.orchestrator.sdk_result import (
     build_planning_tool_context_section,
+    count_tool_call_invocations,
     extract_run_metadata,
 )
 
@@ -16,6 +17,29 @@ class TestExtractRunMetadata:
         tools, turns = extract_run_metadata(r)
         assert tools == []
         assert turns == 0
+
+    def test_dedupes_tool_names_but_invocation_count_sees_repeats(self) -> None:
+        """extract_run_metadata keeps unique names; count_tool_call_invocations counts each call."""
+        calls = [
+            SimpleNamespace(type="tool_call_item", raw_item=SimpleNamespace(name="dataset_search")),
+            SimpleNamespace(type="tool_call_item", raw_item=SimpleNamespace(name="dataset_search")),
+            SimpleNamespace(type="tool_call_item", raw_item=SimpleNamespace(name="dataset_search")),
+        ]
+        r = SimpleNamespace(new_items=calls, raw_responses=[])
+        tools, _turns = extract_run_metadata(r)
+        assert tools == ["dataset_search"]
+        assert count_tool_call_invocations(r) == 3
+
+
+class TestCountToolCallInvocations:
+    def test_empty(self) -> None:
+        r = SimpleNamespace(new_items=[], raw_responses=[])
+        assert count_tool_call_invocations(r) == 0
+
+    def test_ignores_non_tool_items(self) -> None:
+        msg = SimpleNamespace(type="message_output_item")
+        r = SimpleNamespace(new_items=[msg], raw_responses=[])
+        assert count_tool_call_invocations(r) == 0
 
 
 class TestBuildPlanningToolContextSection:

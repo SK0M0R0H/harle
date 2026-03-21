@@ -130,12 +130,16 @@ class ReflectionRunRecord:
 def should_reflect(
     *,
     user_message: str,
-    tools_called: list[str],
+    tool_invocation_count: int,
     routing_method: str | None,
     agent_role: str,
     config: ReflectionConfig,
 ) -> tuple[bool, str]:
     """Determine whether a reflection pass should run (OR logic).
+
+    ``tool_invocation_count`` must be the total number of tool **invocations**
+    in the run (including repeats of the same tool). Do not pass deduplicated
+    unique tool-name counts.
 
     Returns:
         Tuple of (should_reflect, trigger_reason) for logging.
@@ -147,7 +151,7 @@ def should_reflect(
     routing = (routing_method or "direct").strip().lower()
     msg_l = user_message.lower()
 
-    if len(tools_called) >= config.min_tool_calls:
+    if tool_invocation_count >= config.min_tool_calls:
         return True, "tool_count"
 
     if config.trigger_keywords:
@@ -348,6 +352,7 @@ def apply_reflection_pipeline(
     user_message: str,
     draft_text: str,
     merged_tools: list[str],
+    tool_invocation_count: int,
     routing_method: str | None,
     agent_role: str,
     base_instructions: str,
@@ -365,7 +370,7 @@ def apply_reflection_pipeline(
     """
     triggered, reason = should_reflect(
         user_message=user_message,
-        tools_called=merged_tools,
+        tool_invocation_count=tool_invocation_count,
         routing_method=routing_method,
         agent_role=agent_role,
         config=reflection_config,
@@ -380,7 +385,7 @@ def apply_reflection_pipeline(
     if not triggered:
         return draft_text, merged_tools, False, False, None
 
-    count_at_trigger = len(merged_tools)
+    count_at_trigger = tool_invocation_count
     r_model = reflection_model_override or reflection_config.model or execution_model
     verdict = run_reflection(
         user_message=user_message,

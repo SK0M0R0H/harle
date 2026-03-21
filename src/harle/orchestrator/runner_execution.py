@@ -18,7 +18,7 @@ from harle.orchestrator.reflection import (
     ReflectionRunRecord,
     apply_reflection_pipeline,
 )
-from harle.orchestrator.sdk_result import extract_run_metadata
+from harle.orchestrator.sdk_result import count_tool_call_invocations, extract_run_metadata
 from harle.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,7 @@ def run_agent_execution(
     max_turns = max_iterations
     plan = None
     plan_tools: list[str] = []
+    plan_invocations = 0
     planning_tool_context = ""
     routing_method = "direct"
 
@@ -118,7 +119,7 @@ def run_agent_execution(
 
         if complexity == "complex":
             pm = planning_model or model
-            plan, plan_tools, planning_tool_context = generate_plan(
+            plan, plan_tools, planning_tool_context, plan_invocations = generate_plan(
                 user_message=user_message,
                 base_instructions=base_instructions,
                 model=pm,
@@ -190,6 +191,8 @@ def run_agent_execution(
         )
 
     exec_tools, turns_used = extract_run_metadata(result)
+    exec_invocations = count_tool_call_invocations(result)
+    tool_invocation_total = plan_invocations + exec_invocations
     merged_tools = list(dict.fromkeys([*plan_tools, *exec_tools]))
 
     text = result.final_output
@@ -205,6 +208,7 @@ def run_agent_execution(
                 user_message=user_message,
                 draft_text=text_str,
                 merged_tools=merged_tools,
+                tool_invocation_count=tool_invocation_total,
                 routing_method=routing_method,
                 agent_role=agent_role,
                 base_instructions=base_instructions,

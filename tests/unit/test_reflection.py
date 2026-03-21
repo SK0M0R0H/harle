@@ -43,7 +43,7 @@ class TestShouldReflect:
         c = _cfg(enabled=False)
         ok, reason = should_reflect(
             user_message="research X",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="researcher",
             config=c,
@@ -55,7 +55,7 @@ class TestShouldReflect:
         c = _cfg()
         ok, reason = should_reflect(
             user_message="hi",
-            tools_called=["a", "b", "c"],
+            tool_invocation_count=3,
             routing_method="direct",
             agent_role="assistant",
             config=c,
@@ -67,7 +67,7 @@ class TestShouldReflect:
         c = _cfg()
         ok, reason = should_reflect(
             user_message="Please write a research note",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="assistant",
             config=c,
@@ -79,7 +79,7 @@ class TestShouldReflect:
         c = _cfg()
         ok, reason = should_reflect(
             user_message="hi",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="planned",
             agent_role="assistant",
             config=c,
@@ -91,7 +91,7 @@ class TestShouldReflect:
         c = _cfg()
         ok, reason = should_reflect(
             user_message="hi",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="researcher",
             config=c,
@@ -103,7 +103,7 @@ class TestShouldReflect:
         c = _cfg()
         ok, reason = should_reflect(
             user_message="hi",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="assistant",
             config=c,
@@ -115,18 +115,43 @@ class TestShouldReflect:
         c = _cfg(trigger_keywords_csv="")
         ok, _ = should_reflect(
             user_message="research topic",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="assistant",
             config=c,
         )
         assert ok is False
 
+    def test_tool_count_fires_when_same_tool_called_multiple_times(self) -> None:
+        """Three invocations of one tool satisfy min_tool_calls=3 (not len(unique names))."""
+        c = _cfg(min_tool_calls=3)
+        ok, reason = should_reflect(
+            user_message="hi",
+            tool_invocation_count=3,
+            routing_method="direct",
+            agent_role="assistant",
+            config=c,
+        )
+        assert ok is True
+        assert reason == "tool_count"
+
+    def test_tool_count_below_threshold_one_invocation(self) -> None:
+        c = _cfg(min_tool_calls=3)
+        ok, reason = should_reflect(
+            user_message="hi",
+            tool_invocation_count=1,
+            routing_method="direct",
+            agent_role="assistant",
+            config=c,
+        )
+        assert ok is False
+        assert reason == "no_match"
+
     def test_empty_role_list_disables_role_rule(self) -> None:
         c = _cfg(trigger_roles_csv="")
         ok, _ = should_reflect(
             user_message="hi",
-            tools_called=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="researcher",
             config=c,
@@ -221,6 +246,7 @@ class TestApplyReflectionPipeline:
             user_message="hi",
             draft_text="draft",
             merged_tools=[],
+            tool_invocation_count=0,
             routing_method="direct",
             agent_role="assistant",
             base_instructions="b",
@@ -253,6 +279,7 @@ class TestApplyReflectionPipeline:
             user_message="q",
             draft_text="draft",
             merged_tools=["search_web"],
+            tool_invocation_count=1,
             routing_method="direct",
             agent_role="assistant",
             base_instructions="b",
