@@ -26,8 +26,9 @@ _RESEARCHER_PATTERN = re.compile(
     r"\b(research|report|analyze|compare|market|study)\b",
     re.IGNORECASE,
 )
+# Do not match bare "Harle" — users often address the assistant by name (misroutes to specialist).
 _SPECIALIST_PATTERN = re.compile(
-    r"\b(dataset|prompts?|agent\s+logs?|harle|system\s+improvement)\b",
+    r"\b(dataset|prompts?|agent\s+logs?|system\s+improvement)\b",
     re.IGNORECASE,
 )
 _WRITER_PATTERN = re.compile(

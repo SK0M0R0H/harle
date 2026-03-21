@@ -17,6 +17,7 @@ from harle.orchestrator.router import route, route_with_pinned_role
         ("Check my Trello board for stalled cards", "secretary", "keyword_match"),
         ("Research market trends for Q2", "researcher", "keyword_match"),
         ("Improve Harle dataset quality", "specialist", "keyword_match"),
+        ("Harle, summarize this email thread", "writer", "keyword_match"),
         ("Draft a summary of the meeting", "writer", "keyword_match"),
         ("Hello", "assistant", "default"),
     ],
