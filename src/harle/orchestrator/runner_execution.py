@@ -32,6 +32,9 @@ class AgentExecutionResult:
 
     text: str
     tools_called: list[str] = field(default_factory=list)
+    #: Main execution ``Runner`` turn estimate (``extract_run_metadata``) plus
+    #: reflection critic and improvement passes when Level 4 runs. Planning-agent
+    #: turns are not included (separate ``Runner``).
     turns_used: int = 0
     plan_text: str | None = None
     plan_revisions: list[str] | None = None
@@ -202,22 +205,28 @@ def run_agent_execution(
     reflection_improved: bool | None = None
     reflection_record: ReflectionRunRecord | None = None
 
+    post_execution_turns = 0
     if reflection_config is not None:
-        text_str, merged_tools, reflection_triggered, reflection_improved, reflection_record = (
-            apply_reflection_pipeline(
-                user_message=user_message,
-                draft_text=text_str,
-                merged_tools=merged_tools,
-                tool_invocation_count=tool_invocation_total,
-                routing_method=routing_method,
-                agent_role=agent_role,
-                base_instructions=base_instructions,
-                tools=tools,
-                execution_model=model,
-                reflection_config=reflection_config,
-                reflection_model_override=reflection_model,
-                max_iterations_default=max_iterations,
-            )
+        (
+            text_str,
+            merged_tools,
+            reflection_triggered,
+            reflection_improved,
+            reflection_record,
+            post_execution_turns,
+        ) = apply_reflection_pipeline(
+            user_message=user_message,
+            draft_text=text_str,
+            merged_tools=merged_tools,
+            tool_invocation_count=tool_invocation_total,
+            routing_method=routing_method,
+            agent_role=agent_role,
+            base_instructions=base_instructions,
+            tools=tools,
+            execution_model=model,
+            reflection_config=reflection_config,
+            reflection_model_override=reflection_model,
+            max_iterations_default=max_iterations,
         )
 
     if plan is not None:
@@ -229,7 +238,7 @@ def run_agent_execution(
     return AgentExecutionResult(
         text=text_str,
         tools_called=merged_tools,
-        turns_used=turns_used,
+        turns_used=turns_used + post_execution_turns,
         plan_text=plan.raw_text if plan else None,
         plan_revisions=plan_revisions,
         planning_tool_context=planning_tool_context or None,

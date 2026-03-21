@@ -163,9 +163,11 @@ class TestRunReflection:
     def test_valid_pass_json(self) -> None:
         mock_result = MagicMock()
         mock_result.final_output = '{"verdict": "pass", "assessment": "ok", "improvements": []}'
+        mock_result.new_items = []
+        mock_result.raw_responses = []
         with patch("agents.Runner") as mock_runner:
             mock_runner.run_sync.return_value = mock_result
-            v = run_reflection(
+            v, turns = run_reflection(
                 user_message="q",
                 draft_result="a",
                 model="gpt-4o-mini",
@@ -173,33 +175,40 @@ class TestRunReflection:
         assert v.verdict == "pass"
         assert v.assessment == "ok"
         assert v.improvements == ()
+        assert turns == 0
 
     def test_valid_improve_json(self) -> None:
         mock_result = MagicMock()
         mock_result.final_output = (
             '{"verdict": "improve", "assessment": "gaps", "improvements": ["add sources"]}'
         )
+        mock_result.new_items = []
+        mock_result.raw_responses = []
         with patch("agents.Runner") as mock_runner:
             mock_runner.run_sync.return_value = mock_result
-            v = run_reflection(
+            v, turns = run_reflection(
                 user_message="q",
                 draft_result="a",
                 model="gpt-4o-mini",
             )
         assert v.verdict == "improve"
         assert v.improvements == ("add sources",)
+        assert turns == 0
 
     def test_malformed_json_fail_open(self) -> None:
         mock_result = MagicMock()
         mock_result.final_output = "not json"
+        mock_result.new_items = []
+        mock_result.raw_responses = []
         with patch("agents.Runner") as mock_runner:
             mock_runner.run_sync.return_value = mock_result
-            v = run_reflection(
+            v, turns = run_reflection(
                 user_message="q",
                 draft_result="a",
                 model="gpt-4o-mini",
             )
         assert v.verdict == "pass"
+        assert turns == 0
 
 
 class TestRunImprovement:
@@ -242,7 +251,7 @@ class TestRunImprovement:
 class TestApplyReflectionPipeline:
     def test_skips_when_not_triggered(self) -> None:
         c = _cfg(enabled=False)
-        text, tools, tr, im, rec = apply_reflection_pipeline(
+        text, tools, tr, im, rec, post_turns = apply_reflection_pipeline(
             user_message="hi",
             draft_text="draft",
             merged_tools=[],
@@ -259,6 +268,7 @@ class TestApplyReflectionPipeline:
         assert text == "draft"
         assert tr is False
         assert rec is None
+        assert post_turns == 0
 
     @patch("harle.orchestrator.reflection.run_improvement")
     @patch("harle.orchestrator.reflection.run_reflection")
@@ -268,14 +278,17 @@ class TestApplyReflectionPipeline:
         mock_imp: MagicMock,
     ) -> None:
         c = _cfg(min_tool_calls=1)
-        mock_refl.return_value = ReflectionVerdict(
-            verdict="improve",
-            assessment="x",
-            improvements=("do",),
+        mock_refl.return_value = (
+            ReflectionVerdict(
+                verdict="improve",
+                assessment="x",
+                improvements=("do",),
+            ),
+            4,
         )
         mock_imp.return_value = ("better", ["dataset_search"], 2)
 
-        text, tools, tr, im, rec = apply_reflection_pipeline(
+        text, tools, tr, im, rec, post_turns = apply_reflection_pipeline(
             user_message="q",
             draft_text="draft",
             merged_tools=["search_web"],
@@ -296,6 +309,36 @@ class TestApplyReflectionPipeline:
         assert im is True
         assert rec is not None
         assert rec.improvement_pass_completed is True
+        assert post_turns == 6
+
+    @patch("harle.orchestrator.reflection.run_reflection")
+    def test_post_turns_reflect_only_when_verdict_pass(
+        self,
+        mock_refl: MagicMock,
+    ) -> None:
+        c = _cfg(min_tool_calls=1)
+        mock_refl.return_value = (
+            ReflectionVerdict(verdict="pass", assessment="ok", improvements=()),
+            3,
+        )
+        _text, _tools, tr, im, rec, post_turns = apply_reflection_pipeline(
+            user_message="q",
+            draft_text="draft",
+            merged_tools=[],
+            tool_invocation_count=1,
+            routing_method="direct",
+            agent_role="assistant",
+            base_instructions="b",
+            tools=[],
+            execution_model="m",
+            reflection_config=c,
+            reflection_model_override=None,
+            max_iterations_default=10,
+        )
+        assert tr is True
+        assert im is False
+        assert rec is not None
+        assert post_turns == 3
 
 
 class TestFormatReflectionForVault:

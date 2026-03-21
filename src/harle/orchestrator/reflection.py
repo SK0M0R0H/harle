@@ -173,9 +173,16 @@ def run_reflection(
     user_message: str,
     draft_result: str,
     model: str,
-) -> ReflectionVerdict:
-    """Run the reflection critic (no tools, single turn). Fail-open on parse errors."""
+) -> tuple[ReflectionVerdict, int]:
+    """Run the reflection critic (no tools, single turn). Fail-open on parse errors.
+
+    Returns:
+        ``(verdict, turns_used)`` where *turns_used* comes from the critic
+        ``Runner.run_sync`` result (0 on failure paths before a result exists).
+    """
     from agents import Agent, Runner
+
+    from harle.orchestrator.sdk_result import extract_run_metadata
 
     agent = Agent(
         name="reflection",
@@ -199,12 +206,14 @@ def run_reflection(
             module="orchestrator",
             error_type=type(exc).__name__,
         )
-        return ReflectionVerdict(verdict="pass", assessment="", improvements=())
+        return ReflectionVerdict(verdict="pass", assessment="", improvements=()), 0
+
+    _rtools, reflection_turns = extract_run_metadata(result)
 
     raw = getattr(result, "final_output", None)
     if not raw or not str(raw).strip():
         logger.warning("Reflection call returned empty output; treating as pass")
-        return ReflectionVerdict(verdict="pass", assessment="", improvements=())
+        return ReflectionVerdict(verdict="pass", assessment="", improvements=()), reflection_turns
 
     parsed = _parse_reflection_json(str(raw))
     if parsed is None:
@@ -212,7 +221,7 @@ def run_reflection(
             "Reflection output not valid JSON; treating as pass. Raw: %.200s",
             raw,
         )
-        return ReflectionVerdict(verdict="pass", assessment="", improvements=())
+        return ReflectionVerdict(verdict="pass", assessment="", improvements=()), reflection_turns
 
     verdict_raw = parsed.get("verdict")
     verdict = str(verdict_raw).strip().lower() if verdict_raw is not None else "pass"
@@ -232,10 +241,13 @@ def run_reflection(
         improvements_count=len(improvements),
     )
 
-    return ReflectionVerdict(
-        verdict=verdict,
-        assessment=assessment,
-        improvements=tuple(improvements),
+    return (
+        ReflectionVerdict(
+            verdict=verdict,
+            assessment=assessment,
+            improvements=tuple(improvements),
+        ),
+        reflection_turns,
     )
 
 
@@ -361,12 +373,14 @@ def apply_reflection_pipeline(
     reflection_config: ReflectionConfig,
     reflection_model_override: str | None,
     max_iterations_default: int,
-) -> tuple[str, list[str], bool, bool, ReflectionRunRecord | None]:
+) -> tuple[str, list[str], bool, bool, ReflectionRunRecord | None, int]:
     """After execution, optionally run reflection and at most one improvement pass.
 
     Returns:
         Tuple of (final text, merged tool names including improvement,
-        reflection_triggered, reflection_improved, record for vault).
+        reflection_triggered, reflection_improved, record for vault,
+        post_execution_turns). *post_execution_turns* is the sum of critic and
+        improvement ``Runner`` turn counts (0 when reflection does not run).
     """
     triggered, reason = should_reflect(
         user_message=user_message,
@@ -383,11 +397,11 @@ def apply_reflection_pipeline(
     )
 
     if not triggered:
-        return draft_text, merged_tools, False, False, None
+        return draft_text, merged_tools, False, False, None, 0
 
     count_at_trigger = tool_invocation_count
     r_model = reflection_model_override or reflection_config.model or execution_model
-    verdict = run_reflection(
+    verdict, reflection_turns = run_reflection(
         user_message=user_message,
         draft_result=draft_text,
         model=r_model,
@@ -405,7 +419,7 @@ def apply_reflection_pipeline(
             improvement_turns=None,
             improvement_tools_called=(),
         )
-        return draft_text, merged_tools, True, False, record
+        return draft_text, merged_tools, True, False, record, reflection_turns
 
     imp_cap = reflection_config.improvement_max_turns
     imp_turns = imp_cap if imp_cap is not None else max_iterations_default
@@ -422,6 +436,7 @@ def apply_reflection_pipeline(
 
     merged_out = list(dict.fromkeys([*merged_tools, *imp_tools]))
     completed = improved is not None and bool(improved.strip())
+    post_turns = reflection_turns + imp_turn_used
 
     record = ReflectionRunRecord(
         trigger_reason=reason,
@@ -436,8 +451,8 @@ def apply_reflection_pipeline(
     )
 
     if completed:
-        return improved.strip(), merged_out, True, True, record
-    return draft_text, merged_out, True, False, record
+        return improved.strip(), merged_out, True, True, record, post_turns
+    return draft_text, merged_out, True, False, record, post_turns
 
 
 def format_reflection_for_vault(
