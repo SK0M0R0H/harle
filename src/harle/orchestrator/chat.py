@@ -89,11 +89,13 @@ class ChatMixin:
         if state.conversation_id is not None:
             with self.db.session() as session:
                 conv = get_conversation(session, state.conversation_id)
-            if conv is None:
-                raise ValueError(
-                    f"Conversation {state.conversation_id!r} not found."
-                )
-            route = route_with_pinned_role(request.message, conv.agent_role)
+                if conv is None:
+                    raise ValueError(
+                        f"Conversation {state.conversation_id!r} not found."
+                    )
+                # Read attributes while the session is active (ORM instance expires on exit).
+                pinned_role = conv.agent_role
+            route = route_with_pinned_role(request.message, pinned_role)
             with self.db.session() as session:
                 messages = get_recent_messages(
                     session,
