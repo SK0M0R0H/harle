@@ -109,3 +109,12 @@ class TestFormatPlanForVault:
         )
         assert "Initial plan" in s
         assert "Revision 1" in s
+
+    def test_includes_planning_tool_context(self) -> None:
+        s = format_plan_for_vault(
+            "1. [output] X",
+            None,
+            planning_tool_context="## Planning phase\n\nbody",
+        )
+        assert "Planning tool outputs" in s
+        assert "body" in s

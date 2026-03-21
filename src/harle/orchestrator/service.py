@@ -75,6 +75,7 @@ class _AgentResult:
     turns_used: int = 0
     plan_text: str | None = None
     plan_revisions: list[str] | None = None
+    planning_tool_context: str | None = None
     routing_method: str | None = None
 
 
@@ -94,6 +95,7 @@ class _RunState:
     turns_used: int | None = None
     plan_text: str | None = None
     plan_revisions: list[str] | None = None
+    planning_tool_context: str | None = None
     routing_method: str | None = None
 
 
@@ -281,6 +283,7 @@ class OrchestratorService:
             turns_used=r.turns_used,
             plan_text=r.plan_text,
             plan_revisions=r.plan_revisions,
+            planning_tool_context=r.planning_tool_context,
             routing_method=r.routing_method,
         )
 
@@ -363,6 +366,7 @@ class OrchestratorService:
                 plan_extra = format_plan_for_vault(
                     state.plan_text,
                     state.plan_revisions,
+                    state.planning_tool_context,
                 )
                 if plan_extra.strip():
                     vault_result_body = (
@@ -560,6 +564,7 @@ class OrchestratorService:
         state.turns_used = agent_result.turns_used or None
         state.plan_text = agent_result.plan_text
         state.plan_revisions = agent_result.plan_revisions
+        state.planning_tool_context = agent_result.planning_tool_context
         state.routing_method = agent_result.routing_method
         etrace.step(
             "Agent execution complete",

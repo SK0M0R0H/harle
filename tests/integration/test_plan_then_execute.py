@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -80,6 +81,60 @@ class TestPlanThenExecuteVaultAndPersistence:
         assert "Initial plan" in content
         assert "Revision 1" in content
         assert "[search]" in content
+
+    def test_planned_run_writes_planning_tool_outputs_to_vault(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When execution reports planning tool context, vault includes it under Plan."""
+        monkeypatch.setattr("harle.db.runs.create_run", lambda *args, **kwargs: None)
+
+        tool_section = (
+            "## Planning phase — tool results\n\n"
+            "The planning agent already ran these tools.\n\n"
+            "### dataset_search\n\n"
+            '{"hits": [{"id": "doc-1"}]}\n'
+        )
+
+        def fake_run(**kwargs: object) -> AgentExecutionResult:
+            return AgentExecutionResult(
+                text="Done.",
+                plan_text="1. [search] x\n2. [output] y",
+                planning_tool_context=tool_section,
+                routing_method="planned",
+                tools_called=["dataset_search"],
+                turns_used=2,
+            )
+
+        db = make_in_memory_chat_db()
+        with patch(
+            "harle.orchestrator.runner_execution.run_agent_execution",
+            side_effect=fake_run,
+        ):
+            svc = OrchestratorService(
+                llm_provider=EchoProvider(),
+                db=db,
+                dataset_path=str(tmp_path),
+                use_agent_runner=True,
+                planning_enabled=True,
+            )
+            resp = svc.chat(
+                request=RunRequest(
+                    message=(
+                        "Research and compare approach A vs B in detail using "
+                        "dataset and web sources."
+                    ),
+                    context="work",
+                ),
+            )
+
+        assert resp.status == "completed"
+        result_files = list(tmp_path.glob("logs/**/*_result.md"))
+        assert len(result_files) == 1
+        content = result_files[0].read_text(encoding="utf-8")
+        assert "### Planning tool outputs" in content
+        assert "doc-1" in content
 
     def test_create_run_receives_routing_method_planned(
         self,
@@ -204,6 +259,10 @@ class TestPlanThenExecuteAgentsSdkStub:
             def name(self) -> str:
                 return str(self._kwargs.get("name", ""))
 
+            @property
+            def instructions(self) -> str:
+                return str(self._kwargs.get("instructions", ""))
+
         class _FakeRunner:
             @staticmethod
             def run_sync(
@@ -211,25 +270,39 @@ class TestPlanThenExecuteAgentsSdkStub:
                 user_message: str,
                 max_turns: int = 10,
             ) -> object:
-                calls.append(
-                    {
-                        "agent_name": getattr(agent, "name", None),
-                        "max_turns": max_turns,
-                    }
-                )
                 plan_body = (
                     "1. [search] Dataset sweep\n"
                     "2. [web_search] External refs\n"
                     "3. [output] Final write-up"
                 )
+                planner_tool_items: list[object] = []
                 if getattr(agent, "name", None) == "planner":
                     final = plan_body
+                    planner_tool_items = [
+                        SimpleNamespace(
+                            type="tool_call_item",
+                            raw_item=SimpleNamespace(name="dataset_search"),
+                        ),
+                        SimpleNamespace(
+                            type="tool_call_output_item",
+                            output={"hits": [{"id": "planner-seen-id"}]},
+                            raw_item=None,
+                        ),
+                    ]
                 else:
                     final = "Summary.\n\nREVISED PLAN:\n1. [output] Shorter path"
 
+                calls.append(
+                    {
+                        "agent_name": getattr(agent, "name", None),
+                        "max_turns": max_turns,
+                        "instructions": getattr(agent, "instructions", ""),
+                    }
+                )
+
                 class _Result:
                     final_output = final
-                    new_items: list[object] = []
+                    new_items = planner_tool_items
                     raw_responses = [object()]
 
                 return _Result()
@@ -272,6 +345,11 @@ class TestPlanThenExecuteAgentsSdkStub:
         assert calls[0]["max_turns"] == 5
         assert calls[1]["agent_name"] == "researcher"
         assert calls[1]["max_turns"] == 10
+        exec_instructions = str(calls[1]["instructions"])
+        assert "## Execution Plan" in exec_instructions
+        assert "## Planning phase — tool results" in exec_instructions
+        assert "dataset_search" in exec_instructions
+        assert "planner-seen-id" in exec_instructions
         assert "REVISED PLAN" in (resp.result or "")
-        # Empty tool list is stored as None on RunResponse
-        assert resp.tools_called in (None, [])
+        # Planner phase tools are merged into tools_called for the run record
+        assert resp.tools_called == ["dataset_search"]

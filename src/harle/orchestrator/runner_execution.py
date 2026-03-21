@@ -30,6 +30,7 @@ class AgentExecutionResult:
     turns_used: int = 0
     plan_text: str | None = None
     plan_revisions: list[str] | None = None
+    planning_tool_context: str | None = None
     routing_method: str | None = None
 
 
@@ -76,6 +77,7 @@ def run_agent_execution(
     max_turns = max_iterations
     plan = None
     plan_tools: list[str] = []
+    planning_tool_context = ""
     routing_method = "direct"
 
     if planning_enabled:
@@ -102,16 +104,16 @@ def run_agent_execution(
 
         if complexity == "complex":
             pm = planning_model or model
-            plan, plan_tools = generate_plan(
+            plan, plan_tools, planning_tool_context = generate_plan(
                 user_message=user_message,
                 base_instructions=base_instructions,
                 model=pm,
                 tools=tools,
                 max_turns=planning_max_turns,
             )
+            injection_blocks: list[str] = []
             if plan is not None:
-                plan_block = format_plan_for_injection(plan)
-                base_instructions = f"{plan_block}\n\n{base_instructions}"
+                injection_blocks.append(format_plan_for_injection(plan))
                 max_turns = planned_max_turns if planned_max_turns is not None else max_iterations
                 routing_method = "planned"
                 etrace.step(
@@ -123,6 +125,13 @@ def run_agent_execution(
                 etrace.detail(
                     "Planning failed, falling back to Level 2",
                     module="orchestrator",
+                )
+            ctx = planning_tool_context.strip()
+            if ctx:
+                injection_blocks.append(ctx)
+            if injection_blocks:
+                base_instructions = (
+                    "\n\n".join(injection_blocks) + "\n\n" + base_instructions
                 )
 
     etrace.detail(
@@ -159,6 +168,7 @@ def run_agent_execution(
             turns_used=max_turns,
             plan_text=plan.raw_text if plan else None,
             plan_revisions=None,
+            planning_tool_context=planning_tool_context or None,
             routing_method=routing_method,
         )
 
@@ -178,5 +188,6 @@ def run_agent_execution(
         turns_used=turns_used,
         plan_text=plan.raw_text if plan else None,
         plan_revisions=plan_revisions,
+        planning_tool_context=planning_tool_context or None,
         routing_method=routing_method,
     )
