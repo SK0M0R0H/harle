@@ -1,0 +1,22 @@
+---
+alwaysApply: false
+---
+
+When user requests to write an issue, put the **entire** issue body in **one** fenced code block so the user can copy it in one action:
+
+- Use a markdown fence: opening line `` ```markdown `` on its own line, then the issue content, then closing `` ``` `` on its own line.
+- Do not nest other fenced blocks inside that issue body (avoid inner ```); if code samples are needed, indent them with four spaces or use plain paragraphs instead.
+- The chat may include a short intro line *outside* the fence; everything intended for the tracker belongs **inside** the fence.
+
+The issue content (inside the fence) must be raw markdown and contain:
+1. How does it work (or doesn't work) now
+2. What is the desired state (in plain text)
+3. Acceptance criteria
+4. What are related files to check
+5. What is out of scope
+
+If it's possible, plain text descriptions (points 2, 3) should be short (2-4 sentences). 
+
+It should not contain:
+* Plan to execute
+* Test plan
