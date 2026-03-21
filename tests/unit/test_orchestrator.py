@@ -19,6 +19,7 @@ from harle.context.assembler import ContextAssembler, ContextPackage
 from harle.db.connection import Database
 from tests.conftest import make_in_memory_chat_db
 from harle.llm.providers import EchoProvider
+from harle.orchestrator.reflection import ReflectionRunRecord
 from harle.orchestrator.runner_execution import AgentExecutionResult
 from harle.orchestrator.service import (
     OrchestratorService,
@@ -363,6 +364,7 @@ class TestOrchestratorAgentRunnerTrello:
             max_iterations=4,
             db=db,
             planning_enabled=False,
+            reflection_enabled=False,
         )
 
         with patch.dict(sys.modules, {"agents": fake_agents_module}):
@@ -554,6 +556,45 @@ class TestOrchestratorPlanning:
             )
             assert resp.status == "completed"
             assert "REVISED PLAN" in resp.result or "Answer" in resp.result
+
+
+class TestOrchestratorReflection:
+    """Level 4 reflection metadata with mocked runner_execution."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
+
+    def test_chat_returns_reflection_fields(self) -> None:
+        with patch("harle.orchestrator.runner_execution.run_agent_execution") as r:
+            r.return_value = AgentExecutionResult(
+                text="done",
+                reflection_triggered=True,
+                reflection_improved=True,
+                reflection_record=ReflectionRunRecord(
+                    trigger_reason="planned",
+                    tool_count_at_trigger=0,
+                    verdict="improve",
+                    assessment="ok",
+                    improvements_suggested=("add detail",),
+                    improvement_pass_ran=True,
+                    improvement_pass_completed=True,
+                    improvement_turns=2,
+                    improvement_tools_called=("dataset_search",),
+                ),
+            )
+            db = make_in_memory_chat_db()
+            svc = OrchestratorService(
+                llm_provider=EchoProvider(),
+                db=db,
+                use_agent_runner=True,
+            )
+            resp = svc.chat(request=RunRequest(message="hello", context="personal"))
+            assert resp.reflection_triggered is True
+            assert resp.reflection_improved is True
 
 
 # ══════════════════════════════════════════════════════════════════════

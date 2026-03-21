@@ -334,6 +334,8 @@ class TestGetRunEndpoint:
             "context_path",
             "conversation_id",
             "duration_ms",
+            "reflection_triggered",
+            "reflection_improved",
         }
 
         class _Run:
@@ -353,6 +355,8 @@ class TestGetRunEndpoint:
                 self.context_path = None
                 self.conversation_id = None
                 self.duration_ms = 12
+                self.reflection_triggered = None
+                self.reflection_improved = None
 
             def __getattribute__(self, name: str) -> object:
                 if (

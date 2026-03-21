@@ -124,6 +124,7 @@ def create_app() -> FastAPI:
         search_engine=search_engine,
         dataset_reader=dataset_reader,
         connections=connections,
+        think_tool_enabled=settings.HARLE_THINK_TOOL_ENABLED,
     )
 
     # ── Import registry ──────────────────────────────────────────────

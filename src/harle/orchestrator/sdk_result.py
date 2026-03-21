@@ -9,10 +9,35 @@ from typing import Any
 _DEFAULT_PLANNING_TOOL_CONTEXT_MAX_CHARS: int = 16_000
 
 
+def count_tool_call_invocations(result: object) -> int:
+    """Count every tool invocation in an Agents SDK run result.
+
+    Each ``tool_call_item`` in ``new_items`` increments the count, including
+    repeated calls to the same tool name. Use this for thresholds (e.g.
+    reflection min tool calls). For ordered unique names, see
+    :func:`extract_run_metadata`.
+
+    Args:
+        result: SDK run result object.
+
+    Returns:
+        Number of tool calls (invocations), zero if none.
+    """
+    n = 0
+    for item in getattr(result, "new_items", []):
+        if getattr(item, "type", "") == "tool_call_item":
+            n += 1
+    return n
+
+
 def extract_run_metadata(result: object) -> tuple[list[str], int]:
     """Extract tool names and turn count from an Agents SDK RunResult.
 
     Uses duck typing so callers do not import SDK item types directly.
+
+    **Note:** Tool names are **deduplicated** (first occurrence order only).
+    For invocation counts (e.g. three ``dataset_search`` calls), use
+    :func:`count_tool_call_invocations`.
 
     Args:
         result: SDK run result object.

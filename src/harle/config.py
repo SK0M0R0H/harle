@@ -65,6 +65,18 @@ class Settings:
     HARLE_PLANNING_MAX_TURNS: int = 5  # Max turns for planning agent (tool loop)
     HARLE_PLANNED_MAX_TURNS: int | None = None  # Execution max_turns when a plan exists; None = HARLE_MAX_ITERATIONS
 
+    # Level 4 reflection and self-critique (orchestrator)
+    HARLE_REFLECTION_ENABLED: bool = True
+    HARLE_REFLECTION_MODEL: str | None = None  # None = same as HARLE_LLM_MODEL
+    HARLE_REFLECTION_MIN_TOOL_CALLS: int = 3
+    # Comma-separated keywords and roles (YAML can use a string or list; list coerced in load_settings)
+    HARLE_REFLECTION_TRIGGER_KEYWORDS: str = (
+        "research,report,analysis,compare,evaluate,review,summarize"
+    )
+    HARLE_REFLECTION_TRIGGER_ROLES: str = "researcher"
+    HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS: int | None = None  # None = HARLE_MAX_ITERATIONS
+    HARLE_THINK_TOOL_ENABLED: bool = True
+
     # Run logging (vault logs/ directory)
     HARLE_RUN_LOG_STORE_CONTEXT: bool = False  # Store assembled context in logs (optional, for size/privacy)
 
@@ -102,6 +114,10 @@ def _coerce(value: Any, target_type: Any) -> Any:
         if isinstance(value, str):
             return value.lower() in {"1", "true", "yes"}
         return bool(value)
+    if target_type is str:
+        if isinstance(value, list):
+            return ",".join(str(x).strip() for x in value if str(x).strip())
+        return value if isinstance(value, str) else str(value)
     return value
 
 

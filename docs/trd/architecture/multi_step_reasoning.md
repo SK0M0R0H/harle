@@ -2,7 +2,7 @@
 title: "Multi-Step Reasoning — Design & Incremental Implementation Plan"
 tags: [orchestrator, multi-step-reasoning, agentic-loop, tool-use, planning, react, agents]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-21
 summary: "Describes multi-step reasoning patterns for the orchestrator, how leading AI companies implement them, and a step-by-step plan from simplest to most complex."
 ---
 
@@ -398,9 +398,9 @@ During multi-step execution, the user sees:
 
 This prevents the "blank screen for 30 seconds" problem that makes single-call architectures feel broken for complex tasks.
 
-### 6. Thinking Steps Are Encouraged via System Prompt
+### 6. Thinking Steps Are Encouraged via System Prompt (upgraded in Level 4)
 
-Rather than implementing Anthropic's Think Tool as a separate tool, Harle achieves the same effect by including instructions in the agent's system prompt:
+Harle includes instructions in the agent's system prompt to encourage explicit reasoning:
 
 ```
 Before calling any tool, briefly state (in your response) what you know so far,
@@ -408,7 +408,7 @@ what you still need, and why you are calling this specific tool. This helps
 maintain reasoning coherence across multiple steps.
 ```
 
-This produces visible reasoning traces in the run log without adding tool-call overhead. If this proves insufficient, a dedicated `think` tool can be added later (Level 4 in the plan).
+This produces visible reasoning traces in the run log without adding tool-call overhead. **Level 4 upgrades this** with a dedicated `think` tool — a no-op `function_tool` that gives the model a structured scratchpad. The think tool creates explicit reasoning traces in etrace spans without mixing reasoning into the final output. The system-prompt instruction remains as a complementary baseline. See [Level 4, §4.4](#44-think-tool) for the full design.
 
 ---
 
@@ -571,50 +571,370 @@ POST /chat → ContextAssembler.assemble()
 
 ### Level 4: Reflection and Self-Critique
 
-**Goal:** For high-value outputs (reports, recommendations), the agent evaluates its own result and improves it before returning.
+**Goal:** For high-value outputs (reports, analysis, research), the agent evaluates its own result and improves it before returning. Reflection is opt-in and configurable so cheap/simple requests stay unaffected.
 
-**What changes:**
-1. **Reflection trigger.** Certain task types (configurable) trigger a reflection pass after the initial result is generated. Examples: any task tagged as "research", "report", or "analysis"; any run that used 3+ tool calls; any request from the Researcher role.
-2. **Reflection prompt.** A separate LLM call with the original request, the agent's result, and a reflection instruction:
-   ```
-   Review this result against the original request. Check:
-   - Does it answer the actual question?
-   - Are there gaps in the data used?
-   - Are the conclusions supported by the evidence?
-   - What would make this answer significantly better?
-   If improvements are needed, list them specifically.
-   ```
-3. **Improvement loop.** If the reflection identifies concrete improvements (not just "looks good"), the agent gets one more pass to incorporate them. Maximum 1 reflection cycle (to control costs).
-4. **Think tool (optional).** If system-prompt-based thinking (Level 1) proves insufficient, add a dedicated `think` tool — a no-op tool that gives the model a structured scratchpad. The model calls `think(reasoning="I've gathered X and Y, but I still need Z because...")` and the tool returns nothing. This creates an explicit reasoning trace in the run log.
+#### Research: State-of-the-art reflection patterns
 
-**What this enables:**
-- Research reports are significantly higher quality — the model catches its own oversights.
-- Run logs show what the agent thought was good/bad about its own output — invaluable for prompt tuning.
-- The think tool makes reasoning visible without cluttering the final output.
+Review of 2025–2026 approaches to reflection in agentic systems (OpenAI Agents SDK, Anthropic's Think Tool, LangGraph/LangChain Reflexion, academic research on LLM self-correction) surfaces five findings relevant to Harle:
 
-**Architecture:**
+1. **Separate generation from evaluation.** A distinct critic/reflection call outperforms inline "review yourself" instructions. When the same context window generates and evaluates, models tend to rubber-stamp their own work. A dedicated reflection call with a fresh system prompt and the draft as user content forces genuine evaluation (Zylos Research 2026, AAIA Agentic AI Insights, LangGraph reflection agent pattern).
+
+2. **Bound the loop.** Every production reflection system caps iterations. The consensus is 1–2 reflection cycles maximum — beyond that, quality plateaus while cost grows linearly. LangGraph's `langgraph-reflection` library defaults to 1 reflect-and-revise cycle. Harle caps at **1 improvement pass after 1 reflection call** (2 extra LLM calls worst case).
+
+3. **External verification beats pure introspection.** Research shows that asking a model to self-correct reasoning without external feedback can *decrease* accuracy. However, comparing a draft answer against the **original request** and explicit quality criteria is a form of verification (the "reference" is the request), not pure introspection. This is the pattern that works — and it matches Harle's use case.
+
+4. **Reserve reflection for high-value outputs.** Reflection adds 2–3x LLM cost and 3–10 seconds of latency. Applying it to "What time is it?" is waste. Every production system gates reflection behind a trigger: task type, complexity score, explicit user opt-in, or tool-use count. Harle's existing complexity classifier (Level 3) provides a natural signal.
+
+5. **Think tool improves multi-step coherence.** Anthropic's think tool (March 2025) — a no-op tool that gives the model a scratchpad between tool calls — significantly improves quality on long tool chains and policy-heavy tasks. It creates explicit reasoning traces without cluttering final output. The OpenAI Agents SDK does not provide a built-in think tool but supports it trivially via `function_tool`. Harle's system-prompt thinking instruction (Level 1, Design Decision 6) provides partial coverage; a dedicated tool is the upgrade path.
+
+**Minimal viable pattern for Harle:** Post-execution reflection pass (1 LLM call) with configurable trigger, at most 1 improvement pass (1 LLM call with tools), and an optional think tool (no-op `function_tool` registered alongside other tools). Total worst-case overhead: 2 additional LLM calls per run.
+
+**Key pitfall to avoid:** Unbounded reflection cycles. The hard limit of 1 reflection + 1 improvement is non-negotiable. The improvement pass MUST NOT trigger another reflection check.
+
+---
+
+#### 4.1 Reflection trigger
+
+Reflection runs **after** the execution loop (Level 1–3) produces a result. The trigger is a deterministic function — no LLM call needed.
+
+**Trigger rules** (OR logic — any matching rule triggers reflection):
+
+| Rule | Condition | Rationale |
+|------|-----------|-----------|
+| **Disabled globally** | `HARLE_REFLECTION_ENABLED` is `False` | Kill switch — returns `False` immediately, no further evaluation. |
+| **Minimum tool-call threshold** | Execution used ≥ `HARLE_REFLECTION_MIN_TOOL_CALLS` tool calls (default: 3) | Runs with many tool calls are complex enough to benefit; simple lookups skip. |
+| **Task-type keywords** | User message contains any keyword in `HARLE_REFLECTION_TRIGGER_KEYWORDS` (default: `["research", "report", "analysis", "compare", "evaluate", "review", "summarize"]`) | Knowledge-intensive tasks where output quality matters. |
+| **Planned runs** | `routing_method == "planned"` (Level 3 classified the request as complex) | If the planner thought it was complex, reflection is warranted. |
+| **Role-based** | Agent role is in `HARLE_REFLECTION_TRIGGER_ROLES` (default: `["researcher"]`) | Certain roles always benefit from reflection. Currently one role; future-proofs for Level 5. |
+
+When `HARLE_REFLECTION_TRIGGER_KEYWORDS` or `HARLE_REFLECTION_TRIGGER_ROLES` is set to an empty list, that rule is disabled. Operators can narrow the trigger to tool-call count only, or widen it to always-on, without code changes.
+
+**Function signature** (mirrors `classify_complexity`):
+
+```python
+def should_reflect(
+    *,
+    user_message: str,
+    tools_called: list[str],
+    routing_method: str,
+    agent_role: str,
+    config: ReflectionConfig,
+) -> tuple[bool, str]:
+    """Determine whether a reflection pass should run.
+
+    Returns:
+        Tuple of (should_reflect, trigger_reason). trigger_reason
+        is a short string for logging (e.g. "tool_count",
+        "keyword:research", "planned", "role:researcher").
+    """
+```
+
+---
+
+#### 4.2 Reflection call
+
+When triggered, a dedicated LLM call evaluates the execution result against the original request.
+
+**Mechanics:**
+
+- **No tools.** The reflection call is a pure assessment with no tool access. It receives all the information it needs (original request + draft result) as input.
+- **Separate system prompt.** A reflection-specific instruction, not the full context-assembled prompt. This keeps the reflection call lightweight and focused.
+- **Model.** `HARLE_REFLECTION_MODEL` (default: same as `HARLE_LLM_MODEL`). Operators can use a cheaper model for reflection.
+- **Implementation.** A single `Runner.run_sync` call with an `Agent` that has no tools and `max_turns=1`. Using the Agent/Runner keeps the pattern consistent with the rest of the pipeline and gives tracing for free.
+
+**Reflection prompt shape:**
 
 ```
-ExecutionLoop produces initial_result
-    │
-    ├─ ReflectionTrigger: should this result be reviewed?
-    │     │
-    │     ├─ No → return initial_result
-    │     │
-    │     └─ Yes → ReflectionCall:
-    │           LLM evaluates initial_result against request
-    │           │
-    │           ├─ "No improvements needed" → return initial_result
-    │           │
-    │           └─ "Improvements: [list]" → ImprovementPass:
-    │                 LLM incorporates improvements (1 pass max)
-    │                 → return improved_result
-    │
-    → Log reflection analysis
-    → Response
+You are a quality reviewer for an AI assistant's output. Your task is to evaluate
+whether the assistant's response adequately addresses the user's request.
+
+## Original user request
+
+{user_message}
+
+## Assistant's draft response
+
+{draft_result}
+
+## Evaluation criteria
+
+Review the draft response against the original request. Check each criterion:
+
+1. **Completeness:** Does it answer the actual question? Are all parts of the request
+   addressed?
+2. **Evidence:** Are claims supported by data gathered during the run? Are there
+   unsupported assertions?
+3. **Gaps:** Is there information the user likely needs that was not included? Were
+   there tools available that should have been called but were not?
+4. **Accuracy:** Are there factual inconsistencies or contradictions within the
+   response?
+5. **Clarity:** Is the response well-structured and easy to follow?
+
+## Output format
+
+Respond with a JSON object:
+
+    {"verdict": "pass" | "improve",
+     "assessment": "Brief overall assessment (1-2 sentences)",
+     "improvements": ["specific improvement 1", "specific improvement 2", ...]}
+
+If the response is adequate, set verdict to "pass" and leave improvements empty.
+If improvements are needed, set verdict to "improve" and list SPECIFIC, ACTIONABLE
+improvements. Do not suggest improvements that would require information the assistant
+cannot obtain.
 ```
 
-**Estimated complexity:** Low-medium. Reflection is just an additional LLM call with a well-crafted prompt. The main work is deciding when to trigger it (to avoid doubling cost on every request).
+**Verdict parsing:**
+
+The reflection output is parsed as JSON. If parsing fails, or if `verdict` is not `"improve"`, the original result is returned unchanged. Malformed reflection output is logged as a warning and treated as a pass — **fail-open, not fail-closed**. This ensures reflection bugs never block the user from getting a result.
+
+---
+
+#### 4.3 Improvement loop
+
+When the reflection verdict is `"improve"` with a non-empty `improvements` list, one improvement pass runs.
+
+**Mechanics:**
+
+- **One pass only.** The improvement pass does NOT trigger another reflection check. This is the hard limit that prevents unbounded cycles.
+- **Tools available.** The improvement agent has the same tools as the original execution agent. This lets it call tools to fill gaps identified by reflection (e.g., "the summary omits dataset notes — search for them").
+- **Max turns.** `HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS` (default: same as `HARLE_MAX_ITERATIONS`). The improvement pass gets its own turn budget.
+- **Instructions.** The improvement agent receives the original execution instructions plus the reflection feedback injected as a preamble:
+
+```
+## Reflection feedback — improvements required
+
+The following improvements were identified by quality review. Incorporate
+them into your response:
+
+{numbered list of improvements from reflection}
+
+## Original user request
+
+{user_message}
+
+## Your previous draft
+
+{draft_result}
+
+Produce an improved version of the response that addresses the feedback above.
+You may call tools if additional information is needed.
+```
+
+- **Result.** The improvement pass output replaces the original draft as the final result. If the improvement pass fails (e.g., `MaxTurnsExceeded`), the original draft is returned with a log entry noting the improvement failure.
+
+**Flow:**
+
+```
+Execution result (draft)
+    │
+    ├── should_reflect() → False → return draft
+    │
+    └── should_reflect() → True
+            │
+            ├── reflection_call(user_message, draft)
+            │       │
+            │       ├── verdict: "pass" → return draft
+            │       │
+            │       └── verdict: "improve", improvements: [...]
+            │               │
+            │               └── improvement_pass(user_message, draft, improvements, tools)
+            │                       │
+            │                       ├── success → return improved_result
+            │                       │
+            │                       └── failure → return draft (log failure)
+            │
+            └── reflection_call fails → return draft (log error)
+```
+
+---
+
+#### 4.4 Think tool
+
+**Decision: implement as a `function_tool`.**
+
+The system-prompt thinking instruction (Level 1, Design Decision 6) is partially effective but has limitations: (a) models sometimes skip the thinking step under token pressure, (b) thinking text mixed into the final response clutters the output, (c) there is no structured way to extract reasoning traces for logging.
+
+A dedicated think tool solves all three: the model calls `think(reasoning="...")` explicitly, the tool returns nothing (no-op), and the `reasoning` parameter is captured in the tool call trace.
+
+**Implementation:**
+
+```python
+@function_tool
+def think(reasoning: str) -> str:
+    """Use this tool to think through a problem step by step.
+
+    Call this tool before making decisions, between tool calls when
+    you need to reason about results, or when facing a complex
+    judgment. The reasoning is logged but does not appear in the
+    final response.
+
+    Args:
+        reasoning: Your step-by-step thinking about the problem.
+    """
+    return ""
+```
+
+**Registration:**
+
+- Registered via a new `ThinkToolModule` in `harle/tools/think/` (following the `BaseToolModule` pattern).
+- Always available when the agent runner is active — no role-based filtering. The think tool is a reasoning primitive, not a domain tool.
+- Appears in `tools_called` logs when used (tool name: `think`).
+- `HARLE_THINK_TOOL_ENABLED` config key (default: `True`) for operators who want to disable it (e.g., to save tool-definition tokens in the prompt).
+
+**Trace integration:**
+
+The tool registry's `_make_traced_tool()` wrapper already creates etrace spans for every tool call. The think tool's `reasoning` parameter is captured as a span attribute, making it visible in execution traces without additional work.
+
+**Impact on tool count:** Adds 1 tool definition to every agent prompt (~50 tokens). Minimal impact on context budget.
+
+---
+
+#### 4.5 Logging
+
+Reflection metadata integrates with the existing run logging path at three levels.
+
+**Vault (result file):**
+
+A `## Reflection` section is appended to the vault result body, after the existing `## Plan` section (if present):
+
+```markdown
+## Reflection
+
+**Triggered:** yes
+**Trigger reason:** tool_count (5 tool calls ≥ threshold 3)
+**Verdict:** improve
+**Assessment:** The summary covers Trello tasks but omits dataset notes.
+**Improvements applied:**
+1. Added dataset notes from knowledge/work/
+2. Included comparison with previous week's goals
+**Improvement pass:** completed (3 turns, 1 tool call)
+```
+
+When reflection was triggered but the verdict was "pass," the section records that reflection ran but found no improvements needed. When reflection was not triggered, the section is omitted (no noise in logs for simple runs).
+
+**DB (runs table):**
+
+Two new nullable columns on the `runs` table:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `reflection_triggered` | `Boolean` | `True` if `should_reflect()` returned `True`; `NULL` for runs before this feature. |
+| `reflection_improved` | `Boolean` | `True` if the improvement pass ran and succeeded; `NULL` or `False` otherwise. |
+
+These columns enable queries like "what percentage of runs trigger reflection?" and "how often does reflection lead to improvements?" — essential for tuning trigger thresholds and evaluating prompt quality.
+
+**API (RunResponse):**
+
+Two new optional fields:
+
+```python
+reflection_triggered: bool | None = None
+reflection_improved: bool | None = None
+```
+
+**etrace spans:**
+
+| Span | Level | Module | Attributes |
+|------|-------|--------|------------|
+| `Reflection trigger evaluated` | DETAIL | orchestrator | `triggered=True/False`, `reason="tool_count"/"keyword"/"planned"/"role"` |
+| `Reflection call` | STEP | orchestrator | `verdict="pass"/"improve"`, `improvements_count=N` |
+| `Improvement pass` | STEP | orchestrator | `turns_used=N`, `tools_called=[...]`, `status="completed"/"failed"` |
+
+---
+
+#### 4.6 Configuration
+
+All new config keys, following the existing `HARLE_` prefix convention and resolution order (YAML → env var → default):
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `HARLE_REFLECTION_ENABLED` | `bool` | `True` | Master switch for reflection. `False` disables all reflection. |
+| `HARLE_REFLECTION_MODEL` | `str \| None` | `None` | Model for the reflection call. `None` = same as `HARLE_LLM_MODEL`. |
+| `HARLE_REFLECTION_MIN_TOOL_CALLS` | `int` | `3` | Minimum tool calls in execution to trigger reflection via tool-count rule. |
+| `HARLE_REFLECTION_TRIGGER_KEYWORDS` | `list[str]` | `["research", "report", "analysis", "compare", "evaluate", "review", "summarize"]` | Keywords in user message that trigger reflection. Empty list disables keyword rule. |
+| `HARLE_REFLECTION_TRIGGER_ROLES` | `list[str]` | `["researcher"]` | Agent roles that always trigger reflection. Empty list disables role rule. |
+| `HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS` | `int \| None` | `None` | Max turns for the improvement pass. `None` = same as `HARLE_MAX_ITERATIONS`. |
+| `HARLE_THINK_TOOL_ENABLED` | `bool` | `True` | Register the think tool for agent runs. |
+
+List-type config values are stored as YAML lists in the config file and as comma-separated strings in environment variables.
+
+---
+
+#### Architecture (full Level 4 flow)
+
+Shows how reflection wraps the existing Level 1–3 execution:
+
+```
+POST /chat → ContextAssembler.assemble()
+          → registry.get_agent_tools() (includes think tool when enabled)
+          → run_agent_execution(...)
+               │
+               ├─ [Level 3] Planning (if complex)
+               │     classify_complexity → generate_plan → validate → inject
+               │
+               ├─ [Level 1–2] Execution Loop
+               │     Agent(instructions, tools=[..., think], model)
+               │     Runner.run_sync(agent, user_message, max_turns=N)
+               │        │
+               │        ├─ Turn 1: LLM may call think(reasoning="...") → ""
+               │        ├─ Turn 2: LLM calls search_web("...") → results
+               │        ├─ Turn 3: LLM calls think(reasoning="...") → ""
+               │        ├─ Turn 4: LLM produces draft result
+               │        │
+               │     → extract_run_metadata(result) → tools_called, turns_used
+               │
+               ├─ [Level 4] Reflection
+               │     should_reflect(user_message, tools_called, routing_method,
+               │                    role, config) → (triggered, reason)
+               │        │
+               │        ├─ False → skip
+               │        │
+               │        └─ True → reflection_call(user_message, draft, model)
+               │              │
+               │              ├─ verdict: "pass" → keep draft
+               │              │
+               │              └─ verdict: "improve" → improvement_pass(...)
+               │                    Agent(instructions=improvement_prompt,
+               │                          tools=execution_tools, model)
+               │                    Runner.run_sync(agent, ..., max_turns=M)
+               │                    → improved_result replaces draft
+               │
+               └─ Return AgentExecutionResult
+                    (text, tools_called, turns_used,
+                     reflection_triggered, reflection_improved,
+                     plan_text, plan_revisions, routing_method)
+          → Log all (vault + DB + etrace)
+          → RunResponse
+```
+
+**What changes in existing code:**
+
+| File | Change |
+|------|--------|
+| `orchestrator/runner_execution.py` | Add `should_reflect()` + `run_reflection()` + `run_improvement()` after execution loop; extend `AgentExecutionResult` with `reflection_triggered`, `reflection_improved`. |
+| `orchestrator/service.py` | Pass reflection config to `run_agent_execution`; extend `_RunState` and `_AgentResult` with reflection fields; build `## Reflection` section in `_finalize_run`. |
+| `config.py` | Add `HARLE_REFLECTION_*` and `HARLE_THINK_TOOL_ENABLED` fields to `Settings`. |
+| `tools/think/` (new) | `ThinkToolModule` with the `think` `function_tool`. |
+| `tools/factory.py` | Register `ThinkToolModule` when `HARLE_THINK_TOOL_ENABLED` is `True`. |
+| `db/models.py` | Add `reflection_triggered` and `reflection_improved` columns to `Run`. |
+| `db/runs.py` | Accept and persist new reflection fields in `create_run`. |
+| `api/models.py` | Add `reflection_triggered` and `reflection_improved` to `RunResponse`. |
+
+---
+
+#### Cost and latency impact
+
+| Scenario | Extra LLM calls | Extra cost | Extra latency |
+|----------|-----------------|------------|---------------|
+| Reflection not triggered (simple task) | 0 | $0 | ~0 ms (trigger check is local) |
+| Reflection triggered, verdict "pass" | +1 | +$0.002–0.01 | +2–5 sec |
+| Reflection triggered, verdict "improve" | +2 | +$0.005–0.02 | +5–15 sec |
+| Think tool usage (per call during execution) | 0 (part of execution loop) | ~$0 (no-op) | ~0 ms |
+
+At Harle's usage level (20–50 runs/day), even if 50% of runs trigger reflection, the daily cost increase is <$0.50.
+
+**Estimated complexity:** Low-medium. The reflection trigger is a pure function. The reflection call is a single LLM invocation with structured output parsing. The improvement pass reuses the existing Agent/Runner pattern. The think tool is a trivial `function_tool`. The main work is wiring reflection fields through the logging and API layers.
 
 ---
 

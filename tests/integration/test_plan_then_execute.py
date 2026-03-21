@@ -321,6 +321,7 @@ class TestPlanThenExecuteAgentsSdkStub:
             planning_enabled=True,
             planning_max_turns=5,
             max_iterations=10,
+            reflection_enabled=False,
         )
 
         # Heuristic classifier needs score >= 4 (e.g. length > 150 + research keyword).

@@ -55,6 +55,7 @@ def build_tool_registry(
     search_engine: SearchEngine | None = None,
     dataset_reader: DatasetReader | None = None,
     connections: ConnectionRegistry | None = None,
+    think_tool_enabled: bool = True,
 ) -> ToolRegistry | None:
     """Create and populate a :class:`ToolRegistry` with available modules.
 
@@ -73,6 +74,8 @@ def build_tool_registry(
     * **notion** — when ``NOTION_API_TOKEN`` is set. Exposes
       ``notion_search``, ``notion_read_page``,
       ``notion_get_database``, and ``notion_query_database``.
+    * **think** — when *think_tool_enabled* is ``True`` (default).
+      Exposes ``think`` (no-op scratchpad for reasoning traces).
 
     Args:
         search_engine: Pre-configured search engine for dataset
@@ -81,6 +84,7 @@ def build_tool_registry(
             access (enables vault ``dataset_read_file``).
         connections: Optional pre-built ConnectionRegistry.
             If ``None``, one is built from environment variables.
+        think_tool_enabled: When ``True``, register the Level 4 ``think`` tool.
 
     Returns:
         A fully initialised :class:`ToolRegistry`, or ``None`` if
@@ -100,6 +104,7 @@ def build_tool_registry(
     has_modules |= _register_web_search(registry, connections=connections)
     has_modules |= _register_trello(registry, connections=connections)
     has_modules |= _register_notion(registry, connections=connections)
+    has_modules |= _register_think(registry, enabled=think_tool_enabled)
 
     if not has_modules:
         return None
@@ -260,4 +265,18 @@ def _register_notion(
         skill_names=["usage"],
     )
     logger.info("Notion tool module registered.")
+    return True
+
+
+def _register_think(registry: ToolRegistry, *, enabled: bool) -> bool:
+    """Register the think (scratchpad) module when enabled."""
+    if not enabled:
+        return False
+
+    from harle.tools.think.module import ThinkToolModule
+
+    module = ThinkToolModule()
+    _run_coro_sync(module.initialize({}))
+    registry.register_module(module, mode=OperationMode.AUTO)
+    logger.info("Think tool module registered.")
     return True

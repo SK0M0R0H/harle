@@ -34,6 +34,8 @@ class RunResponse(BaseModel):
     conversation_id: str | None = None
     tools_called: list[str] | None = None
     turns_used: int | None = None
+    reflection_triggered: bool | None = None
+    reflection_improved: bool | None = None
 
 
 class RunDetail(BaseModel):
@@ -53,6 +55,8 @@ class RunDetail(BaseModel):
     context_path: str | None = None
     conversation_id: str | None = None
     duration_ms: int | None = None
+    reflection_triggered: bool | None = None
+    reflection_improved: bool | None = None
 
 
 class HealthResponse(BaseModel):

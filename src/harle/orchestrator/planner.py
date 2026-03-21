@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from harle.debug import etrace
 from harle.orchestrator.sdk_result import (
     build_planning_tool_context_section,
+    count_tool_call_invocations,
     extract_run_metadata,
 )
 
@@ -274,11 +275,11 @@ def generate_plan(
     model: str,
     tools: list[object],
     max_turns: int,
-) -> tuple[Plan | None, list[str], str]:
+) -> tuple[Plan | None, list[str], str, int]:
     """Run the planning agent (with tools) and return a validated plan.
 
     On any failure (SDK error, empty output, validation failure), returns
-    ``(None, [...], tool_context)`` so the orchestrator can fall back to Level 2
+    ``(None, [...], tool_context, 0)`` so the orchestrator can fall back to Level 2
     while still injecting *tool_context* (tool outputs from the planning run)
     when present.
 
@@ -290,8 +291,8 @@ def generate_plan(
         max_turns: Maximum turns for the planning loop.
 
     Returns:
-        ``(validated Plan or None, tool names used during planning,
-        markdown tool-context section or "")``.
+        ``(validated Plan or None, unique tool names used during planning,
+        markdown tool-context section or "", planning-phase tool invocation count)``.
     """
     from agents import Agent, MaxTurnsExceeded, Runner
 
@@ -324,7 +325,7 @@ def generate_plan(
             module="orchestrator",
             max_turns=max_turns,
         )
-        return None, [], ""
+        return None, [], "", 0
     except Exception as exc:
         logger.warning("Planning agent failed: %s", exc, exc_info=True)
         etrace.detail(
@@ -332,20 +333,21 @@ def generate_plan(
             module="orchestrator",
             error_type=type(exc).__name__,
         )
-        return None, [], ""
+        return None, [], "", 0
 
     plan_tools, _plan_turns = extract_run_metadata(result)
+    plan_invocations = count_tool_call_invocations(result)
     tool_context = build_planning_tool_context_section(result)
 
     raw = getattr(result, "final_output", None)
     if not raw or not str(raw).strip():
         etrace.detail("Planning empty output", module="orchestrator")
-        return None, plan_tools, tool_context
+        return None, plan_tools, tool_context, plan_invocations
 
     plan = validate_plan(str(raw))
     if plan is None:
         etrace.detail("Plan validation failed", module="orchestrator")
-        return None, plan_tools, tool_context
+        return None, plan_tools, tool_context, plan_invocations
 
     etrace.detail(
         "Planning tool context captured",
@@ -357,7 +359,7 @@ def generate_plan(
         module="orchestrator",
         steps=len(plan.steps),
     )
-    return plan, plan_tools, tool_context
+    return plan, plan_tools, tool_context, plan_invocations
 
 
 def format_plan_for_vault(
