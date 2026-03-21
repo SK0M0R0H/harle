@@ -153,6 +153,21 @@ def deactivate_conversation(
     logger.debug("Deactivated conversation %s", conversation_id)
 
 
+def update_conversation_agent_role(
+    session: Session,
+    conversation_id: str,
+    agent_role: str,
+) -> None:
+    """Set the conversation's active agent role (e.g. after ``as <role>:`` override)."""
+    stmt = (
+        update(Conversation)
+        .where(Conversation.conversation_id == conversation_id)
+        .values(agent_role=agent_role, updated_at=func.now())
+    )
+    session.execute(stmt)
+    logger.debug("Updated conversation %s agent_role=%s", conversation_id, agent_role)
+
+
 def touch_conversation(
     session: Session,
     conversation_id: str,

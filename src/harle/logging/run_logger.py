@@ -98,6 +98,20 @@ def _context_content(
     return f"---\n{fm}\n---\n\n# Assembled context\n\n{context_body}"
 
 
+def _handoffs_markdown(handoffs: list[dict[str, str]]) -> str:
+    """Format handoff events as a Markdown section."""
+    lines = [
+        "| Source | Target | Reason |",
+        "|--------|--------|--------|",
+    ]
+    for h in handoffs:
+        src = h.get("source_agent", "")
+        tgt = h.get("target_agent", "")
+        reason = (h.get("reason") or "").replace("|", "\\|")
+        lines.append(f"| {src} | {tgt} | {reason} |")
+    return "## Handoffs\n\n" + "\n".join(lines) + "\n"
+
+
 def log_run_to_vault(
     dataset_path: str | Path,
     run_id: str,
@@ -108,6 +122,7 @@ def log_run_to_vault(
     result_body: str,
     context_body: str | None = None,
     store_context: bool = False,
+    handoffs: list[dict[str, str]] | None = None,
 ) -> tuple[str | None, str | None]:
     """Write run result (and optionally context) to the vault logs/ directory.
 
@@ -126,6 +141,7 @@ def log_run_to_vault(
         result_body: Formatted result text (or summary) for the result file.
         context_body: Assembled prompt/context text for the context file.
         store_context: Whether to write the context file (config-driven).
+        handoffs: Optional list of ``{source_agent, target_agent, reason}`` for logging.
 
     Returns:
         A pair (result_path, context_path). result_path is the
@@ -145,8 +161,12 @@ def log_run_to_vault(
 
     log_dir = log_dir_for(timestamp)
     result_rel = f"{log_dir}/{run_id}_result.md"
+    body = result_body
+    if handoffs:
+        extra = _handoffs_markdown(handoffs)
+        body = f"{body}\n\n{extra}" if body else extra
     result_content = _result_content(
-        run_id, timestamp, agent, status, context_scope, result_body
+        run_id, timestamp, agent, status, context_scope, body
     )
     write_log_file(root, result_rel, result_content)
 

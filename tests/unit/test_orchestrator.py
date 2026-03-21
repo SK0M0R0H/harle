@@ -111,7 +111,7 @@ class TestOrchestratorService:
             context_assembler=mock_assembler,
             db=db,
         )
-        req = RunRequest(message="find tasks", context="work")
+        req = RunRequest(message="as researcher: find tasks", context="work")
         resp = svc.chat(request=req)
 
         mock_assembler.assemble.assert_called_once_with(
@@ -721,6 +721,40 @@ class TestOrchestratorChat:
         second_call_kwargs = mock_assembler.assemble.call_args.kwargs
         assert second_call_kwargs["conversation_history"] is not None
         assert len(second_call_kwargs["conversation_history"]) == 2
+
+    def test_chat_follow_up_preserves_conversation_agent_role(self) -> None:
+        """Short follow-ups do not re-run keyword routing to a different role."""
+        db = make_in_memory_chat_db()
+        mock_assembler = MagicMock(spec=ContextAssembler)
+        mock_assembler.assemble.return_value = ContextPackage(
+            system_prompt="ok",
+            search_results=[],
+            p0_files=[],
+            total_tokens=10,
+            budget_remaining=100_000,
+            conversation_messages_included=0,
+        )
+        svc = OrchestratorService(
+            llm_provider=EchoProvider(),
+            context_assembler=mock_assembler,
+            db=db,
+        )
+        r1 = svc.chat(
+            request=RunRequest(
+                message="Research market trends for Q2",
+                context="work",
+            ),
+        )
+        assert mock_assembler.assemble.call_args.kwargs["agent_role"] == "researcher"
+
+        svc.chat(
+            request=RunRequest(
+                message="What about APAC?",
+                context="work",
+                conversation_id=r1.conversation_id,
+            ),
+        )
+        assert mock_assembler.assemble.call_args.kwargs["agent_role"] == "researcher"
 
     def test_chat_run_id_unique(self) -> None:
         db = make_in_memory_chat_db()

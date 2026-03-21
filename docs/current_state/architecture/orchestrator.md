@@ -8,7 +8,7 @@ summary: "Tracks what the Orchestrator implements vs the TRD, and what each miss
 
 # Harle Orchestrator — Current State
 
-> This document compares the target design in the Orchestrator TRD with the code that exists today. The orchestrator pipeline is implemented across `src/harle/api/`, `src/harle/orchestrator/`, `src/harle/context/`, and `src/harle/logging/`, with no separate `router/`, `clarifier/`, or `agents/` packages.
+> This document compares the target design in the Orchestrator TRD with the code that exists today. The orchestrator pipeline is implemented across `src/harle/api/`, `src/harle/orchestrator/`, `src/harle/context/`, and `src/harle/logging/`. **Router** and **multi-agent** logic live under `orchestrator/router.py` and `orchestrator/agents.py` (not separate top-level packages). There is no `clarifier/` package.
 
 Reference TRD: [Harle Orchestrator — Architecture & Functionality](../../trd/architecture/orchestrator.md)
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Orchestrator — Architecture & Functionality](../../trd/a
 
 ## Overall Status
 
-The Orchestrator is **partially implemented**. The request lifecycle works end-to-end: HTTP API accepts **`POST /chat` only** for user-initiated work (database required); one-shot tasks use a new conversation with a single exchange. The Context Assembler builds a token-budgeted system prompt (P0 + P1 + P4), the Agent Runner executes via the OpenAI Agents SDK (or legacy provider) with optional tools, and the Run Logger writes to the vault and PostgreSQL. **`GET /run/{run_id}`** returns run metadata for a run produced by a chat turn (not a separate “run mode”). **Missing** are: a dedicated Router (all requests use a fixed "researcher" role), the Clarifier (no ambiguity check or clarification questions), richer run logging (no clarification/routing/execution detail in the TRD shape), SSE streaming, approval flow in the request path, and several TRD guardrails and error-handling behaviours. Config covers a subset of the TRD (no timeout, token budget cap, or approval settings).
+The Orchestrator is **partially implemented**. The request lifecycle works end-to-end: HTTP API accepts **`POST /chat` only** for user-initiated work (database required); one-shot tasks use a new conversation with a single exchange. **Routing:** `orchestrator/router.py` selects the starting agent role (explicit `as <role>:` or keyword rules; default **assistant**). The Context Assembler builds a token-budgeted system prompt (P0 + P1 + P4) for that role. The Agent Runner executes via the OpenAI Agents SDK with **per-role tools and handoffs** when the dataset-backed assembler is available, or a single agent otherwise; legacy echo provider remains a single call without tools. The Run Logger writes to the vault and PostgreSQL, including optional **`## Handoffs`** and `runs.handoffs`. **`GET /run/{run_id}`** returns run metadata including `handoffs` when present. **Missing** are: the Clarifier, workflow-template + LLM routing fallbacks, richer run logging in the full TRD JSON shape, SSE streaming, approval flow in the request path, and several TRD guardrails. Config covers a subset of the TRD (no timeout, token budget cap, or approval settings).
 
 ---
 
@@ -25,18 +25,18 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 | TRD area | Current status | Notes |
 |----------|----------------|-------|
 | 1. HTTP API (FastAPI) | Implemented | `api/routes.py`: **POST /chat** (user tasks; requires DB), GET /run/{id}, GET /health. Request/response models in `api/models.py`. Additional endpoints: /init, /reindex, /search. |
-| 2. Router | Not implemented | No `router/` package. Agent role is fixed as `DEFAULT_AGENT_ROLE = "researcher"`. No explicit override, context-based rules, workflow template match, or LLM fallback. |
+| 2. Router | Partially implemented | `orchestrator/router.py`: explicit `as <role>:` and keyword routing to researcher, secretary, specialist, writer (default **assistant**). No workflow-template match or LLM fallback (per TRD). |
 | 3. Clarifier | Not implemented | No `clarifier/` package. No ambiguity check, no clarification questions, no round-trip before execution. |
 | 4. Context Assembler | Implemented | `context/assembler.py`: P0 (prompts + policies), P1 (dataset search), P4 (conversation history). 80/20 budget, tiktoken. No P2 (external data), P3 (prior runs, memories). |
-| 5. Agent Runner | Partially implemented | Execution in `orchestrator/orchestrator_service.py` + `execution.py` / `chat.py` / `finalize.py` + `runner_execution.py` (`service.py` re-exports): Agents SDK Runner when OpenAI key set, else echo provider. Single execution role (`researcher`), optional Level 3 planning agent (`planner`) with same tools; tools from registry, max_turns. Config: `HARLE_PLANNING_*`, `HARLE_PLANNED_MAX_TURNS`. No separate `agents/` package, no handoffs, no timeout/token-budget guardrails, no output validation. |
+| 5. Agent Runner | Partially implemented | Execution in `orchestrator/orchestrator_service.py` + `execution.py` / `chat.py` / `finalize.py` + `runner_execution.py` + `agents.py` (`service.py` re-exports): Agents SDK Runner when OpenAI key set, else echo provider. Multi-agent handoffs (Level 5) with per-role tools from `agents.ROLE_TOOL_MODULES`; optional Level 3 planning agent (`planner`) with full tool set; `max_turns` applies across the multi-agent run. Config: `HARLE_PLANNING_*`, `HARLE_PLANNED_MAX_TURNS`. No timeout/token-budget guardrails or output validation in orchestrator. |
 | 6. Tool Module Layer | Implemented | See current-state tools.md. Registry, skills, constraints; vault and web search modules. Approval attributes exist on tools; orchestrator does not pause for approval in the request path. |
-| 7. Run Logger | Partially implemented | `logging/run_logger.py`: vault logs (result + optional context). `db/runs.create_run`: run_id, request, context, agent, status, files_used, tools_called, result_summary, paths, duration. No TRD-style clarification/routing/context_assembled/execution/approval_actions structure. |
-| Request lifecycle | Partially implemented | Single **chat** path: create/load conversation → assemble → execute → persist messages → log → return. No router or clarifier steps. |
+| 7. Run Logger | Partially implemented | `logging/run_logger.py`: vault logs (result + optional context). `## Handoffs` section when handoffs occurred. `db/runs.create_run`: includes `handoffs` JSON array. No full TRD clarification/routing/context_assembled/execution/approval_actions structure. |
+| Request lifecycle | Partially implemented | Single **chat** path: create/load conversation → **route** → assemble → execute → persist messages → log → return. No clarifier step. |
 | Conversation mode | Implemented | All user messages go through chat; one-shot = new conversation + single exchange. `db/conversations`: create_conversation, add_message, get_recent_messages. `conversation_history` passed to assembler (P4). |
 | SSE streaming | Not implemented | No Server-Sent Events for streaming responses. |
 | Configuration | Partially implemented | `config.py` Settings: host, port, LLM provider/model, dataset path, DB URL, max_iterations, run_log_store_context, Level 3 planning (`HARLE_PLANNING_ENABLED`, `HARLE_PLANNING_MODEL`, `HARLE_PLANNING_MAX_TURNS`, `HARLE_PLANNED_MAX_TURNS`). No timeout_seconds, max_tokens_per_run, approval.*, search.max_context_pages, etc. |
 | Error handling | Partially implemented | Some HTTP 503/404; no LLM retry/backoff, token-budget pause, or TRD error table. |
-| TRD project structure | Partially implemented | api/, context/, logging/ exist; orchestrator/ has `orchestrator_service.py`, `execution.py`, `chat.py`, `finalize.py`, `service.py` (re-exports), `planner.py`, `runner_execution.py`, `reflection.py`, `sdk_result.py`. No router/, clarifier/, agents/ (runner/definitions/guardrails). Search used via engine directly, not search/client.py. |
+| TRD project structure | Partially implemented | api/, context/, logging/ exist; orchestrator/ includes `router.py`, `agents.py`, `orchestrator_service.py`, `execution.py`, `chat.py`, `finalize.py`, `service.py` (re-exports), `planner.py`, `runner_execution.py`, `reflection.py`, `sdk_result.py`. No clarifier/ package. Search used via engine directly, not search/client.py. |
 
 ---
 
@@ -46,8 +46,8 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 
 - **Endpoints:** POST `/chat` (only path for user-initiated work; returns 503 if DB not configured), GET `/run/{run_id}`, GET `/health`, plus POST `/init`, POST `/reindex`, GET `/search`.
 - **RunRequest:** `message`, `context` (work/personal), `conversation_id`.
-- **RunResponse:** `run_id`, `status`, `result`, `context`, `conversation_id`, `tools_called`, `turns_used`.
-- **RunDetail:** run metadata for GET /run/{id} (run_id, timestamp, user_request, context_scope, agent, status, routing_method, files_used, tools_called, result_summary, result_path, context_path, conversation_id, duration_ms).
+- **RunResponse:** `run_id`, `status`, `result`, `context`, `agent`, `conversation_id`, `tools_called`, `turns_used`, reflection fields, optional `handoffs`.
+- **RunDetail:** run metadata for GET /run/{id} (includes `handoffs` when stored).
 
 FastAPI is used; validation and docs align with the TRD’s “first version” API.
 
@@ -62,16 +62,16 @@ This matches the TRD’s priority-based packing and 80/20 rule. P2 (external dat
 
 ### 3. Agent Runner (core loop)
 
-- When `OPENAI_API_KEY` is set and provider is OpenAI, the orchestrator uses the **OpenAI Agents SDK**: `Agent` + `Runner.run_sync` with instructions (system prompt + tool skills + thinking instruction), tools from the registry, and `max_turns` from config.
+- When `OPENAI_API_KEY` is set and provider is OpenAI, the orchestrator uses the **OpenAI Agents SDK**: per-role `Agent` graphs with handoffs (`orchestrator/agents.py`) when `ToolRegistry` and `ContextAssembler` are both available; otherwise a single agent. Instructions combine system prompt (or P0-only for handoff targets) with per-role tool skills and `max_turns` from config across the whole run.
 - When no API key (or non-OpenAI provider), a **legacy provider** (e.g. EchoProvider) is used for a single generate call.
 - Tool names and turn count are extracted from the SDK result and returned in `RunResponse` and persisted in `runs`.
 
-So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’s separate “Agent Runner” and “guardrails” modules are not (logic lives in `orchestrator/orchestrator_service.py`, `execution.py`, `chat.py`, `finalize.py`, `runner_execution.py`, and `planner.py` for Level 3; `service.py` re-exports the public API).
+So the agentic loop, tool use, multi-turn reasoning, and multi-agent handoffs are in place; the TRD’s separate “guardrails” module is not (logic lives in `orchestrator/orchestrator_service.py`, `execution.py`, `chat.py`, `finalize.py`, `runner_execution.py`, `agents.py`, and `planner.py` for Level 3; `service.py` re-exports the public API).
 
 ### 4. Run Logger (vault + PostgreSQL)
 
 - **Vault:** `log_run_to_vault` writes `logs/YYYY/MM/<run_id>_result.md` (and optionally `_context.md`) with YAML frontmatter and Markdown body, per TRD logs directory design.
-- **PostgreSQL:** `create_run` inserts into `runs` with run_id, timestamp, user_request, context_scope, agent, status, files_used, tools_called, model_used, result_summary, result_path, context_path, conversation_id, duration_ms. `routing_method` is set when using the Agents SDK path to `direct` (Level 2) or `planned` (Level 3 plan-then-execute); otherwise may be `None`.
+- **PostgreSQL:** `create_run` inserts into `runs` including optional `handoffs` JSON. `routing_method` is set from the router and/or planner (`direct`, `keyword_match`, `default`, `explicit_override`, `conversation_continue` on follow-up turns that keep the conversation’s role, or `planned`).
 
 ### 5. Conversation mode
 
@@ -95,8 +95,8 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ### 1. Agent Runner and guardrails
 
-- **Implemented:** Runner with tools, max_turns (max iterations).
-- **Missing:** Dedicated `agents/` package (runner, definitions, guardrails). No handoffs, no timeout, no token-budget guardrail, no output validation (empty/repetition/artifact check). Tool allowlist is effectively “all registered tools” rather than per-role allowlist from the prompt file.
+- **Implemented:** Runner with per-role tools (when multi-agent path active), handoffs, max_turns across the run.
+- **Missing:** Dedicated top-level `agents/` package (TRD layout). No timeout, no token-budget guardrail, no output validation (empty/repetition/artifact check) in orchestrator.
 
 ### 2. Run Logger content
 
@@ -105,7 +105,7 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ### 3. API response vs TRD
 
-- RunResponse has `tools_called` and `turns_used` but not `agent` or `clarification_needed`. TRD example response includes `agent` and `clarification_needed`.
+- `RunResponse` includes `agent` and optional `handoffs`. TRD example `clarification_needed` is not implemented.
 
 ### 4. Configuration
 
@@ -119,11 +119,11 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ## What Is Not Implemented Yet
 
-### 1. Router (which agent handles this?)
+### 1. Router extensions (workflow + LLM)
 
-**Missing:** A `router/` module that decides agent role: explicit override (e.g. “as researcher: …”), context-based keyword rules (Trello/tasks → secretary, research/report → researcher, dataset/prompts → specialist), workflow template match against the vault, and LLM fallback when rules are ambiguous.
+**Missing:** Workflow template match against the vault and LLM fallback when keyword rules are ambiguous (TRD layered routing steps 3–4).
 
-**What this would unlock:** Correct role selection (secretary, researcher, specialist) instead of a single default; better use of role-specific prompts and tools; predictable, explainable routing.
+**What this would unlock:** Better routing on edge cases without expanding keyword lists indefinitely.
 
 ### 2. Clarifier (is the request clear enough?)
 
@@ -155,19 +155,7 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 **What this would unlock:** Protection against runaway cost and infinite loops; higher quality and safer responses.
 
-### 7. Handoffs (multi-agent)
-
-**Missing:** One agent handing off to another mid-run (e.g. Secretary → Researcher → back to Secretary). SDK support may exist; it is not wired in the orchestrator.
-
-**What this would unlock:** Composite tasks that span roles without a single mega-agent.
-
-### 8. Per-agent tool allowlist from vault
-
-**Missing:** Loading the active agent’s allowed tools from its prompt file (or a linked config) and passing only those to the Runner. Currently all registered tools are passed.
-
-**What this would unlock:** Stricter “Researcher cannot write to Trello” enforcement at the orchestrator level, matching the TRD.
-
-### 9. TRD config sections
+### 7. TRD config sections
 
 **Missing:** config.example.yaml and Settings for limits (timeout_seconds, max_tokens_per_run, max_conversation_turns), search (max_results, max_context_pages), approval (require_for_write, auto_approve_read, work_context_strict), and dataset/indexer as in the TRD.
 
@@ -177,13 +165,13 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 ## Key Deviations From The TRD
 
-### No router or clarifier packages
+### Router and clarifier packaging
 
-The TRD describes separate Router and Clarifier modules. The codebase has no `router/` or `clarifier/`; every request uses a fixed agent role and proceeds without clarification.
+The TRD shows top-level `router/` and `clarifier/` packages. Routing lives in `orchestrator/router.py`; there is still no clarifier module.
 
 ### Agent execution inside the orchestrator package
 
-The TRD project structure shows `agents/runner.py`, `agents/definitions.py`, `agents/guardrails.py`. The implementation uses the OpenAI Agents SDK from `orchestrator/orchestrator_service.py` and `orchestrator/execution.py` (with `service.py` as the stable import path); there is no separate `agents/` package. Role “definitions” (which prompt to load) are effectively handled by the Context Assembler’s P0 loading and role filter.
+The TRD project structure shows a top-level `agents/` package. Multi-agent definitions and handoffs live in `orchestrator/agents.py` alongside `runner_execution.py`; there is no separate `agents/` package at `src/harle/agents/`.
 
 ### Search usage
 
@@ -191,16 +179,12 @@ The TRD mentions a “Search Client” and project structure shows `search/clien
 
 ### Run response and log shape
 
-RunResponse omits `agent` and `clarification_needed`. Stored run data does not include the TRD’s nested clarification, routing, context_assembled, execution, and approval_actions structures.
-
-### Single agent role
-
-The TRD defines Secretary, Researcher, Specialist with different triggers. The implementation uses a single default role (`researcher`); routing is not implemented.
+`RunResponse` includes `agent` and `handoffs` (when present). Stored run data still does not include the TRD’s full nested clarification, routing confidence, context_assembled, execution, and approval_actions structures.
 
 ---
 
 ## Current Assessment
 
-The Orchestrator is **usable for single-role, one-shot and multi-turn runs** with context assembly, tool use, and logging. The main gaps are **routing** (so the right agent runs), **clarification** (so vague requests are refined before execution), **approval flow** (so write/delete tools pause for user confirmation), and **richer logging and guardrails** (timeout, token cap, output validation, full TRD log shape).
+The Orchestrator is **usable for multi-role runs** (routing + handoffs), one-shot and multi-turn chat, context assembly, per-role tools, and logging including handoff metadata. The main gaps are **clarification**, **approval flow** in the request path, **router extensions** (workflow + LLM), and **richer logging and guardrails** (timeout, token cap, output validation, full TRD log shape).
 
-The next meaningful milestones would be: (1) **Router** — implement role selection so secretary/researcher/specialist are used by rule or workflow; (2) **Clarifier** — add ambiguity check and optional question round-trip; (3) **Approval flow** — wire tool-layer `needs_approval` into the API so the client can approve/deny and the run resumes accordingly.
+The next meaningful milestones would be: (1) **Clarifier** — ambiguity check and optional question round-trip; (2) **Approval flow** — wire tool-layer approval into the API; (3) **Guardrails** — timeout, token cap, output validation.

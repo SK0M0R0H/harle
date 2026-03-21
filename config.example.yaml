@@ -40,6 +40,12 @@ HARLE_RUN_LOG_STORE_CONTEXT: true   # Set true to save assembled prompt in logs/
 # Web search requires TAVILY_API_KEY env var.
 # Vault tools (dataset_search, dataset_read_file) are enabled automatically
 # when HARLE_DATASET_PATH is configured.
+#
+# Per-role tool allowlists (which ToolRegistry modules each agent role may use):
+# Copy config/role_tool_modules.example.json and set:
+#   HARLE_ROLE_TOOL_MODULES_PATH: "/path/to/role_tool_modules.json"
+# Or place role_tool_modules.json at the vault root (HARLE_DATASET_PATH).
+# HARLE_ROLE_TOOL_MODULES_PATH: null
 
 # --- Search ---
 # search:

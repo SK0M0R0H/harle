@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from harle.config import PROVIDER_OPENAI, Settings
+from harle.config import PROVIDER_OPENAI, Settings, get_role_tool_modules
 from harle.context.assembler import ContextAssembler
 from harle.db.connection import Database
 from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
@@ -37,6 +37,8 @@ def build_orchestrator(
     provider_name = settings.HARLE_LLM_PROVIDER.lower()
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
+    role_tool_modules = get_role_tool_modules()
+
     if provider_name == PROVIDER_OPENAI and openai_api_key:
         provider: LLMProvider = OpenAIProvider(
             model=settings.HARLE_LLM_MODEL,
@@ -63,6 +65,7 @@ def build_orchestrator(
             reflection_trigger_keywords=settings.HARLE_REFLECTION_TRIGGER_KEYWORDS,
             reflection_trigger_roles=settings.HARLE_REFLECTION_TRIGGER_ROLES,
             reflection_improvement_max_turns=settings.HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS,
+            role_tool_modules=role_tool_modules,
         )
 
     provider = EchoProvider()
@@ -87,4 +90,5 @@ def build_orchestrator(
         reflection_trigger_keywords=settings.HARLE_REFLECTION_TRIGGER_KEYWORDS,
         reflection_trigger_roles=settings.HARLE_REFLECTION_TRIGGER_ROLES,
         reflection_improvement_max_turns=settings.HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS,
+        role_tool_modules=role_tool_modules,
     )

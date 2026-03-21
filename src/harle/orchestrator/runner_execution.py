@@ -18,12 +18,23 @@ from harle.orchestrator.reflection import (
     ReflectionRunRecord,
     apply_reflection_pipeline,
 )
-from harle.orchestrator.sdk_result import count_tool_call_invocations, extract_run_metadata
+from harle.orchestrator.agents import (
+    HandoffRecord,
+    build_execution_agents,
+    final_agent_from_handoffs,
+    tool_names_for_role,
+)
+from harle.orchestrator.role_tool_modules import DEFAULT_ROLE_TOOL_MODULES
+from harle.orchestrator.sdk_result import (
+    count_tool_call_invocations,
+    extract_handoff_metadata,
+    extract_run_metadata,
+)
 from harle.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_AGENT_ROLE = "researcher"
+DEFAULT_AGENT_ROLE = "assistant"
 
 
 @dataclass(frozen=True)
@@ -43,6 +54,8 @@ class AgentExecutionResult:
     reflection_triggered: bool | None = None
     reflection_improved: bool | None = None
     reflection_record: ReflectionRunRecord | None = None
+    handoffs: list[HandoffRecord] | None = None
+    final_agent: str | None = None
 
 
 def run_agent_execution(
@@ -60,6 +73,11 @@ def run_agent_execution(
     reflection_config: ReflectionConfig | None = None,
     reflection_model: str | None = None,
     agent_role: str = DEFAULT_AGENT_ROLE,
+    multi_agent: bool = False,
+    role_instructions: dict[str, str] | None = None,
+    handoff_records_out: list[HandoffRecord] | None = None,
+    routing_method_from_router: str | None = None,
+    role_tool_modules: dict[str, list[str]] | None = None,
 ) -> AgentExecutionResult:
     """Execute via the Agents SDK Runner with optional plan-then-execute.
 
@@ -79,16 +97,25 @@ def run_agent_execution(
         reflection_config: Level 4 reflection settings; ``None`` skips reflection.
         reflection_model: Model for the reflection critic; ``None`` uses config/execution model.
         agent_role: Role name for reflection triggers (e.g. ``researcher``).
+        multi_agent: When ``True``, build a handoff graph via :func:`build_execution_agents`.
+        role_instructions: Per-role instruction strings (including skills) for multi-agent mode.
+        handoff_records_out: Mutable list populated by handoff callbacks.
+        routing_method_from_router: Router method (``keyword_match``, ``default``, etc.).
+        role_tool_modules: Per-role tool module allowlist; ``None`` uses built-in defaults.
 
     Returns:
         :class:`AgentExecutionResult` with optional plan metadata.
     """
     from agents import Agent, MaxTurnsExceeded, Runner
 
+    rt_modules = role_tool_modules if role_tool_modules is not None else DEFAULT_ROLE_TOOL_MODULES
+
     tools: list[object] = []
     if tool_registry:
         all_tool_names = tool_registry.list_all_tools()
         tools = tool_registry.get_agent_tools(all_tool_names)
+
+    routing_method = routing_method_from_router or "direct"
 
     base_instructions = build_instructions(system_prompt, bool(tools))
     max_turns = max_iterations
@@ -96,7 +123,6 @@ def run_agent_execution(
     plan_tools: list[str] = []
     plan_invocations = 0
     planning_tool_context = ""
-    routing_method = "direct"
 
     if planning_enabled:
         try:
@@ -148,9 +174,15 @@ def run_agent_execution(
             if ctx:
                 injection_blocks.append(ctx)
             if injection_blocks:
-                base_instructions = (
-                    "\n\n".join(injection_blocks) + "\n\n" + base_instructions
-                )
+                joined = "\n\n".join(injection_blocks) + "\n\n"
+                base_instructions = joined + base_instructions
+                # Handoff targets must see the plan and planning tool transcript too;
+                # otherwise only the starting agent's instructions include them.
+                if multi_agent and role_instructions:
+                    for role_key in role_instructions:
+                        role_instructions[role_key] = (
+                            joined + role_instructions[role_key]
+                        )
 
     etrace.detail(
         "Agent execution started",
@@ -161,12 +193,45 @@ def run_agent_execution(
         routing_method=routing_method,
     )
 
-    agent = Agent(
-        name=DEFAULT_AGENT_ROLE,
-        instructions=base_instructions,
-        tools=tools,
-        model=model,
+    handoff_records: list[HandoffRecord] = []
+    if handoff_records_out is not None:
+        handoff_records_out.clear()
+        handoff_records = handoff_records_out
+
+    use_multi = (
+        multi_agent
+        and role_instructions
+        and tool_registry is not None
+        and len(role_instructions) > 0
     )
+
+    if use_multi:
+        try:
+            from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
+        except ImportError:
+            RECOMMENDED_PROMPT_PREFIX = ""
+
+        agents_map = build_execution_agents(
+            model=model,
+            tool_registry=tool_registry,
+            role_instructions=dict(role_instructions),
+            handoff_records_out=handoff_records,
+            handoff_prompt_prefix=RECOMMENDED_PROMPT_PREFIX,
+            role_tool_modules=rt_modules,
+        )
+        agent = agents_map.get(agent_role) or Agent(
+            name=agent_role,
+            instructions=base_instructions,
+            tools=tools,
+            model=model,
+        )
+    else:
+        agent = Agent(
+            name=agent_role,
+            instructions=base_instructions,
+            tools=tools,
+            model=model,
+        )
 
     try:
         result = Runner.run_sync(agent, user_message, max_turns=max_turns)
@@ -191,6 +256,8 @@ def run_agent_execution(
             reflection_triggered=None,
             reflection_improved=None,
             reflection_record=None,
+            handoffs=None,
+            final_agent=None,
         )
 
     exec_tools, turns_used = extract_run_metadata(result)
@@ -201,11 +268,35 @@ def run_agent_execution(
     text = result.final_output
     text_str = str(text).strip() if text else ""
 
+    sdk_handoffs = extract_handoff_metadata(result)
+    if not handoff_records and sdk_handoffs:
+        handoff_records = [
+            HandoffRecord(
+                source_agent=h.get("source_agent", ""),
+                target_agent=h.get("target_agent", ""),
+                reason=h.get("reason", ""),
+            )
+            for h in sdk_handoffs
+        ]
+    final_agent_name = final_agent_from_handoffs(agent_role, handoff_records)
+
     reflection_triggered: bool | None = None
     reflection_improved: bool | None = None
     reflection_record: ReflectionRunRecord | None = None
 
     post_execution_turns = 0
+    reflect_tools = tools
+    reflect_base = base_instructions
+    if use_multi and tool_registry is not None:
+        rt_names = tool_names_for_role(
+            tool_registry,
+            agent_role,
+            role_tool_modules=rt_modules,
+        )
+        reflect_tools = tool_registry.get_agent_tools(rt_names)
+        if role_instructions and agent_role in role_instructions:
+            reflect_base = role_instructions[agent_role]
+
     if reflection_config is not None:
         (
             text_str,
@@ -221,8 +312,8 @@ def run_agent_execution(
             tool_invocation_count=tool_invocation_total,
             routing_method=routing_method,
             agent_role=agent_role,
-            base_instructions=base_instructions,
-            tools=tools,
+            base_instructions=reflect_base,
+            tools=reflect_tools,
             execution_model=model,
             reflection_config=reflection_config,
             reflection_model_override=reflection_model,
@@ -246,4 +337,6 @@ def run_agent_execution(
         reflection_triggered=reflection_triggered,
         reflection_improved=reflection_improved,
         reflection_record=reflection_record,
+        handoffs=handoff_records or None,
+        final_agent=final_agent_name,
     )

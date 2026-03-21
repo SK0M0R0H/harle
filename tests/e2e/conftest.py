@@ -19,6 +19,22 @@ import pytest
 # Repo root: tests/e2e/conftest.py -> tests -> repo root
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _E2E_VAULT = _REPO_ROOT / "tests" / "fixtures" / "e2e_vault"
+# Packaged role prompts under src (do not import harle.bootstrap here: pytest may load
+# an older site-packages harle than this checkout; the server subprocess uses PYTHONPATH=src).
+_AGENT_PROMPTS_SRC = _REPO_ROOT / "src" / "harle" / "bootstrap_data" / "agent_prompts"
+
+
+def _agent_prompt_seed_roles() -> tuple[str, ...]:
+    """Role stems matching ``harle.bootstrap`` seeds (``{role}.md`` under agent_prompts)."""
+    if not _AGENT_PROMPTS_SRC.is_dir():
+        raise FileNotFoundError(
+            f"Agent prompt seeds not found: {_AGENT_PROMPTS_SRC} "
+            "(run tests from the repository root).",
+        )
+    stems = sorted(p.stem for p in _AGENT_PROMPTS_SRC.glob("*.md"))
+    if not stems:
+        raise FileNotFoundError(f"No *.md role prompts under {_AGENT_PROMPTS_SRC}")
+    return tuple(stems)
 
 
 def _free_port() -> int:
@@ -60,6 +76,11 @@ def e2e_vault_copy(tmp_path_factory: pytest.TempPathFactory) -> str:
     """
     dest = tmp_path_factory.mktemp("e2e_vault")
     shutil.copytree(_E2E_VAULT, dest, dirs_exist_ok=True)
+    # Role prompts: same files as vault bootstrap (harle/bootstrap_data/agent_prompts).
+    prompts_dest = dest / "prompts"
+    prompts_dest.mkdir(parents=True, exist_ok=True)
+    for role in _agent_prompt_seed_roles():
+        shutil.copy2(_AGENT_PROMPTS_SRC / f"{role}.md", prompts_dest / f"{role}.md")
     return str(dest)
 
 

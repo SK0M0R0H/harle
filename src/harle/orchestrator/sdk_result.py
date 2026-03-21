@@ -60,6 +60,36 @@ def extract_run_metadata(result: object) -> tuple[list[str], int]:
     return tools, turns
 
 
+def extract_handoff_metadata(result: object) -> list[dict[str, str]]:
+    """Best-effort handoff events from an Agents SDK run result (duck-typed).
+
+    Used to cross-check :class:`~harle.orchestrator.agents.HandoffRecord` entries
+    from ``on_handoff`` callbacks.
+
+    Returns:
+        List of dicts with keys ``source_agent``, ``target_agent``, ``reason`` (may be empty).
+    """
+    out: list[dict[str, str]] = []
+    for item in getattr(result, "new_items", []):
+        item_type = getattr(item, "type", "")
+        if item_type != "handoff_call_item":
+            continue
+        raw = getattr(item, "raw_item", None)
+        name = getattr(raw, "name", None) if raw is not None else None
+        if not isinstance(name, str) or not name.startswith("transfer_to_"):
+            continue
+        target = name.removeprefix("transfer_to_").strip()
+        # Source is not always in the item; leave blank if unknown.
+        out.append(
+            {
+                "source_agent": "",
+                "target_agent": target,
+                "reason": "",
+            },
+        )
+    return out
+
+
 def _tool_name_from_call_raw(raw: object) -> str:
     """Best-effort tool name from a tool call ``raw_item``."""
     if raw is None:

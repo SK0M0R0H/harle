@@ -54,6 +54,10 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
+"harle" = [
+  "bootstrap_data/agent_prompts/*.md",
+  "bootstrap_data/vault_seeds/**/*.md",
+]
 "harle.tools.dummy" = ["skills/*.md"]
 "harle.tools.notion" = ["skills/*.md"]
 "harle.tools.trello" = ["skills/*.md"]

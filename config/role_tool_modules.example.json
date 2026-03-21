@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to HARLE_ROLE_TOOL_MODULES_PATH or <HARLE_DATASET_PATH>/role_tool_modules.json. Maps agent role → tool module names (see harle.tools.factory). Omitted roles keep built-in defaults.",
+  "assistant": ["vault", "web_search", "think"],
+  "researcher": ["vault", "web_search", "think"],
+  "secretary": ["vault", "trello", "notion", "think"],
+  "specialist": ["vault", "think"],
+  "writer": ["vault", "think"]
+}

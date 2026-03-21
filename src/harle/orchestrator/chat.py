@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from harle.api.models import RunRequest, RunResponse
 from harle.debug import etrace
 
+from harle.orchestrator.router import route as route_message
+from harle.orchestrator.router import route_with_pinned_role
 from harle.orchestrator.state import (
     DEFAULT_AGENT_ROLE,
     AgentResult,
@@ -23,6 +25,22 @@ from harle.orchestrator.timeout import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _handoffs_to_api(
+    handoffs: list | None,
+) -> list[dict[str, str]] | None:
+    """Serialize handoff records for API responses."""
+    if not handoffs:
+        return None
+    return [
+        {
+            "source_agent": h.source_agent,
+            "target_agent": h.target_agent,
+            "reason": h.reason,
+        }
+        for h in handoffs
+    ]
 
 
 class ChatMixin:
@@ -64,16 +82,20 @@ class ChatMixin:
             get_conversation,
             get_recent_messages,
             touch_conversation,
+            update_conversation_agent_role,
         )
 
         conversation_history: list[dict[str, str]] | None = None
         if state.conversation_id is not None:
             with self.db.session() as session:
                 conv = get_conversation(session, state.conversation_id)
-            if conv is None:
-                raise ValueError(
-                    f"Conversation {state.conversation_id!r} not found."
-                )
+                if conv is None:
+                    raise ValueError(
+                        f"Conversation {state.conversation_id!r} not found."
+                    )
+                # Read attributes while the session is active (ORM instance expires on exit).
+                pinned_role = conv.agent_role
+            route = route_with_pinned_role(request.message, pinned_role)
             with self.db.session() as session:
                 messages = get_recent_messages(
                     session,
@@ -84,20 +106,31 @@ class ChatMixin:
                     for m in messages
                 ]
         else:
+            route = route_message(request.message)
             state.conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
             with self.db.session() as session:
                 create_conversation(
                     session,
                     conversation_id=state.conversation_id,
                     context_scope=request.context,
-                    agent_role=DEFAULT_AGENT_ROLE,
+                    agent_role=route.agent_role,
                 )
+
+        state.starting_role = route.agent_role
+        routed_message = route.original_message
+
+        etrace.step(
+            "Routed to agent",
+            module="orchestrator",
+            agent=route.agent_role,
+            routing_method=route.routing_method,
+        )
 
         if self.context_assembler is not None:
             package = self.context_assembler.assemble(
-                message=request.message,
+                message=routed_message,
                 context=request.context,
-                agent_role=DEFAULT_AGENT_ROLE,
+                agent_role=route.agent_role,
                 conversation_history=conversation_history,
             )
             state.system_prompt = package.system_prompt
@@ -124,10 +157,12 @@ class ChatMixin:
             )
 
         agent_result = self._execute(
-            user_message=request.message,
+            user_message=routed_message,
             context=request.context,
             conversation_id=state.conversation_id,
             system_prompt=state.system_prompt,
+            agent_role=route.agent_role,
+            routing_method_from_router=route.routing_method,
         )
         state.result_text = agent_result.text
         state.tools_called = agent_result.tools_called or None
@@ -139,6 +174,8 @@ class ChatMixin:
         state.reflection_triggered = agent_result.reflection_triggered
         state.reflection_improved = agent_result.reflection_improved
         state.reflection_record = agent_result.reflection_record
+        state.handoffs = agent_result.handoffs
+        state.final_agent = agent_result.final_agent
         etrace.step(
             "Agent execution complete",
             module="orchestrator",
@@ -163,6 +200,12 @@ class ChatMixin:
                 run_id=state.run_id,
             )
             touch_conversation(session, state.conversation_id)
+            if route.routing_method == "explicit_override":
+                update_conversation_agent_role(
+                    session,
+                    state.conversation_id,
+                    route.agent_role,
+                )
 
         return agent_result
 
@@ -189,12 +232,6 @@ class ChatMixin:
             module="orchestrator",
             run_id=state.run_id,
         ):
-            etrace.step(
-                "Routed to agent",
-                module="orchestrator",
-                agent=DEFAULT_AGENT_ROLE,
-                routing_method="pending",
-            )
             try:
                 agent_result = run_with_timeout(
                     self.run_timeout_seconds,
@@ -274,15 +311,21 @@ class ChatMixin:
                     state.run_id, agent_result.turns_used, agent_result.tools_called,
                 )
 
+        response_agent = (
+            state.final_agent
+            or state.starting_role
+            or DEFAULT_AGENT_ROLE
+        )
         return RunResponse(
             run_id=state.run_id,
             status="completed",
             result=state.result_text or "",
             context=request.context,
-            agent=DEFAULT_AGENT_ROLE,
+            agent=response_agent,
             conversation_id=state.conversation_id,
             tools_called=state.tools_called,
             turns_used=state.turns_used,
             reflection_triggered=state.reflection_triggered,
             reflection_improved=state.reflection_improved,
+            handoffs=_handoffs_to_api(state.handoffs),
         )

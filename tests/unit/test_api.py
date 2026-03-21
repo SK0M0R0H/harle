@@ -336,6 +336,7 @@ class TestGetRunEndpoint:
             "duration_ms",
             "reflection_triggered",
             "reflection_improved",
+            "handoffs",
         }
 
         class _Run:
@@ -357,6 +358,7 @@ class TestGetRunEndpoint:
                 self.duration_ms = 12
                 self.reflection_triggered = None
                 self.reflection_improved = None
+                self.handoffs = None
 
             def __getattribute__(self, name: str) -> object:
                 if (
