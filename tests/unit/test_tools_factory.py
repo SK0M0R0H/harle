@@ -110,6 +110,7 @@ class TestBuildConnections:
 
 
 class TestBuildToolRegistry:
+    @patch("harle.tools.factory._register_think")
     @patch("harle.tools.factory._register_notion")
     @patch("harle.tools.factory._register_trello")
     @patch("harle.tools.factory._register_web_search")
@@ -122,17 +123,20 @@ class TestBuildToolRegistry:
         mock_register_web: MagicMock,
         mock_register_trello: MagicMock,
         mock_register_notion: MagicMock,
+        mock_register_think: MagicMock,
     ) -> None:
         mock_build_connections.return_value = None
         mock_register_vault.return_value = False
         mock_register_web.return_value = False
         mock_register_trello.return_value = False
         mock_register_notion.return_value = False
+        mock_register_think.return_value = False
 
         registry = build_tool_registry(search_engine=None, dataset_reader=None)
 
         assert registry is None
 
+    @patch("harle.tools.factory._register_think")
     @patch("harle.tools.factory._register_notion")
     @patch("harle.tools.factory._register_trello")
     @patch("harle.tools.factory._register_web_search")
@@ -145,6 +149,7 @@ class TestBuildToolRegistry:
         mock_register_web: MagicMock,
         mock_register_trello: MagicMock,
         mock_register_notion: MagicMock,
+        mock_register_think: MagicMock,
     ) -> None:
         connections = MagicMock()
         mock_build_connections.return_value = connections
@@ -152,6 +157,7 @@ class TestBuildToolRegistry:
         mock_register_web.return_value = False
         mock_register_trello.return_value = True
         mock_register_notion.return_value = False
+        mock_register_think.return_value = False
 
         registry = build_tool_registry(search_engine=None, dataset_reader=None)
 

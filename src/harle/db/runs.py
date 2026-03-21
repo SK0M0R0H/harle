@@ -91,6 +91,8 @@ def create_run(
     result_path: str | None = None,
     context_path: str | None = None,
     conversation_id: str | None = None,
+    reflection_triggered: bool | None = None,
+    reflection_improved: bool | None = None,
 ) -> Run:
     """Insert a single run record.
 
@@ -114,6 +116,8 @@ def create_run(
         result_path: Vault-relative path to result log file (optional).
         context_path: Vault-relative path to context log file (optional).
         conversation_id: Conversation ID if part of a chat (optional).
+        reflection_triggered: Whether Level 4 reflection ran (optional).
+        reflection_improved: Whether an improvement pass replaced the draft (optional).
 
     Returns:
         The created :class:`Run` instance.
@@ -137,6 +141,8 @@ def create_run(
         result_path=result_path,
         context_path=context_path,
         conversation_id=conversation_id,
+        reflection_triggered=reflection_triggered,
+        reflection_improved=reflection_improved,
     )
     session.add(run)
     session.flush()

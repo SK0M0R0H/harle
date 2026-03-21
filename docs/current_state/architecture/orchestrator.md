@@ -28,7 +28,7 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 | 2. Router | Not implemented | No `router/` package. Agent role is fixed as `DEFAULT_AGENT_ROLE = "researcher"`. No explicit override, context-based rules, workflow template match, or LLM fallback. |
 | 3. Clarifier | Not implemented | No `clarifier/` package. No ambiguity check, no clarification questions, no round-trip before execution. |
 | 4. Context Assembler | Implemented | `context/assembler.py`: P0 (prompts + policies), P1 (dataset search), P4 (conversation history). 80/20 budget, tiktoken. No P2 (external data), P3 (prior runs, memories). |
-| 5. Agent Runner | Partially implemented | Execution in `orchestrator/service.py` + `orchestrator/runner_execution.py`: Agents SDK Runner when OpenAI key set, else echo provider. Single execution role (`researcher`), optional Level 3 planning agent (`planner`) with same tools; tools from registry, max_turns. Config: `HARLE_PLANNING_*`, `HARLE_PLANNED_MAX_TURNS`. No separate `agents/` package, no handoffs, no timeout/token-budget guardrails, no output validation. |
+| 5. Agent Runner | Partially implemented | Execution in `orchestrator/orchestrator_service.py` + `execution.py` / `chat.py` / `finalize.py` + `runner_execution.py` (`service.py` re-exports): Agents SDK Runner when OpenAI key set, else echo provider. Single execution role (`researcher`), optional Level 3 planning agent (`planner`) with same tools; tools from registry, max_turns. Config: `HARLE_PLANNING_*`, `HARLE_PLANNED_MAX_TURNS`. No separate `agents/` package, no handoffs, no timeout/token-budget guardrails, no output validation. |
 | 6. Tool Module Layer | Implemented | See current-state tools.md. Registry, skills, constraints; vault and web search modules. Approval attributes exist on tools; orchestrator does not pause for approval in the request path. |
 | 7. Run Logger | Partially implemented | `logging/run_logger.py`: vault logs (result + optional context). `db/runs.create_run`: run_id, request, context, agent, status, files_used, tools_called, result_summary, paths, duration. No TRD-style clarification/routing/context_assembled/execution/approval_actions structure. |
 | Request lifecycle | Partially implemented | Single **chat** path: create/load conversation → assemble → execute → persist messages → log → return. No router or clarifier steps. |
@@ -36,7 +36,7 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 | SSE streaming | Not implemented | No Server-Sent Events for streaming responses. |
 | Configuration | Partially implemented | `config.py` Settings: host, port, LLM provider/model, dataset path, DB URL, max_iterations, run_log_store_context, Level 3 planning (`HARLE_PLANNING_ENABLED`, `HARLE_PLANNING_MODEL`, `HARLE_PLANNING_MAX_TURNS`, `HARLE_PLANNED_MAX_TURNS`). No timeout_seconds, max_tokens_per_run, approval.*, search.max_context_pages, etc. |
 | Error handling | Partially implemented | Some HTTP 503/404; no LLM retry/backoff, token-budget pause, or TRD error table. |
-| TRD project structure | Partially implemented | api/, context/, logging/ exist; orchestrator/ has `service.py`, `planner.py`, `runner_execution.py`, `sdk_result.py`. No router/, clarifier/, agents/ (runner/definitions/guardrails). Search used via engine directly, not search/client.py. |
+| TRD project structure | Partially implemented | api/, context/, logging/ exist; orchestrator/ has `orchestrator_service.py`, `execution.py`, `chat.py`, `finalize.py`, `service.py` (re-exports), `planner.py`, `runner_execution.py`, `reflection.py`, `sdk_result.py`. No router/, clarifier/, agents/ (runner/definitions/guardrails). Search used via engine directly, not search/client.py. |
 
 ---
 
@@ -66,7 +66,7 @@ This matches the TRD’s priority-based packing and 80/20 rule. P2 (external dat
 - When no API key (or non-OpenAI provider), a **legacy provider** (e.g. EchoProvider) is used for a single generate call.
 - Tool names and turn count are extracted from the SDK result and returned in `RunResponse` and persisted in `runs`.
 
-So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’s separate “Agent Runner” and “guardrails” modules are not (logic lives in `orchestrator/service.py`, `orchestrator/runner_execution.py`, and `orchestrator/planner.py` for Level 3).
+So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’s separate “Agent Runner” and “guardrails” modules are not (logic lives in `orchestrator/orchestrator_service.py`, `execution.py`, `chat.py`, `finalize.py`, `runner_execution.py`, and `planner.py` for Level 3; `service.py` re-exports the public API).
 
 ### 4. Run Logger (vault + PostgreSQL)
 
@@ -181,9 +181,9 @@ So the agentic loop, tool use, and multi-turn reasoning are in place; the TRD’
 
 The TRD describes separate Router and Clarifier modules. The codebase has no `router/` or `clarifier/`; every request uses a fixed agent role and proceeds without clarification.
 
-### Agent execution inside orchestrator/service.py
+### Agent execution inside the orchestrator package
 
-The TRD project structure shows `agents/runner.py`, `agents/definitions.py`, `agents/guardrails.py`. The implementation uses the OpenAI Agents SDK from within `orchestrator/service.py`; there is no separate `agents/` package. Role “definitions” (which prompt to load) are effectively handled by the Context Assembler’s P0 loading and role filter.
+The TRD project structure shows `agents/runner.py`, `agents/definitions.py`, `agents/guardrails.py`. The implementation uses the OpenAI Agents SDK from `orchestrator/orchestrator_service.py` and `orchestrator/execution.py` (with `service.py` as the stable import path); there is no separate `agents/` package. Role “definitions” (which prompt to load) are effectively handled by the Context Assembler’s P0 loading and role filter.
 
 ### Search usage
 

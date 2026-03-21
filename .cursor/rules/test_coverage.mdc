@@ -1,7 +1,6 @@
 ---
-alwaysApply: true
+alwaysApply: false
 ---
-
 If you're writing new functionality:
 1. Check if tests for the related module exist in the project.
 2. If there are no tests for the module at all (it's a new module), do not write tests

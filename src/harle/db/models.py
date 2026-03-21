@@ -73,6 +73,8 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
+    reflection_triggered: Mapped[bool | None] = mapped_column(Boolean)
+    reflection_improved: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class ExecutionTrace(Base):

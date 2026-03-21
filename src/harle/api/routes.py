@@ -168,6 +168,8 @@ def build_router(
                 context_path=run.context_path,
                 conversation_id=run.conversation_id,
                 duration_ms=run.duration_ms,
+                reflection_triggered=run.reflection_triggered,
+                reflection_improved=run.reflection_improved,
             )
 
     @router.post("/chat", response_model=RunResponse)
