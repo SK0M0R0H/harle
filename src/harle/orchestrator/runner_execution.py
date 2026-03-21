@@ -176,14 +176,13 @@ def run_agent_execution(
             if injection_blocks:
                 joined = "\n\n".join(injection_blocks) + "\n\n"
                 base_instructions = joined + base_instructions
-                if (
-                    multi_agent
-                    and role_instructions
-                    and agent_role in role_instructions
-                ):
-                    role_instructions[agent_role] = (
-                        joined + role_instructions[agent_role]
-                    )
+                # Handoff targets must see the plan and planning tool transcript too;
+                # otherwise only the starting agent's instructions include them.
+                if multi_agent and role_instructions:
+                    for role_key in role_instructions:
+                        role_instructions[role_key] = (
+                            joined + role_instructions[role_key]
+                        )
 
     etrace.detail(
         "Agent execution started",
