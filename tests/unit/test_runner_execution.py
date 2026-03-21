@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from harle.orchestrator.planner import Plan, PlanStep
+from harle.orchestrator.model_tier import ComplexExecutionTier, ModelTierConfig
+from harle.orchestrator.planner import Plan, PlanStep, RequestComplexity
 
 
 def test_planning_injection_prepends_all_multi_agent_roles(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -18,7 +19,11 @@ def test_planning_injection_prepends_all_multi_agent_roles(monkeypatch: pytest.M
         raw_text="1. [output] finish",
     )
 
-    monkeypatch.setattr(re, "classify_complexity", lambda m: "complex")
+    monkeypatch.setattr(
+        re,
+        "classify_complexity",
+        lambda m: RequestComplexity.COMPLEX,
+    )
     monkeypatch.setattr(re, "generate_plan", lambda **k: (plan, [], "", 0))
 
     captured: dict[str, object] = {}
@@ -51,15 +56,22 @@ def test_planning_injection_prepends_all_multi_agent_roles(monkeypatch: pytest.M
 
     role_instructions = {"researcher": "R0", "writer": "W0"}
 
+    tier = ModelTierConfig(
+        classifier="mini",
+        planner="plan-model",
+        executor="exec-model",
+    )
+
     re.run_agent_execution(
         user_message="long research query with enough complexity",
         system_prompt="sys",
         build_instructions=lambda sp, ht: "BASE",
         tool_registry=tr,
-        model="gpt-4o-mini",
+        model_tier_config=tier,
+        complex_execution_tier=ComplexExecutionTier.EXECUTOR,
+        reflection_critic_model="plan-model",
         max_iterations=5,
         planning_enabled=True,
-        planning_model=None,
         planning_max_turns=3,
         planned_max_turns=None,
         agent_role="researcher",

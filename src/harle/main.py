@@ -164,11 +164,13 @@ def create_app() -> FastAPI:
         registry = TopicRegistry()
         run_manager = CaptureRunManager(registry)
         writer = ProfileWriter(Path(settings.HARLE_DATASET_PATH))
+        from harle.orchestrator.model_tier import ModelTierConfig
+
         capture_engine = CaptureEngine(
             registry=registry,
             run_manager=run_manager,
             writer=writer,
-            model=settings.HARLE_LLM_MODEL,
+            model=ModelTierConfig.from_settings(settings).executor,
         )
         app.include_router(build_capture_router(engine=capture_engine, db=db))
         logger.info("Capture interview routes enabled.")

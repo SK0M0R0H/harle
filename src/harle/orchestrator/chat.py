@@ -176,6 +176,7 @@ class ChatMixin:
         state.reflection_record = agent_result.reflection_record
         state.handoffs = agent_result.handoffs
         state.final_agent = agent_result.final_agent
+        state.models_used = agent_result.models_used
         etrace.step(
             "Agent execution complete",
             module="orchestrator",
@@ -328,4 +329,5 @@ class ChatMixin:
             reflection_triggered=state.reflection_triggered,
             reflection_improved=state.reflection_improved,
             handoffs=_handoffs_to_api(state.handoffs),
+            models_used=state.models_used,
         )

@@ -210,7 +210,9 @@ Edit `config.yaml`:
 HARLE_HOST: "127.0.0.1"
 HARLE_PORT: 8000
 HARLE_LLM_PROVIDER: "openai"
-HARLE_LLM_MODEL: "gpt-4o-mini"
+HARLE_MODEL_CLASSIFIER: "gpt-4o-mini"
+HARLE_MODEL_PLANNER: "gpt-4o"
+HARLE_MODEL_EXECUTOR: "gpt-4o-mini"
 HARLE_MAX_ITERATIONS: 10
 
 HARLE_DATASET_PATH: "/home/you/harle-vault"
@@ -501,7 +503,9 @@ You can view execution traces (orchestrator steps, tool calls, context assembly,
 | `HARLE_HOST` | `127.0.0.1` | Server bind address |
 | `HARLE_PORT` | `8000` | Server port |
 | `HARLE_LLM_PROVIDER` | `openai` | LLM provider (`openai` or fallback to echo) |
-| `HARLE_LLM_MODEL` | `gpt-4o-mini` | Model name for the Agents SDK |
+| `HARLE_MODEL_CLASSIFIER` | `gpt-4o-mini` | Model for routing / classification-style steps |
+| `HARLE_MODEL_PLANNER` | `gpt-4o` | Model for planning and reflection critic |
+| `HARLE_MODEL_EXECUTOR` | `gpt-4o-mini` | Model for execution, handoffs, improvement pass, and legacy single-call provider |
 | `HARLE_MAX_ITERATIONS` | `10` | Max reasoning turns per request |
 | `HARLE_DATASET_PATH` | — | Path to the Markdown vault |
 | `HARLE_ROLE_TOOL_MODULES_PATH` | — | Optional JSON mapping agent role → tool module names (see `config/role_tool_modules.example.json`; else `<dataset>/role_tool_modules.json` if present) |

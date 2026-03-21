@@ -337,6 +337,7 @@ class TestGetRunEndpoint:
             "reflection_triggered",
             "reflection_improved",
             "handoffs",
+            "models_used",
         }
 
         class _Run:
@@ -359,6 +360,7 @@ class TestGetRunEndpoint:
                 self.reflection_triggered = None
                 self.reflection_improved = None
                 self.handoffs = None
+                self.models_used = None
 
             def __getattribute__(self, name: str) -> object:
                 if (

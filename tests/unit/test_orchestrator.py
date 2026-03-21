@@ -470,8 +470,12 @@ class TestBuildOrchestrator:
         assert svc.max_iterations == 15
 
     def test_build_model_from_settings(self) -> None:
-        """build_orchestrator reads model from settings."""
-        settings = Settings(HARLE_LLM_MODEL="gpt-4o")
+        """build_orchestrator uses executor tier for service model and OpenAI provider."""
+        settings = Settings(
+            HARLE_MODEL_CLASSIFIER="gpt-4o",
+            HARLE_MODEL_PLANNER="gpt-4o",
+            HARLE_MODEL_EXECUTOR="gpt-4o",
+        )
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OPENAI_API_KEY", None)
             svc = build_orchestrator(settings=settings)
@@ -481,7 +485,7 @@ class TestBuildOrchestrator:
         """build_orchestrator wires Level 3 planning fields from Settings."""
         settings = Settings(
             HARLE_PLANNING_ENABLED=False,
-            HARLE_PLANNING_MODEL="gpt-4o",
+            HARLE_MODEL_PLANNER="gpt-4o",
             HARLE_PLANNING_MAX_TURNS=7,
             HARLE_PLANNED_MAX_TURNS=12,
         )
@@ -489,7 +493,8 @@ class TestBuildOrchestrator:
             os.environ.pop("OPENAI_API_KEY", None)
             svc = build_orchestrator(settings=settings)
         assert svc.planning_enabled is False
-        assert svc.planning_model == "gpt-4o"
+        assert svc.model_tier_config is not None
+        assert svc.model_tier_config.planner == "gpt-4o"
         assert svc.planning_max_turns == 7
         assert svc.planned_max_turns == 12
 

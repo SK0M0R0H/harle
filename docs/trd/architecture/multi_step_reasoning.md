@@ -639,7 +639,7 @@ When triggered, a dedicated LLM call evaluates the execution result against the 
 
 - **No tools.** The reflection call is a pure assessment with no tool access. It receives all the information it needs (original request + draft result) as input.
 - **Separate system prompt.** A reflection-specific instruction, not the full context-assembled prompt. This keeps the reflection call lightweight and focused.
-- **Model.** `HARLE_REFLECTION_MODEL` (default: same as `HARLE_LLM_MODEL`). Operators can use a cheaper model for reflection.
+- **Model.** Reflection critic uses the **planner** tier (`HARLE_MODEL_PLANNER`). Improvement pass uses the **executor** tier (`HARLE_MODEL_EXECUTOR`).
 - **Implementation.** A single `Runner.run_sync` call with an `Agent` that has no tools and `max_turns=1`. Using the Agent/Runner keeps the pattern consistent with the rest of the pipeline and gives tracing for free.
 
 **Reflection prompt shape:**
@@ -850,7 +850,6 @@ All new config keys, following the existing `HARLE_` prefix convention and resol
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `HARLE_REFLECTION_ENABLED` | `bool` | `True` | Master switch for reflection. `False` disables all reflection. |
-| `HARLE_REFLECTION_MODEL` | `str \| None` | `None` | Model for the reflection call. `None` = same as `HARLE_LLM_MODEL`. |
 | `HARLE_REFLECTION_MIN_TOOL_CALLS` | `int` | `3` | Minimum tool calls in execution to trigger reflection via tool-count rule. |
 | `HARLE_REFLECTION_TRIGGER_KEYWORDS` | `list[str]` | `["research", "report", "analysis", "compare", "evaluate", "review", "summarize"]` | Keywords in user message that trigger reflection. Empty list disables keyword rule. |
 | `HARLE_REFLECTION_TRIGGER_ROLES` | `list[str]` | `["researcher"]` | Agent roles that always trigger reflection. Empty list disables role rule. |

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from enum import Enum
 
 from harle.debug import etrace
 from harle.orchestrator.sdk_result import (
@@ -19,6 +20,14 @@ from harle.orchestrator.sdk_result import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class RequestComplexity(str, Enum):
+    """Heuristic planning gate: skip the planning agent vs run it."""
+
+    SIMPLE = "simple"
+    COMPLEX = "complex"
+
 
 # Complexity classifier
 _COMPLEX_THRESHOLD = 4
@@ -123,18 +132,18 @@ class Plan:
     raw_text: str
 
 
-def classify_complexity(message: str) -> str:
-    """Classify request complexity as ``simple`` or ``complex`` using heuristics.
+def classify_complexity(message: str) -> RequestComplexity:
+    """Classify request complexity using heuristics.
 
     Args:
         message: User message text.
 
     Returns:
-        ``"simple"`` or ``"complex"``.
+        :class:`RequestComplexity` member (``SIMPLE`` or ``COMPLEX``).
     """
     text = (message or "").strip().lower()
     if not text:
-        return "simple"
+        return RequestComplexity.SIMPLE
 
     score = 0
     if len(text) > 150:
@@ -163,7 +172,11 @@ def classify_complexity(message: str) -> str:
     if len(text) <= _SIMPLE_MAX_LEN and "?" not in text:
         score -= 1
 
-    return "complex" if score >= _COMPLEX_THRESHOLD else "simple"
+    return (
+        RequestComplexity.COMPLEX
+        if score >= _COMPLEX_THRESHOLD
+        else RequestComplexity.SIMPLE
+    )
 
 
 def validate_plan(raw_output: str) -> Plan | None:

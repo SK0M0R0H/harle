@@ -99,6 +99,18 @@ def finalize_orchestrator_run(
                         else f"## Reflection\n\n{refl_extra}"
                     )
 
+            if state.models_used:
+                mu_lines = "\n".join(
+                    f"- **{phase}:** `{name}`"
+                    for phase, name in sorted(state.models_used.items())
+                )
+                models_md = f"## Models Used\n\n{mu_lines}\n"
+                vault_result_body = (
+                    f"{vault_result_body}\n\n{models_md}"
+                    if vault_result_body
+                    else models_md
+                )
+
             result_path, context_path = log_run_to_vault(
                 dataset_path,
                 run_id=state.run_id,
@@ -150,6 +162,7 @@ def finalize_orchestrator_run(
                     reflection_triggered=state.reflection_triggered,
                     reflection_improved=state.reflection_improved,
                     handoffs=handoffs_payload,
+                    models_used=state.models_used,
                 )
         except Exception:
             if not suppress_persistence_errors:

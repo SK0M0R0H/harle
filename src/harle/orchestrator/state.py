@@ -41,6 +41,7 @@ class AgentResult:
     reflection_record: ReflectionRunRecord | None = None
     handoffs: list[HandoffRecord] | None = None
     final_agent: str | None = None
+    models_used: dict[str, str] | None = None
 
 
 @dataclass
@@ -67,6 +68,7 @@ class RunState:
     handoffs: list[HandoffRecord] | None = None
     final_agent: str | None = None
     starting_role: str | None = None
+    models_used: dict[str, str] | None = None
 
 
 class RunTimeoutError(TimeoutError):

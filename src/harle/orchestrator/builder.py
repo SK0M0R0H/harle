@@ -8,6 +8,7 @@ from harle.config import PROVIDER_OPENAI, Settings, get_role_tool_modules
 from harle.context.assembler import ContextAssembler
 from harle.db.connection import Database
 from harle.llm.providers import EchoProvider, LLMProvider, OpenAIProvider
+from harle.orchestrator.model_tier import ModelTierConfig, normalize_complex_execution_tier
 from harle.orchestrator.orchestrator_service import OrchestratorService
 from harle.tools.registry import ToolRegistry
 
@@ -39,9 +40,15 @@ def build_orchestrator(
 
     role_tool_modules = get_role_tool_modules()
 
+    model_tier_config = ModelTierConfig.from_settings(settings)
+    exec_model = model_tier_config.executor
+    complex_execution_tier = normalize_complex_execution_tier(
+        settings.HARLE_COMPLEX_EXECUTION_TIER,
+    )
+
     if provider_name == PROVIDER_OPENAI and openai_api_key:
         provider: LLMProvider = OpenAIProvider(
-            model=settings.HARLE_LLM_MODEL,
+            model=model_tier_config.executor,
             api_key=openai_api_key,
         )
         return OrchestratorService(
@@ -51,16 +58,16 @@ def build_orchestrator(
             dataset_path=settings.HARLE_DATASET_PATH,
             run_log_store_context=settings.HARLE_RUN_LOG_STORE_CONTEXT,
             tool_registry=tool_registry,
-            model=settings.HARLE_LLM_MODEL,
+            model_tier_config=model_tier_config,
+            model=exec_model,
             max_iterations=settings.HARLE_MAX_ITERATIONS,
             run_timeout_seconds=settings.HARLE_RUN_TIMEOUT_SECONDS,
             use_agent_runner=True,
             planning_enabled=settings.HARLE_PLANNING_ENABLED,
-            planning_model=settings.HARLE_PLANNING_MODEL,
             planning_max_turns=settings.HARLE_PLANNING_MAX_TURNS,
             planned_max_turns=settings.HARLE_PLANNED_MAX_TURNS,
             reflection_enabled=settings.HARLE_REFLECTION_ENABLED,
-            reflection_model=settings.HARLE_REFLECTION_MODEL,
+            complex_execution_tier=complex_execution_tier,
             reflection_min_tool_calls=settings.HARLE_REFLECTION_MIN_TOOL_CALLS,
             reflection_trigger_keywords=settings.HARLE_REFLECTION_TRIGGER_KEYWORDS,
             reflection_trigger_roles=settings.HARLE_REFLECTION_TRIGGER_ROLES,
@@ -76,16 +83,16 @@ def build_orchestrator(
         dataset_path=settings.HARLE_DATASET_PATH,
         run_log_store_context=settings.HARLE_RUN_LOG_STORE_CONTEXT,
         tool_registry=tool_registry,
-        model=settings.HARLE_LLM_MODEL,
+        model_tier_config=model_tier_config,
+        model=exec_model,
         max_iterations=settings.HARLE_MAX_ITERATIONS,
         run_timeout_seconds=settings.HARLE_RUN_TIMEOUT_SECONDS,
         use_agent_runner=False,
         planning_enabled=settings.HARLE_PLANNING_ENABLED,
-        planning_model=settings.HARLE_PLANNING_MODEL,
         planning_max_turns=settings.HARLE_PLANNING_MAX_TURNS,
         planned_max_turns=settings.HARLE_PLANNED_MAX_TURNS,
         reflection_enabled=settings.HARLE_REFLECTION_ENABLED,
-        reflection_model=settings.HARLE_REFLECTION_MODEL,
+        complex_execution_tier=complex_execution_tier,
         reflection_min_tool_calls=settings.HARLE_REFLECTION_MIN_TOOL_CALLS,
         reflection_trigger_keywords=settings.HARLE_REFLECTION_TRIGGER_KEYWORDS,
         reflection_trigger_roles=settings.HARLE_REFLECTION_TRIGGER_ROLES,

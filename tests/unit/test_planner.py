@@ -5,6 +5,7 @@ from __future__ import annotations
 from harle.orchestrator.planner import (
     Plan,
     PlanStep,
+    RequestComplexity,
     classify_complexity,
     extract_plan_revisions,
     format_plan_for_injection,
@@ -15,10 +16,10 @@ from harle.orchestrator.planner import (
 
 class TestClassifyComplexity:
     def test_short_greeting_is_simple(self) -> None:
-        assert classify_complexity("hi") == "simple"
+        assert classify_complexity("hi") is RequestComplexity.SIMPLE
 
     def test_what_is_question_short_is_simple(self) -> None:
-        assert classify_complexity("what is Python?") == "simple"
+        assert classify_complexity("what is Python?") is RequestComplexity.SIMPLE
 
     def test_research_long_is_complex(self) -> None:
         msg = (
@@ -26,10 +27,10 @@ class TestClassifyComplexity:
             "ZK rollups with FHE approaches, and produce a structured report with "
             "sources from the dataset and the web."
         )
-        assert classify_complexity(msg) == "complex"
+        assert classify_complexity(msg) is RequestComplexity.COMPLEX
 
     def test_empty_is_simple(self) -> None:
-        assert classify_complexity("") == "simple"
+        assert classify_complexity("") is RequestComplexity.SIMPLE
 
     def test_multiple_questions_boosts_complexity(self) -> None:
         # Avoid leading "what is" / simple-prefix patterns so multi-? scoring applies.
@@ -37,7 +38,7 @@ class TestClassifyComplexity:
             "Can you compare X and Y? What about Z? I need a detailed analysis "
             "with sources."
         )
-        assert classify_complexity(msg) == "complex"
+        assert classify_complexity(msg) is RequestComplexity.COMPLEX
 
 
 class TestValidatePlan:
