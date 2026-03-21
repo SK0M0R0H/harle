@@ -53,6 +53,9 @@ class Settings:
 
     # External data paths — configured per user, never inside this repo
     HARLE_DATASET_PATH: str | None = None
+    # Path to JSON mapping role → tool module names (see config/role_tool_modules.example.json).
+    # When unset, ``<HARLE_DATASET_PATH>/role_tool_modules.json`` is used if present.
+    HARLE_ROLE_TOOL_MODULES_PATH: str | None = None
     DATABASE_URL: str | None = None
 
     # Agentic loop
@@ -224,6 +227,22 @@ def load_settings() -> Settings:
         # 3. Built-in default (from the dataclass) — no action needed
 
     return Settings(**resolved)
+
+
+def get_role_tool_modules() -> dict[str, list[str]]:
+    """Return per-role tool module allowlists (defaults + optional JSON).
+
+    Resolution: :envvar:`HARLE_ROLE_TOOL_MODULES_PATH` file, then
+    ``<HARLE_DATASET_PATH>/role_tool_modules.json``, then built-in defaults.
+    """
+    load_environment()
+    settings = load_settings()
+    from harle.orchestrator.role_tool_modules import resolve_role_tool_modules
+
+    return resolve_role_tool_modules(
+        explicit_path=settings.HARLE_ROLE_TOOL_MODULES_PATH,
+        dataset_path=settings.HARLE_DATASET_PATH,
+    )
 
 
 def get_vault_imports_config() -> dict[str, Any]:

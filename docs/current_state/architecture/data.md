@@ -2,7 +2,7 @@
 title: "Harle Data Layer — Current State"
 tags: [data-layer, current-state, architecture, dataset, indexer, search, implementation-status]
 context: global
-last_updated: 2026-03-20
+last_updated: 2026-03-21
 summary: "Tracks what the Data Layer (User Dataset, Indexer, Search) implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -35,7 +35,7 @@ From the **Data Layer Best Practices** TRD: token budgeting, explicit §4.2 cont
 | User Dataset: agent write controls | Partially implemented | Writer has path checks; tools/orchestrator approval flow for non-logs writes not fully wired (see tools current-state). |
 | User Dataset: sync (Git / external) | Not implemented | No `dataset/sync.py` Git pull or periodic sync in app; user/manual or external process. |
 | Indexer: file_index table | Implemented | `db/models.py` FileIndex: file_path, title, tags, context, content_hash, char_count, token_count, summary, last_modified, last_indexed, created_at. → Best practices §3, §8. |
-| Indexer: runs table | Implemented | Run model with run_id, timestamp, user_request, context_scope, agent, status, files_used, tools_called, model/tokens/cost, result_summary, result_path, context_path, conversation_id. → Best practices §3. |
+| Indexer: runs table | Implemented | Run model with run_id, timestamp, user_request, context_scope, agent, status, files_used, tools_called, model/tokens/cost, result_summary, result_path, context_path, conversation_id, reflection fields, optional JSON `handoffs` (Level 5). → Best practices §3. |
 | Indexer: artifacts table | Implemented | Artifact model; CRUD in `db/artifacts.py`. Not yet used by Run Logger for large outputs. |
 | Indexer: memories table | Implemented | Memory model with category, content, context_scope, source_run_id, confidence, active, updated_at. → Best practices §7 (three-tier, confidence, save_memory). |
 | Indexer: conversations + messages | Implemented | Conversation and Message models; CRUD in `db/conversations.py`. → Best practices §7 (summarize old conversation). |

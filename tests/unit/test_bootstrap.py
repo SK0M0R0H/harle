@@ -5,6 +5,21 @@ from __future__ import annotations
 from harle import bootstrap
 
 
+def test_seed_files_include_all_agent_prompts() -> None:
+    """Vault seed includes one prompts/*.md per orchestrator role."""
+    for role in bootstrap.AGENT_PROMPT_SEED_ROLES:
+        key = f"prompts/{role}.md"
+        assert key in bootstrap.SEED_FILES
+        assert len(bootstrap.SEED_FILES[key].strip()) > 50
+
+
+def test_seed_files_include_packaged_vault_seeds() -> None:
+    """Non-prompt seeds load from bootstrap_data/vault_seeds (policies, examples, knowledge)."""
+    assert "policies/privacy.md" in bootstrap.SEED_FILES
+    assert "knowledge/work/getting-started.md" in bootstrap.SEED_FILES
+    assert "Privacy Policy" in bootstrap.SEED_FILES["policies/privacy.md"]
+
+
 class _FakeReader:
     def __init__(self, dataset_path: str) -> None:
         self.dataset_path = dataset_path

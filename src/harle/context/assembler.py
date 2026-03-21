@@ -358,6 +358,23 @@ class ContextAssembler:
             prior_runs_included=prior_runs_included,
         )
 
+    def load_role_prompt(self, *, role: str, context: str) -> str:
+        """Load P0-only content (role prompt + policies) for *role*.
+
+        Used for handoff target agents so each role keeps its identity without
+        re-running dataset search or conversation packing.
+
+        Args:
+            role: Agent role name (e.g. ``secretary``); must match a prompt stem.
+            context: Active context scope (``\"work\"`` or ``\"personal\"``).
+
+        Returns:
+            Formatted P0 string, or a minimal fallback when the dataset is unavailable.
+        """
+        p0_files = self._load_p0_files(context=context)
+        p0_files = self._filter_prompts_by_role(p0_files, agent_role=role)
+        return self._format_p0(p0_files, context=context, agent_role=role)
+
     # ── P0 helpers ────────────────────────────────────────────────────
 
     def _load_p0_files(self, *, context: str) -> list[DatasetFile]:

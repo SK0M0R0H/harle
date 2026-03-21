@@ -25,6 +25,9 @@ config.yml
 !config.example.yaml
 !config.example.yml
 
+# Optional per-deployment JSON (user copy; example is config/role_tool_modules.example.json)
+/config/role_tool_modules.json
+
 # Secrets
 .env
 .env.*

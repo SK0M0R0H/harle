@@ -45,6 +45,23 @@ def finalize_orchestrator_run(
     )
     result_path: str | None = None
     context_path: str | None = None
+
+    agent_label = (
+        state.final_agent
+        or state.starting_role
+        or DEFAULT_AGENT_ROLE
+    )
+    handoffs_payload: list[dict[str, str]] | None = None
+    if state.handoffs:
+        handoffs_payload = [
+            {
+                "source_agent": h.source_agent,
+                "target_agent": h.target_agent,
+                "reason": h.reason,
+            }
+            for h in state.handoffs
+        ]
+
     if dataset_path:
         try:
             from harle.logging.run_logger import build_result_body, log_run_to_vault
@@ -86,12 +103,13 @@ def finalize_orchestrator_run(
                 dataset_path,
                 run_id=state.run_id,
                 timestamp=ended_at,
-                agent=DEFAULT_AGENT_ROLE,
+                agent=agent_label,
                 status=status,
                 context_scope=state.context,
                 result_body=vault_result_body,
                 context_body=state.system_prompt,
                 store_context=run_log_store_context,
+                handoffs=handoffs_payload,
             )
             if not result_path:
                 result_path = None
@@ -118,7 +136,7 @@ def finalize_orchestrator_run(
                     timestamp=ended_at,
                     user_request=state.message,
                     context_scope=state.context,
-                    agent=DEFAULT_AGENT_ROLE,
+                    agent=agent_label,
                     status=status,
                     routing_method=state.routing_method,
                     files_used=state.files_used,
@@ -131,6 +149,7 @@ def finalize_orchestrator_run(
                     duration_ms=duration_ms,
                     reflection_triggered=state.reflection_triggered,
                     reflection_improved=state.reflection_improved,
+                    handoffs=handoffs_payload,
                 )
         except Exception:
             if not suppress_persistence_errors:

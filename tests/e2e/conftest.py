@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from harle.bootstrap import AGENT_PROMPT_SEED_ROLES, agent_prompts_source_dir
+
 # Repo root: tests/e2e/conftest.py -> tests -> repo root
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _E2E_VAULT = _REPO_ROOT / "tests" / "fixtures" / "e2e_vault"
@@ -60,6 +62,12 @@ def e2e_vault_copy(tmp_path_factory: pytest.TempPathFactory) -> str:
     """
     dest = tmp_path_factory.mktemp("e2e_vault")
     shutil.copytree(_E2E_VAULT, dest, dirs_exist_ok=True)
+    # Role prompts: same files as vault bootstrap (harle/bootstrap_data/agent_prompts).
+    prompts_dest = dest / "prompts"
+    prompts_dest.mkdir(parents=True, exist_ok=True)
+    src_dir = agent_prompts_source_dir()
+    for role in AGENT_PROMPT_SEED_ROLES:
+        shutil.copy2(src_dir / f"{role}.md", prompts_dest / f"{role}.md")
     return str(dest)
 
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from harle.orchestrator.agents import HandoffRecord
 from harle.orchestrator.reflection import ReflectionRunRecord
 
-DEFAULT_AGENT_ROLE: str = "researcher"
+DEFAULT_AGENT_ROLE: str = "assistant"
 RESULT_SUMMARY_MAX_CHARS: int = 2000
 
 
@@ -38,6 +39,8 @@ class AgentResult:
     reflection_triggered: bool | None = None
     reflection_improved: bool | None = None
     reflection_record: ReflectionRunRecord | None = None
+    handoffs: list[HandoffRecord] | None = None
+    final_agent: str | None = None
 
 
 @dataclass
@@ -61,6 +64,9 @@ class RunState:
     reflection_triggered: bool | None = None
     reflection_improved: bool | None = None
     reflection_record: ReflectionRunRecord | None = None
+    handoffs: list[HandoffRecord] | None = None
+    final_agent: str | None = None
+    starting_role: str | None = None
 
 
 class RunTimeoutError(TimeoutError):

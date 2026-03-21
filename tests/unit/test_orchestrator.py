@@ -111,7 +111,7 @@ class TestOrchestratorService:
             context_assembler=mock_assembler,
             db=db,
         )
-        req = RunRequest(message="find tasks", context="work")
+        req = RunRequest(message="as researcher: find tasks", context="work")
         resp = svc.chat(request=req)
 
         mock_assembler.assemble.assert_called_once_with(

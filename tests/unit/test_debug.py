@@ -107,13 +107,27 @@ class TestDtraceWithProvider:
     """Tests for etrace API with a real TracerProvider and capturing exporter."""
 
     @pytest.fixture(autouse=True)
-    def _configure_tracing_with_vault(self, tmp_path: Path) -> None:
-        """Set up tracing so spans are captured and written to tmp_path."""
+    def _configure_tracing_with_vault(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Set up tracing so spans are captured and written to tmp_path.
+
+        OpenTelemetry allows ``set_tracer_provider`` only once per process.
+        Earlier tests may have configured a provider; reset internal state so
+        this class can install a vault exporter pointing at *tmp_path*.
+        """
+        from opentelemetry import trace as trace_api
+        from opentelemetry.util._once import Once
+
+        monkeypatch.setattr(trace_api, "_TRACER_PROVIDER", None)
+        monkeypatch.setattr(trace_api, "_TRACER_PROVIDER_SET_ONCE", Once())
         configure_tracing(
             vault_path=str(tmp_path),
             vault_enabled=True,
             min_storage_level="TRACE",
         )
+        # etrace binds get_tracer("harle") at import time; refresh after new provider.
+        import harle.debug.trace as etrace_impl
+
+        etrace_impl._tracer = trace_api.get_tracer("harle")
 
     def test_span_and_step_produce_vault_file(self, tmp_path: Path) -> None:
         with etrace.span(

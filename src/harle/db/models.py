@@ -75,6 +75,7 @@ class Run(Base):
     )
     reflection_triggered: Mapped[bool | None] = mapped_column(Boolean)
     reflection_improved: Mapped[bool | None] = mapped_column(Boolean)
+    handoffs: Mapped[list[dict[str, str]] | None] = mapped_column(JSON)
 
 
 class ExecutionTrace(Base):

@@ -251,6 +251,22 @@ class ToolRegistry:
         entry = self._tools.get(tool_name)
         return entry[0] if entry else None
 
+    def get_module_tool_names(self, module_name: str) -> list[str]:
+        """Return registered tool function names owned by *module_name*.
+
+        Args:
+            module_name: The module's :attr:`~harle.tools.base.BaseToolModule.name`.
+
+        Returns:
+            Sorted list of tool function names (``__name__`` values).
+        """
+        result: list[str] = []
+        for tool_name, (mod, _fn) in self._tools.items():
+            if mod.name == module_name:
+                result.append(tool_name)
+        result.sort()
+        return result
+
     def get_agent_tools(self, tool_names: list[str]) -> list[FunctionTool]:
         """Return ``FunctionTool`` objects for the requested tool names.
 

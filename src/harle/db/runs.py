@@ -93,6 +93,7 @@ def create_run(
     conversation_id: str | None = None,
     reflection_triggered: bool | None = None,
     reflection_improved: bool | None = None,
+    handoffs: list[dict[str, str]] | None = None,
 ) -> Run:
     """Insert a single run record.
 
@@ -118,6 +119,7 @@ def create_run(
         conversation_id: Conversation ID if part of a chat (optional).
         reflection_triggered: Whether Level 4 reflection ran (optional).
         reflection_improved: Whether an improvement pass replaced the draft (optional).
+        handoffs: Optional list of handoff events (source, target, reason).
 
     Returns:
         The created :class:`Run` instance.
@@ -143,6 +145,7 @@ def create_run(
         conversation_id=conversation_id,
         reflection_triggered=reflection_triggered,
         reflection_improved=reflection_improved,
+        handoffs=handoffs,
     )
     session.add(run)
     session.flush()

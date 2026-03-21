@@ -65,7 +65,7 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 ### 4. E2E tests (Layer 4, emulated)
 
 - **Location:** `tests/e2e/` with `conftest.py` (server fixture), `test_session.py` (health, /chat), `test_tool_flow.py` (chat completion), `test_vault.py` (vault tool: /search, /health/tools).
-- **Harness:** Real HTTP server (uvicorn) started in a subprocess with `DATABASE_URL`, `HARLE_DATASET_PATH` (tests/fixtures/e2e_vault), EchoProvider (no `OPENAI_API_KEY`). Skip when `DATABASE_URL` is unset.
+- **Harness:** Real HTTP server (uvicorn) started in a subprocess with `DATABASE_URL`, `HARLE_DATASET_PATH` (fixture vault under `tests/fixtures/e2e_vault` with `prompts/` filled from `src/harle/bootstrap_data/agent_prompts` at copy time), EchoProvider (no `OPENAI_API_KEY`). Skip when `DATABASE_URL` is unset.
 - **CI:** E2E runs on every pull request to main (`.github/workflows/ci.yml` job `test-e2e`) and in nightly (`nightly.yml`).
 - **Marker:** `e2e` in `pyproject.toml`. Live E2E (real LLM, real APIs) is planned in [E2E live extension](../trd/e2e-live-extension.md).
 

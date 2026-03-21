@@ -170,6 +170,7 @@ def build_router(
                 duration_ms=run.duration_ms,
                 reflection_triggered=run.reflection_triggered,
                 reflection_improved=run.reflection_improved,
+                handoffs=run.handoffs,
             )
 
     @router.post("/chat", response_model=RunResponse)

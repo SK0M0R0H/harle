@@ -232,6 +232,13 @@ Precedence for environment values is:
 
 If `OPENAI_API_KEY` is not set, the app uses a local echo provider so you can still test the end-to-end flow. If `TAVILY_API_KEY` is not set, web search tools are simply not registered.
 
+**Optional — agent role tool modules:** Per-role tool allowlists (which Tool Registry modules each agent role may use) default to built-in values. You can override them with a JSON file:
+
+- Copy `config/role_tool_modules.example.json` and set **`HARLE_ROLE_TOOL_MODULES_PATH`** in `config.yaml` to that file’s path, **or**
+- Place `role_tool_modules.json` at the root of your vault (`HARLE_DATASET_PATH`).
+
+See `config.example.yaml` (comment block under “Tool modules”). Partial JSON overrides merge on top of defaults.
+
 ### 5. Initialise the data layer
 
 **Option A** — standalone (no server needed):
@@ -443,7 +450,7 @@ tests/
     test_tool_flow.py        # Chat completion (emulated)
     test_vault.py            # Vault tool: /search, /health/tools
   fixtures/
-    e2e_vault/               # Sample Markdown for E2E (searchable content)
+    e2e_vault/               # Sample Markdown for E2E (prompts copied from src/harle/bootstrap_data/agent_prompts)
 ```
 
 ## Session commands
@@ -497,6 +504,7 @@ You can view execution traces (orchestrator steps, tool calls, context assembly,
 | `HARLE_LLM_MODEL` | `gpt-4o-mini` | Model name for the Agents SDK |
 | `HARLE_MAX_ITERATIONS` | `10` | Max reasoning turns per request |
 | `HARLE_DATASET_PATH` | — | Path to the Markdown vault |
+| `HARLE_ROLE_TOOL_MODULES_PATH` | — | Optional JSON mapping agent role → tool module names (see `config/role_tool_modules.example.json`; else `<dataset>/role_tool_modules.json` if present) |
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `HARLE_RUN_LOG_STORE_CONTEXT` | `false` | Store assembled prompt in vault logs |
 | `HARLE_TRACING_SSE_ENABLED` | `false` | Enable SSE trace stream for `?debug=true` on `/chat` |

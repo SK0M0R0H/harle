@@ -62,3 +62,6 @@ class OrchestratorService(ExecutionMixin, ChatMixin, FinalizeMixin):
     )
     reflection_trigger_roles: str = field(default="researcher")
     reflection_improvement_max_turns: int | None = field(default=None)
+    #: Per-role tool module allowlist (from JSON / defaults). ``None`` uses
+    #: built-in defaults only (no file resolution).
+    role_tool_modules: dict[str, list[str]] | None = field(default=None)
