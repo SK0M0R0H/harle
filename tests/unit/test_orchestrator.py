@@ -19,6 +19,7 @@ from harle.context.assembler import ContextAssembler, ContextPackage
 from harle.db.connection import Database
 from tests.conftest import make_in_memory_chat_db
 from harle.llm.providers import EchoProvider
+from harle.orchestrator.runner_execution import AgentExecutionResult
 from harle.orchestrator.service import (
     OrchestratorService,
     RunTimeoutError,
@@ -361,6 +362,7 @@ class TestOrchestratorAgentRunnerTrello:
             use_agent_runner=True,
             max_iterations=4,
             db=db,
+            planning_enabled=False,
         )
 
         with patch.dict(sys.modules, {"agents": fake_agents_module}):
@@ -472,6 +474,86 @@ class TestBuildOrchestrator:
             os.environ.pop("OPENAI_API_KEY", None)
             svc = build_orchestrator(settings=settings)
         assert svc.model == "gpt-4o"
+
+    def test_build_planning_settings_from_settings(self) -> None:
+        """build_orchestrator wires Level 3 planning fields from Settings."""
+        settings = Settings(
+            HARLE_PLANNING_ENABLED=False,
+            HARLE_PLANNING_MODEL="gpt-4o",
+            HARLE_PLANNING_MAX_TURNS=7,
+            HARLE_PLANNED_MAX_TURNS=12,
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENAI_API_KEY", None)
+            svc = build_orchestrator(settings=settings)
+        assert svc.planning_enabled is False
+        assert svc.planning_model == "gpt-4o"
+        assert svc.planning_max_turns == 7
+        assert svc.planned_max_turns == 12
+
+
+class TestOrchestratorPlanning:
+    """Level 3 planning path with mocked runner_execution."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_create_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "harle.db.runs.create_run",
+            lambda *args, **kwargs: None,
+        )
+
+    def test_agent_runner_delegates_to_run_agent_execution(self) -> None:
+        with patch("harle.orchestrator.runner_execution.run_agent_execution") as r:
+            r.return_value = AgentExecutionResult(
+                text="done",
+                tools_called=["dataset_search"],
+                turns_used=2,
+                routing_method="direct",
+            )
+            db = make_in_memory_chat_db()
+            svc = OrchestratorService(
+                llm_provider=EchoProvider(),
+                db=db,
+                use_agent_runner=True,
+            )
+            resp = svc.chat(request=RunRequest(message="hello", context="personal"))
+            r.assert_called_once()
+            assert resp.result == "done"
+            assert resp.tools_called == ["dataset_search"]
+            assert resp.turns_used == 2
+
+    def test_planning_disabled_passes_flag(self) -> None:
+        with patch("harle.orchestrator.runner_execution.run_agent_execution") as r:
+            r.return_value = AgentExecutionResult(text="ok")
+            db = make_in_memory_chat_db()
+            svc = OrchestratorService(
+                llm_provider=EchoProvider(),
+                db=db,
+                use_agent_runner=True,
+                planning_enabled=False,
+            )
+            svc.chat(request=RunRequest(message="hello", context="work"))
+            assert r.call_args.kwargs["planning_enabled"] is False
+
+    def test_planned_run_returns_routing_and_plan_metadata(self) -> None:
+        with patch("harle.orchestrator.runner_execution.run_agent_execution") as r:
+            r.return_value = AgentExecutionResult(
+                text="Answer with REVISED PLAN:\n1. [output] x",
+                plan_text="1. [search] a\n2. [output] b",
+                plan_revisions=["1. [output] x"],
+                routing_method="planned",
+            )
+            db = make_in_memory_chat_db()
+            svc = OrchestratorService(
+                llm_provider=EchoProvider(),
+                db=db,
+                use_agent_runner=True,
+            )
+            resp = svc.chat(
+                request=RunRequest(message="research and compare X vs Y", context="work"),
+            )
+            assert resp.status == "completed"
+            assert "REVISED PLAN" in resp.result or "Answer" in resp.result
 
 
 # ══════════════════════════════════════════════════════════════════════

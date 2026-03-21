@@ -2,7 +2,7 @@
 title: "Harle Testing Strategy — Current State"
 tags: [testing, current-state, strategy, ci-cd, pytest, implementation-status]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-21
 summary: "Tracks what is implemented vs the Testing Strategy TRD and what each missing part would unlock."
 ---
 
@@ -27,7 +27,7 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 | **§2 Current State (as baseline)** | Implemented | Unit tests in `tests/unit/`, pytest in pyproject, conftest fixtures, EchoProvider; tool tests thorough. |
 | **§3 Four-layer model (concept)** | Document only | TRD defines layers; only Layer 1 and part of Layer 2 exist in code. |
 | **§4 Layer 1: Unit tests** | Implemented | Many modules covered: config, tokenizer, reader, search, tools (registry, permissions, constraints, sandbox, skills, vault, web_search), API models, hasher, run_logger, providers, frontmatter. |
-| **§5 Layer 2: Integration tests** | Partially implemented | `tests/integration/` with marker `integration`; no full request→response or DB/orchestrator pipeline coverage as in TRD examples. |
+| **§5 Layer 2: Integration tests** | Partially implemented | `tests/integration/` with marker `integration`; includes `test_integration_flows.py` (API, search, context) and `test_plan_then_execute.py` (Level 3 orchestrator + vault + `POST /chat` with SDK stubs). Full TRD-style DB/container pipelines still partial. |
 | **§6 Layer 3: Semantic / LLM evaluation** | Not implemented | No DeepEval, no golden datasets, no LLM-as-judge or relevancy/faithfulness metrics. |
 | **§7 Layer 4: E2E tests** | Implemented (emulated) | `tests/e2e/` with real-server harness; session lifecycle, health, /chat (one-shot + multi-turn), vault tool via /search; CI runs E2E on PR to main and nightly. Live E2E (real LLM, real APIs) is planned in [E2E live extension](../trd/e2e-live-extension.md). |
 | **§8 AI-assisted testing (Cursor)** | Partial | No `.cursor/rules/test_generation.mdc`; Cursor can be used ad hoc. |
@@ -53,7 +53,7 @@ Reference TRD: [Harle Testing Strategy — Best Practices & Implementation Plan]
 
 ### 2. Integration test structure
 
-- **Location:** `tests/integration/` with `test_integration_flows.py` and `integration/conftest.py`.
+- **Location:** `tests/integration/` with `test_integration_flows.py`, `test_plan_then_execute.py` (plan-then-execute / vault / routing), and `integration/conftest.py`.
 - **Marker:** `integration` marker defined in `pyproject.toml` for multi-component tests.
 - **Separation:** Unit vs integration split by directory and marker, as in TRD.
 

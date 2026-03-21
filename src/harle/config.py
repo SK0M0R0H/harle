@@ -59,6 +59,12 @@ class Settings:
     HARLE_MAX_ITERATIONS: int = 10  # Max turns for the Agents SDK Runner (tool-calling loop)
     HARLE_RUN_TIMEOUT_SECONDS: int | None = 60  # End-to-end orchestrator timeout
 
+    # Level 3 plan-then-execute (orchestrator)
+    HARLE_PLANNING_ENABLED: bool = True
+    HARLE_PLANNING_MODEL: str | None = None  # None = same as HARLE_LLM_MODEL
+    HARLE_PLANNING_MAX_TURNS: int = 5  # Max turns for planning agent (tool loop)
+    HARLE_PLANNED_MAX_TURNS: int | None = None  # Execution max_turns when a plan exists; None = HARLE_MAX_ITERATIONS
+
     # Run logging (vault logs/ directory)
     HARLE_RUN_LOG_STORE_CONTEXT: bool = False  # Store assembled context in logs (optional, for size/privacy)
 

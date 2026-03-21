@@ -73,6 +73,9 @@ class _AgentResult:
     text: str
     tools_called: list[str] = field(default_factory=list)
     turns_used: int = 0
+    plan_text: str | None = None
+    plan_revisions: list[str] | None = None
+    routing_method: str | None = None
 
 
 @dataclass
@@ -89,31 +92,13 @@ class _RunState:
     tools_called: list[str] | None = None
     result_text: str | None = None
     turns_used: int | None = None
+    plan_text: str | None = None
+    plan_revisions: list[str] | None = None
+    routing_method: str | None = None
 
 
 class RunTimeoutError(TimeoutError):
     """Raised when an orchestrator request exceeds the configured timeout."""
-
-
-def _extract_run_metadata(result: object) -> tuple[list[str], int]:
-    """Extract tool names and turn count from an Agents SDK RunResult.
-
-    Uses duck typing so the orchestrator does not import SDK item
-    types directly.
-    """
-    tools: list[str] = []
-    turns = 0
-    for item in getattr(result, "new_items", []):
-        item_type = getattr(item, "type", "")
-        if item_type == "tool_call_item":
-            raw = getattr(item, "raw_item", None)
-            name = getattr(raw, "name", None)
-            if name and name not in tools:
-                tools.append(name)
-        elif item_type == "message_output_item":
-            turns += 1
-    turns = max(turns, len(getattr(result, "raw_responses", [])))
-    return tools, turns
 
 
 def _safe_error_summary(exc: Exception) -> str:
@@ -209,6 +194,13 @@ class OrchestratorService:
         max_iterations: Maximum turns for the agentic loop.
         use_agent_runner: When ``True``, use the Agents SDK Runner
             instead of the direct LLM provider.
+        planning_enabled: When ``True`` (default), complex requests may
+            use Level 3 plan-then-execute (see ``runner_execution``).
+        planning_model: Optional model for the planning agent; ``None``
+            uses the same model as execution.
+        planning_max_turns: Max turns for the planning agent tool loop.
+        planned_max_turns: Max execution turns when a plan exists;
+            ``None`` uses ``max_iterations``.
     """
 
     llm_provider: LLMProvider
@@ -221,6 +213,10 @@ class OrchestratorService:
     max_iterations: int = field(default=10)
     run_timeout_seconds: int | None = field(default=60)
     use_agent_runner: bool = field(default=False)
+    planning_enabled: bool = field(default=True)
+    planning_model: str | None = field(default=None)
+    planning_max_turns: int = field(default=5)
+    planned_max_turns: int | None = field(default=None)
 
     # ── execution backends ────────────────────────────────────────────
 
@@ -261,55 +257,32 @@ class OrchestratorService:
 
         Creates an Agent with instructions and tools, then runs the
         agentic loop.  If ``MaxTurnsExceeded`` is raised the partial
-        result is returned with a note.
+        result is returned with a note.  When planning is enabled and
+        the request is classified as complex, runs a planning agent
+        first (Level 3).
         """
-        from agents import Agent, MaxTurnsExceeded, Runner
+        from harle.orchestrator.runner_execution import run_agent_execution
 
-        etrace.detail(
-            "Agent execution started",
-            module="orchestrator",
+        r = run_agent_execution(
+            user_message=user_message,
+            system_prompt=system_prompt,
+            build_instructions=self._build_instructions,
+            tool_registry=self.tool_registry,
             model=self.model,
-            max_turns=self.max_iterations,
-            has_tools=bool(self.tool_registry),
+            max_iterations=self.max_iterations,
+            planning_enabled=self.planning_enabled,
+            planning_model=self.planning_model,
+            planning_max_turns=self.planning_max_turns,
+            planned_max_turns=self.planned_max_turns,
         )
-
-        tools = []
-        if self.tool_registry:
-            all_tool_names = self.tool_registry.list_all_tools()
-            tools = self.tool_registry.get_agent_tools(all_tool_names)
-
-        instructions = self._build_instructions(system_prompt, bool(tools))
-
-        agent = Agent(
-            name=DEFAULT_AGENT_ROLE,
-            instructions=instructions,
-            tools=tools,
-            model=self.model,
+        return _AgentResult(
+            text=r.text,
+            tools_called=r.tools_called,
+            turns_used=r.turns_used,
+            plan_text=r.plan_text,
+            plan_revisions=r.plan_revisions,
+            routing_method=r.routing_method,
         )
-
-        try:
-            result = Runner.run_sync(
-                agent, user_message, max_turns=self.max_iterations,
-            )
-            tools_called, turns_used = _extract_run_metadata(result)
-            return _AgentResult(
-                text=result.final_output,
-                tools_called=tools_called,
-                turns_used=turns_used,
-            )
-        except MaxTurnsExceeded:
-            logger.warning(
-                "Agent exceeded max_turns=%d for message: %.80s",
-                self.max_iterations, user_message,
-            )
-            return _AgentResult(
-                text=(
-                    "I used all available reasoning steps but could not "
-                    "finish.  Please try a more specific request or "
-                    "increase the iteration limit."
-                ),
-                turns_used=self.max_iterations,
-            )
 
     def _execute_with_provider(
         self,
@@ -379,6 +352,7 @@ class OrchestratorService:
         if self.dataset_path:
             try:
                 from harle.logging.run_logger import build_result_body, log_run_to_vault
+                from harle.orchestrator.planner import format_plan_for_vault
 
                 vault_result_body = build_result_body(
                     status=status,
@@ -386,6 +360,16 @@ class OrchestratorService:
                     summary=result_summary,
                     duration_ms=duration_ms,
                 )
+                plan_extra = format_plan_for_vault(
+                    state.plan_text,
+                    state.plan_revisions,
+                )
+                if plan_extra.strip():
+                    vault_result_body = (
+                        f"{vault_result_body}\n\n## Plan\n\n{plan_extra}"
+                        if vault_result_body
+                        else f"## Plan\n\n{plan_extra}"
+                    )
 
                 result_path, context_path = log_run_to_vault(
                     self.dataset_path,
@@ -425,6 +409,7 @@ class OrchestratorService:
                         context_scope=state.context,
                         agent=DEFAULT_AGENT_ROLE,
                         status=status,
+                        routing_method=state.routing_method,
                         files_used=state.files_used,
                         tools_called=state.tools_called,
                         model_used=self.model if self.use_agent_runner else None,
@@ -573,11 +558,15 @@ class OrchestratorService:
         state.result_text = agent_result.text
         state.tools_called = agent_result.tools_called or None
         state.turns_used = agent_result.turns_used or None
+        state.plan_text = agent_result.plan_text
+        state.plan_revisions = agent_result.plan_revisions
+        state.routing_method = agent_result.routing_method
         etrace.step(
             "Agent execution complete",
             module="orchestrator",
             tools_called=agent_result.tools_called,
             turns_used=agent_result.turns_used,
+            routing_method=state.routing_method,
         )
 
         with self.db.session() as session:
@@ -645,7 +634,7 @@ class OrchestratorService:
                 "Routed to agent",
                 module="orchestrator",
                 agent=DEFAULT_AGENT_ROLE,
-                routing_method="default",
+                routing_method="pending",
             )
             try:
                 agent_result = _run_with_timeout(
@@ -779,6 +768,10 @@ def build_orchestrator(
             max_iterations=settings.HARLE_MAX_ITERATIONS,
             run_timeout_seconds=settings.HARLE_RUN_TIMEOUT_SECONDS,
             use_agent_runner=True,
+            planning_enabled=settings.HARLE_PLANNING_ENABLED,
+            planning_model=settings.HARLE_PLANNING_MODEL,
+            planning_max_turns=settings.HARLE_PLANNING_MAX_TURNS,
+            planned_max_turns=settings.HARLE_PLANNED_MAX_TURNS,
         )
 
     provider = EchoProvider()
@@ -793,4 +786,8 @@ def build_orchestrator(
         max_iterations=settings.HARLE_MAX_ITERATIONS,
         run_timeout_seconds=settings.HARLE_RUN_TIMEOUT_SECONDS,
         use_agent_runner=False,
+        planning_enabled=settings.HARLE_PLANNING_ENABLED,
+        planning_model=settings.HARLE_PLANNING_MODEL,
+        planning_max_turns=settings.HARLE_PLANNING_MAX_TURNS,
+        planned_max_turns=settings.HARLE_PLANNED_MAX_TURNS,
     )

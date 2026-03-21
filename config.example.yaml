@@ -27,6 +27,12 @@ HARLE_LLM_MODEL: "gpt-4o-mini"
 # --- Agentic loop ---
 HARLE_MAX_ITERATIONS: 10             # Max reasoning turns per request (tool-calling loop)
 
+# --- Level 3 plan-then-execute ---
+# HARLE_PLANNING_ENABLED: true        # false = skip planning (Level 2 only)
+# HARLE_PLANNING_MODEL: null           # Optional: stronger model for planning; null = HARLE_LLM_MODEL
+# HARLE_PLANNING_MAX_TURNS: 5         # Max turns for the planning agent (may use tools)
+# HARLE_PLANNED_MAX_TURNS: null       # Max execution turns when a plan was used; null = HARLE_MAX_ITERATIONS
+
 # --- Run logging (vault logs/ directory) ---
 HARLE_RUN_LOG_STORE_CONTEXT: true   # Set true to save assembled prompt in logs/ (larger, for debugging)
 
