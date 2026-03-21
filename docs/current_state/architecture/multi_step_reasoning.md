@@ -3,7 +3,7 @@ title: "Multi-Step Reasoning — Current State"
 tags: [multi-step-reasoning, current-state, architecture, agentic-loop, tool-use, implementation-status, planning]
 context: global
 last_updated: 2026-03-21
-summary: "Tracks what multi-step reasoning implements vs the TRD (levels 0–7), and what each missing part would unlock."
+summary: "Tracks what multi-step reasoning implements vs the TRD (levels 0–7), and what each missing part would unlock. Level 4 TRD expanded with reflection design."
 ---
 
 # Multi-Step Reasoning — Current State
@@ -16,7 +16,7 @@ Reference TRD: [Multi-Step Reasoning — Design & Incremental Implementation Pla
 
 ## Overall Status
 
-**Levels 1–3 are implemented for the OpenAI Agents SDK path.** The orchestrator uses the OpenAI Agents SDK `Runner` with an `Agent` (instructions from Context Assembler, tools from the registry), `max_turns` from config (default 10), and run logging. The tool-calling loop (ReAct-style) works: the LLM can call dataset tools, web search, and Trello during a run and see results in subsequent turns. **Level 3 (plan-then-execute)** adds a heuristic complexity classifier; for **complex** requests it runs a **planning agent** (same tools as execution, separate `max_turns` budget) that may call tools before emitting a numbered plan; the validated plan is injected into execution instructions; optional `REVISED PLAN:` blocks in the final answer are parsed for vault logging. **Levels 4–7 are not implemented:** reflection/self-critique, multi-agent handoffs, adaptive strategy selection, or parallel execution. Harle-specific design choices from the TRD (context once before loop, tool results appendable, layered guardrails, thinking step via system prompt) are in place where applicable; streaming during multi-step runs and a dedicated think tool are not.
+**Levels 1–3 are implemented for the OpenAI Agents SDK path.** The orchestrator uses the OpenAI Agents SDK `Runner` with an `Agent` (instructions from Context Assembler, tools from the registry), `max_turns` from config (default 10), and run logging. The tool-calling loop (ReAct-style) works: the LLM can call dataset tools, web search, and Trello during a run and see results in subsequent turns. **Level 3 (plan-then-execute)** adds a heuristic complexity classifier; for **complex** requests it runs a **planning agent** (same tools as execution, separate `max_turns` budget) that may call tools before emitting a numbered plan; the validated plan is injected into execution instructions; optional `REVISED PLAN:` blocks in the final answer are parsed for vault logging. **Level 4 TRD has been expanded** with a detailed design covering configurable reflection triggers, a JSON-verdict reflection prompt, a bounded improvement loop (max 1 pass), an optional think tool (no-op `function_tool`), logging extensions (vault, DB, API, etrace), and 7 new config keys — but **no implementation exists yet**. **Levels 5–7 are not implemented:** multi-agent handoffs, adaptive strategy selection, or parallel execution. Harle-specific design choices from the TRD (context once before loop, tool results appendable, layered guardrails, thinking step via system prompt) are in place where applicable; streaming during multi-step runs and a dedicated think tool are not.
 
 ---
 
@@ -28,7 +28,7 @@ Reference TRD: [Multi-Step Reasoning — Design & Incremental Implementation Pla
 | Level 1: Basic tool-calling loop | Implemented | Agents SDK `Runner.run_sync`, `Agent` with instructions + tools, `max_turns` (config `max_iterations`), run logging per run; vault + dataset tools. |
 | Level 2: External tools | Implemented | Web search and Trello modules in tool registry; tool allowlist and constraints in tools layer; default `max_iterations=10`. Approval infrastructure exists on tools; orchestrator does not pause for approval in request path. |
 | Level 3: Plan-then-Execute | Implemented | `orchestrator/planner.py`: `classify_complexity` (heuristics), `generate_plan` (planning `Agent` + tools + `HARLE_PLANNING_MAX_TURNS`), `validate_plan`, injection via `format_plan_for_injection` plus `sdk_result.build_planning_tool_context_section` (planning tool outputs for execution), `extract_plan_revisions` for logs. `orchestrator/runner_execution.py` orchestrates planning then execution. Config: `HARLE_PLANNING_ENABLED`, `HARLE_PLANNING_MODEL`, `HARLE_PLANNING_MAX_TURNS`, `HARLE_PLANNED_MAX_TURNS`. Simple requests skip planning. Failure modes: fall back to Level 2 (no extra user-visible error). |
-| Level 4: Reflection and self-critique | Not implemented | No reflection trigger, reflection prompt, or improvement loop; no dedicated think tool. |
+| Level 4: Reflection and self-critique | Not implemented | TRD expanded with detailed design (§4.1–4.6): configurable reflection trigger (`should_reflect`), reflection call (JSON-verdict prompt), improvement loop (1 pass max with tools), think tool (`function_tool` no-op scratchpad), logging (vault `## Reflection` section, DB `reflection_triggered`/`reflection_improved` columns, etrace spans), config keys (`HARLE_REFLECTION_*`, `HARLE_THINK_TOOL_ENABLED`). No code changes yet. |
 | Level 5: Multi-agent handoffs | Not implemented | Single agent only; no handoff declarations, shared conversation on handoff, or Router-based starting agent. |
 | Level 6: Adaptive strategy selection | Not implemented | No strategy selector; no per-role strategy config or user override. |
 | Level 7: Parallel execution | Not implemented | No parallel tool calls, parallel agents, or branch-and-merge. |
@@ -96,9 +96,17 @@ Tools can declare `requires_approval`; the orchestrator does not pause the run, 
 
 ### 1. Level 4: Reflection and self-critique
 
-**Missing:** Reflection trigger (e.g. by task type or tool-call count), a reflection LLM call that evaluates the result against the request, and an improvement pass (max one cycle). Optional dedicated `think` tool (no-op scratchpad) is not implemented.
+**Missing (per expanded TRD §4.1–4.6):**
 
-**What this would unlock:** Higher-quality reports and recommendations; the model would catch its own gaps; run logs would show self-critique for prompt tuning; a think tool would make reasoning traces explicit without cluttering final output.
+- **Reflection trigger** (`should_reflect`): deterministic function checking tool-call count (≥ `HARLE_REFLECTION_MIN_TOOL_CALLS`), task-type keywords (`HARLE_REFLECTION_TRIGGER_KEYWORDS`), planned runs (`routing_method == "planned"`), and role-based rules (`HARLE_REFLECTION_TRIGGER_ROLES`). Master switch `HARLE_REFLECTION_ENABLED`.
+- **Reflection call**: dedicated LLM call with JSON-verdict prompt (completeness, evidence, gaps, accuracy, clarity); verdict parsed as `"pass"` or `"improve"` with an improvements list. Fail-open on parse errors.
+- **Improvement loop**: at most 1 pass with tools available; improvement agent receives original instructions plus reflection feedback; `MaxTurnsExceeded` falls back to draft.
+- **Think tool**: no-op `function_tool` registered via `ThinkToolModule`; creates explicit reasoning traces in etrace spans. Config: `HARLE_THINK_TOOL_ENABLED`.
+- **Logging**: vault `## Reflection` section (trigger reason, verdict, assessment, improvements, improvement pass status); DB columns `reflection_triggered` and `reflection_improved` on `runs` table; API fields on `RunResponse`; etrace spans for trigger evaluation, reflection call, and improvement pass.
+- **Config keys**: `HARLE_REFLECTION_ENABLED`, `HARLE_REFLECTION_MODEL`, `HARLE_REFLECTION_MIN_TOOL_CALLS`, `HARLE_REFLECTION_TRIGGER_KEYWORDS`, `HARLE_REFLECTION_TRIGGER_ROLES`, `HARLE_REFLECTION_IMPROVEMENT_MAX_TURNS`, `HARLE_THINK_TOOL_ENABLED`.
+- **Code changes**: `runner_execution.py`, `service.py`, `config.py`, `tools/think/` (new), `tools/factory.py`, `db/models.py`, `db/runs.py`, `api/models.py`.
+
+**What this would unlock:** Higher-quality reports and recommendations; the model catches its own gaps; run logs show self-critique for prompt tuning; think tool makes reasoning traces explicit without cluttering final output; operators can tune reflection triggers via config without code changes.
 
 ### 2. Level 5: Multi-agent handoffs
 
@@ -144,4 +152,4 @@ The TRD lists optional user approval of the plan; that is not implemented in the
 
 ## Current Assessment
 
-Multi-step reasoning is **usable at Levels 1–3** on the OpenAI path: the agentic loop, tool use (vault, web search, Trello), optional plan-then-execute for complex requests, max_turns, and run logging are in place. The main gaps are **reflection** (Level 4), **multi-agent handoffs** (Level 5), **strategy selection** (Level 6), **parallel execution** (Level 7), and **streaming** during runs.
+Multi-step reasoning is **usable at Levels 1–3** on the OpenAI path: the agentic loop, tool use (vault, web search, Trello), optional plan-then-execute for complex requests, max_turns, and run logging are in place. **Level 4 (reflection) has a complete TRD design** (configurable triggers, JSON-verdict reflection call, bounded improvement loop, think tool, logging extensions, config keys) but **no implementation yet** — this is the next level to build. The remaining gaps are **multi-agent handoffs** (Level 5), **strategy selection** (Level 6), **parallel execution** (Level 7), and **streaming** during runs.
