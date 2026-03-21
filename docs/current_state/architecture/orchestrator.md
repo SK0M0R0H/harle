@@ -71,7 +71,7 @@ So the agentic loop, tool use, multi-turn reasoning, and multi-agent handoffs ar
 ### 4. Run Logger (vault + PostgreSQL)
 
 - **Vault:** `log_run_to_vault` writes `logs/YYYY/MM/<run_id>_result.md` (and optionally `_context.md`) with YAML frontmatter and Markdown body, per TRD logs directory design.
-- **PostgreSQL:** `create_run` inserts into `runs` including optional `handoffs` JSON. `routing_method` is set from the router and/or planner (`direct`, `keyword_match`, `default`, `explicit_override`, or `planned`).
+- **PostgreSQL:** `create_run` inserts into `runs` including optional `handoffs` JSON. `routing_method` is set from the router and/or planner (`direct`, `keyword_match`, `default`, `explicit_override`, `conversation_continue` on follow-up turns that keep the conversation’s role, or `planned`).
 
 ### 5. Conversation mode
 

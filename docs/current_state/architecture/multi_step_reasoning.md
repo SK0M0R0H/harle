@@ -78,7 +78,7 @@ This matches the TRD’s Level 1 architecture: one agentic loop, tools called mi
 
 ### 5. Level 5: Multi-agent handoffs
 
-- **Router:** `orchestrator/router.py` — explicit `as <role>:` override and keyword routing to researcher, secretary, specialist, or writer; default **assistant** (generic Harle assistant).
+- **Router:** `orchestrator/router.py` — explicit `as <role>:` override and keyword routing to researcher, secretary, specialist, or writer; default **assistant** (generic Harle assistant). **Continuing multi-turn chats** reuse `conversations.agent_role` (no fresh keyword routing on every message) unless the user uses `as <role>:`, which updates the stored role.
 - **Agents:** `orchestrator/agents.py` — `KNOWN_ROLES`, `HANDOFF_GRAPH` (complete: every role may hand off to every other role), `build_execution_agents()` with SDK `handoff(..., input_type=HandoffReason)`; fixed-point wiring so circular targets reference live `Agent` instances. Per-role tool module lists default in `orchestrator/role_tool_modules.py` and can be overridden via JSON (`HARLE_ROLE_TOOL_MODULES_PATH` or `<dataset>/role_tool_modules.json`).
 - **Execution:** `runner_execution.run_agent_execution` accepts per-role `role_instructions`, `multi_agent`, `handoff_records_out`, `routing_method_from_router`; `max_turns` applies to the whole run.
 - **Context:** `ContextAssembler.load_role_prompt()` for P0-only text for non-starting roles; starting role uses full `assemble()` output.

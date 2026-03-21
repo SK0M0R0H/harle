@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from harle.orchestrator.router import route
+from harle.orchestrator.router import route, route_with_pinned_role
 
 
 @pytest.mark.parametrize(
@@ -40,3 +40,18 @@ def test_unknown_explicit_role_falls_through_to_keywords() -> None:
     r = route("as unknown_role: trello tasks")
     assert r.agent_role == "secretary"
     assert "trello" in r.original_message.lower()
+
+
+def test_route_with_pinned_role_preserves_without_keywords() -> None:
+    """Follow-up text with no routing keywords keeps the pinned role."""
+    r = route_with_pinned_role("What about APAC?", "researcher")
+    assert r.agent_role == "researcher"
+    assert r.routing_method == "conversation_continue"
+    assert r.original_message == "What about APAC?"
+
+
+def test_route_with_pinned_role_explicit_override() -> None:
+    r = route_with_pinned_role("as secretary: move my tasks", "researcher")
+    assert r.agent_role == "secretary"
+    assert r.routing_method == "explicit_override"
+    assert "move my tasks" in r.original_message

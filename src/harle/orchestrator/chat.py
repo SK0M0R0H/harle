@@ -10,6 +10,7 @@ from harle.api.models import RunRequest, RunResponse
 from harle.debug import etrace
 
 from harle.orchestrator.router import route as route_message
+from harle.orchestrator.router import route_with_pinned_role
 from harle.orchestrator.state import (
     DEFAULT_AGENT_ROLE,
     AgentResult,
@@ -81,11 +82,8 @@ class ChatMixin:
             get_conversation,
             get_recent_messages,
             touch_conversation,
+            update_conversation_agent_role,
         )
-
-        route = route_message(request.message)
-        state.starting_role = route.agent_role
-        routed_message = route.original_message
 
         conversation_history: list[dict[str, str]] | None = None
         if state.conversation_id is not None:
@@ -95,6 +93,7 @@ class ChatMixin:
                 raise ValueError(
                     f"Conversation {state.conversation_id!r} not found."
                 )
+            route = route_with_pinned_role(request.message, conv.agent_role)
             with self.db.session() as session:
                 messages = get_recent_messages(
                     session,
@@ -105,6 +104,7 @@ class ChatMixin:
                     for m in messages
                 ]
         else:
+            route = route_message(request.message)
             state.conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
             with self.db.session() as session:
                 create_conversation(
@@ -113,6 +113,9 @@ class ChatMixin:
                     context_scope=request.context,
                     agent_role=route.agent_role,
                 )
+
+        state.starting_role = route.agent_role
+        routed_message = route.original_message
 
         etrace.step(
             "Routed to agent",
@@ -195,6 +198,12 @@ class ChatMixin:
                 run_id=state.run_id,
             )
             touch_conversation(session, state.conversation_id)
+            if route.routing_method == "explicit_override":
+                update_conversation_agent_role(
+                    session,
+                    state.conversation_id,
+                    route.agent_role,
+                )
 
         return agent_result
 

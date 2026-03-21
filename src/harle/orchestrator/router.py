@@ -41,7 +41,7 @@ class RouteResult:
     """Outcome of :func:`route`."""
 
     agent_role: str
-    routing_method: str  # "explicit_override" | "keyword_match" | "default"
+    routing_method: str  # explicit_override | keyword_match | default | conversation_continue
     original_message: str  # Message with explicit override prefix stripped, if any
 
 
@@ -95,5 +95,39 @@ def route(message: str) -> RouteResult:
     return RouteResult(
         agent_role="assistant",
         routing_method="default",
+        original_message=stripped,
+    )
+
+
+def route_with_pinned_role(message: str, pinned_role: str) -> RouteResult:
+    """Select role for a **follow-up** turn in an existing conversation.
+
+    Reuses *pinned_role* (the conversation's stored ``agent_role``) so keyword
+    routing does not re-run on every message. Still honors ``as <role>:`` when
+    the user explicitly switches role mid-thread (same as :func:`route`).
+
+    Args:
+        message: Raw user message.
+        pinned_role: Role from :class:`~harle.db.models.Conversation.agent_role`.
+
+    Returns:
+        :class:`RouteResult` with ``routing_method`` ``\"conversation_continue\"``
+        when *pinned_role* is used without an explicit override.
+    """
+    stripped = message.strip()
+    m = _EXPLICIT_OVERRIDE.match(stripped)
+    if m:
+        role = m.group(1).strip().lower()
+        rest = m.group(2).strip()
+        if role in KNOWN_ROLES:
+            return RouteResult(
+                agent_role=role,
+                routing_method="explicit_override",
+                original_message=rest if rest else stripped,
+            )
+        stripped = rest if rest else stripped
+    return RouteResult(
+        agent_role=pinned_role,
+        routing_method="conversation_continue",
         original_message=stripped,
     )
