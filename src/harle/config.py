@@ -49,7 +49,12 @@ class Settings:
     HARLE_HOST: str = "127.0.0.1"
     HARLE_PORT: int = 8000
     HARLE_LLM_PROVIDER: str = PROVIDER_OPENAI
-    HARLE_LLM_MODEL: str = "gpt-4o-mini"
+
+    # Model tiers — must be non-empty (see :class:`~harle.orchestrator.model_tier.ModelTierConfig`)
+    HARLE_MODEL_CLASSIFIER: str = "gpt-4o-mini"
+    HARLE_MODEL_PLANNER: str = "gpt-4o"
+    HARLE_MODEL_EXECUTOR: str = "gpt-4o-mini"
+    HARLE_COMPLEX_EXECUTION_TIER: str = "executor"
 
     # External data paths — configured per user, never inside this repo
     HARLE_DATASET_PATH: str | None = None
@@ -64,13 +69,11 @@ class Settings:
 
     # Level 3 plan-then-execute (orchestrator)
     HARLE_PLANNING_ENABLED: bool = True
-    HARLE_PLANNING_MODEL: str | None = None  # None = same as HARLE_LLM_MODEL
     HARLE_PLANNING_MAX_TURNS: int = 5  # Max turns for planning agent (tool loop)
     HARLE_PLANNED_MAX_TURNS: int | None = None  # Execution max_turns when a plan exists; None = HARLE_MAX_ITERATIONS
 
     # Level 4 reflection and self-critique (orchestrator)
     HARLE_REFLECTION_ENABLED: bool = True
-    HARLE_REFLECTION_MODEL: str | None = None  # None = same as HARLE_LLM_MODEL
     HARLE_REFLECTION_MIN_TOOL_CALLS: int = 3
     # Comma-separated keywords and roles (YAML can use a string or list; list coerced in load_settings)
     HARLE_REFLECTION_TRIGGER_KEYWORDS: str = (

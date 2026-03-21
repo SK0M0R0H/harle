@@ -28,11 +28,11 @@ For multi-step reasoning levels, see [multi_step_reasoning.md](./multi_step_reas
 
 ### Current state
 
-Harle uses a single LLM model for the entire agent execution lifecycle. The model is set once at startup via `HARLE_LLM_MODEL` in `config.py` (default `gpt-4o-mini`) and passed to `OrchestratorService`, which stores it as `self.model` and forwards it unchanged to:
+Harle routes execution phases to **model tiers** (`HARLE_MODEL_CLASSIFIER`, `HARLE_MODEL_PLANNER`, `HARLE_MODEL_EXECUTOR`). Each tier must be configured to a non-empty model name (built-in defaults exist on `Settings`). There is no separate single-model env var. `OrchestratorService` stores the executor tier as `self.model` and uses tier resolution for planning, execution, and reflection. Previously (pre–model tiers), one model was used for the entire lifecycle:
 
 - The OpenAI Agents SDK `Agent` object (via `model=self.model` in `runner_execution.py`).
-- Planning agent construction (via `planning_model or model` in `run_agent_execution`).
-- Reflection calls (via `reflection_model` parameter, defaults to execution model).
+- Planning agent construction (via `ModelTierConfig` planner tier in `run_agent_execution`).
+- Reflection critic uses the planner tier from `ModelTierConfig`.
 - Multi-agent handoffs — all agents in the handoff graph receive the same `model` parameter in `build_execution_agents()`.
 - Run logging — `finalize.py` logs a single `model` value.
 
@@ -159,7 +159,7 @@ Each tier has a built-in default model. The resolution order for any tier is:
 2. Built-in default for that tier (see tier definitions table)
 ```
 
-`HARLE_LLM_MODEL` does **not** act as a fallback for tier resolution. The tier system is self-contained — each tier resolves independently to its own configured or default value. This keeps tier behaviour predictable: an operator always knows which model a tier uses by looking at one place (the tier key or its documented default), never at a shared fallback.
+Tier resolution does **not** use a legacy single-model env var. Each of `HARLE_MODEL_CLASSIFIER`, `HARLE_MODEL_PLANNER`, and `HARLE_MODEL_EXECUTOR` must be set to a non-empty model name (empty values are rejected at `ModelTierConfig.from_settings()` time).
 
 When a tier key is not set, the server logs a **warning** at startup indicating which tier is using its built-in default. This makes unconfigured tiers visible without failing the startup:
 
@@ -469,16 +469,16 @@ If `HARLE_MODEL_PLANNER` specifies a model from a different provider than `HARLE
 |--------|--------|
 | Add `model_tier_config: ModelTierConfig` attribute | Replaces the need to pass individual model names per phase |
 | Pass tier-resolved models to `run_agent_execution` | Planning model, execution model, and reflection model all come from `ModelTierConfig` |
-| Remove redundant `planning_model` and `reflection_model` attributes | These become derivable from `model_tier_config` |
+| Remove redundant service fields where superseded | Tier mapping lives in `ModelTierConfig`; optional legacy critic override remains |
 
 ### 3. Runner execution (`orchestrator/runner_execution.py`)
 
 | Change | Detail |
 |--------|--------|
-| Accept `ModelTierConfig` instead of individual `model`, `planning_model`, `reflection_model` parameters | Cleaner interface, single source of truth |
-| Construct planning Agent with `tier_config.planner` model | Currently uses `planning_model or model` |
+| Accept `ModelTierConfig` instead of individual `model` / legacy reflection override parameters | Cleaner interface, single source of truth |
+| Construct planning Agent with `tier_config.planner` model | Replaces ad-hoc planning model override |
 | Construct execution Agent with `tier_config.executor` model | Currently uses `model` for all agents |
-| Pass `tier_config.planner` to reflection pipeline | Currently uses `reflection_model` (which defaults to execution model) |
+| Pass `tier_config.planner` to reflection pipeline | Critic uses planner tier |
 | Add `models_used` to `AgentExecutionResult` | Dict mapping phase names to model names used |
 
 ### 4. Multi-agent handoffs (`orchestrator/agents.py`)
@@ -493,7 +493,7 @@ If `HARLE_MODEL_PLANNER` specifies a model from a different provider than `HARLE
 | Change | Detail |
 |--------|--------|
 | Build `ModelTierConfig` from `Settings` | Pass to `OrchestratorService` |
-| Remove separate `planning_model`, `reflection_model` plumbing | Consolidated into `ModelTierConfig` |
+| No separate reflection critic model env var | Critic model is `tier_config.planner` |
 
 ### 6. Run logging (`orchestrator/finalize.py`, `db/runs.py`)
 
@@ -550,11 +550,11 @@ All existing tests pass without changes (default config produces single-model be
 
 ### Planning (Level 3)
 
-Today: `HARLE_PLANNING_MODEL` is an optional override; when `None`, the execution model is used. After this change: `HARLE_PLANNING_MODEL` is **deprecated** in favour of `HARLE_MODEL_PLANNER`. If both are set, `HARLE_PLANNING_MODEL` takes precedence (to avoid breaking existing configs), and a deprecation warning is logged.
+Planning uses the **planner** tier (`HARLE_MODEL_PLANNER`).
 
 ### Reflection (Level 4)
 
-Today: `HARLE_REFLECTION_MODEL` is an optional override; when `None`, the execution model is used. After this change: `HARLE_REFLECTION_MODEL` is **deprecated** in favour of `HARLE_MODEL_PLANNER` for the critic and `HARLE_MODEL_EXECUTOR` for the improvement pass. Same precedence rule as planning.
+The reflection **critic** uses the **planner** tier (`HARLE_MODEL_PLANNER`). The improvement pass uses the **executor** tier (`HARLE_MODEL_EXECUTOR`).
 
 ### Capture module
 
@@ -573,14 +573,14 @@ Out of scope. This TRD focuses on model-tier switching within a single provider 
 | **Config complexity** — more knobs to tune | User confusion, mis-configuration | Sensible built-in defaults per tier; startup warnings for unconfigured tiers; clear docs; `config.example.yaml` with explanatory comments |
 | **Model capability mismatch** — executor model too weak for a particular task | Lower quality on complex execution steps | Complexity-informed boosting (Phase 2); escalation extension point (Phase 3) |
 | **Cost surprise** — planner model is expensive, user doesn't realize planning is using it | Unexpected bills | `models_used` in RunResponse; cost tracking per phase in run logs |
-| **Deprecation of HARLE_PLANNING_MODEL / HARLE_REFLECTION_MODEL** | Existing configs break silently | Explicit deprecation warnings in logs; old keys take precedence during transition |
+| **Reflection model drift** — critic vs execution capability | Mismatch between tiers | Single `ModelTierConfig`; critic always planner, improvement always executor |
 | **Feature interaction** — tier selection interacts with handoff model, think tool, future features | Unexpected model selection | Single `ModelTierConfig` as source of truth; all model resolution flows through it |
 
 ---
 
 ## Summary
 
-Dynamic model switching transforms a single knob (`HARLE_LLM_MODEL`) into a tier system that matches model capability to task complexity. The design is:
+Dynamic model switching uses explicit **model tiers** so capability matches task complexity per phase. The design is:
 
 - **Algorithmic-first:** Phase identity determines model tier — zero overhead, fully deterministic.
 - **Backward-compatible:** Single-model deployments work unchanged.

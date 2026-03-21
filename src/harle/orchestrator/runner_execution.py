@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from harle.debug import etrace
+from harle.orchestrator.model_tier import ComplexExecutionTier, ModelTierConfig
 from harle.orchestrator.planner import (
+    RequestComplexity,
     classify_complexity,
     extract_plan_revisions,
     format_plan_for_injection,
@@ -56,6 +58,7 @@ class AgentExecutionResult:
     reflection_record: ReflectionRunRecord | None = None
     handoffs: list[HandoffRecord] | None = None
     final_agent: str | None = None
+    models_used: dict[str, str] = field(default_factory=dict)
 
 
 def run_agent_execution(
@@ -64,14 +67,14 @@ def run_agent_execution(
     system_prompt: str | None,
     build_instructions: Callable[[str | None, bool], str],
     tool_registry: ToolRegistry | None,
-    model: str,
+    model_tier_config: ModelTierConfig,
+    complex_execution_tier: ComplexExecutionTier,
+    reflection_critic_model: str,
     max_iterations: int,
     planning_enabled: bool,
-    planning_model: str | None,
     planning_max_turns: int,
     planned_max_turns: int | None,
     reflection_config: ReflectionConfig | None = None,
-    reflection_model: str | None = None,
     agent_role: str = DEFAULT_AGENT_ROLE,
     multi_agent: bool = False,
     role_instructions: dict[str, str] | None = None,
@@ -87,15 +90,16 @@ def run_agent_execution(
         build_instructions: Callable ``(system_prompt, has_tools) -> str`` that
             builds full instructions including tool skills.
         tool_registry: Optional registry for SDK tools.
-        model: Execution model name.
+        model_tier_config: Resolved classifier / planner / executor models.
+        complex_execution_tier: When :attr:`RequestComplexity.COMPLEX`, use
+            :attr:`ComplexExecutionTier.PLANNER` to run execution on the planner model.
+        reflection_critic_model: Model for the reflection critic (Level 4).
         max_iterations: Default max turns for the execution loop.
         planning_enabled: When ``False``, skip planning (Level 2 only).
-        planning_model: Model for planning; ``None`` means same as *model*.
         planning_max_turns: Max turns for the planning agent's tool loop.
         planned_max_turns: Max turns for execution when a plan exists; ``None``
             means use *max_iterations*.
         reflection_config: Level 4 reflection settings; ``None`` skips reflection.
-        reflection_model: Model for the reflection critic; ``None`` uses config/execution model.
         agent_role: Role name for reflection triggers (e.g. ``researcher``).
         multi_agent: When ``True``, build a handoff graph via :func:`build_execution_agents`.
         role_instructions: Per-role instruction strings (including skills) for multi-agent mode.
@@ -123,6 +127,9 @@ def run_agent_execution(
     plan_tools: list[str] = []
     plan_invocations = 0
     planning_tool_context = ""
+    models_used: dict[str, str] = {}
+
+    exec_model = model_tier_config.executor
 
     if planning_enabled:
         try:
@@ -138,16 +145,33 @@ def run_agent_execution(
                 module="orchestrator",
                 error_type=type(exc).__name__,
             )
-            complexity = "simple"
+            complexity = RequestComplexity.SIMPLE
 
         etrace.detail(
             "Complexity classified",
             module="orchestrator",
-            complexity=complexity,
+            complexity=complexity.value,
         )
 
-        if complexity == "complex":
-            pm = planning_model or model
+        if complexity is RequestComplexity.COMPLEX:
+            if complex_execution_tier is ComplexExecutionTier.PLANNER:
+                exec_model = model_tier_config.planner
+                etrace.detail(
+                    "Complex execution tier boost",
+                    module="orchestrator",
+                    boost_to=ComplexExecutionTier.PLANNER.value,
+                    model=exec_model,
+                )
+
+            pm = model_tier_config.planner
+            etrace.detail(
+                "Model tier resolved",
+                module="orchestrator",
+                phase="planning",
+                tier="planner",
+                model=pm,
+                source="config",
+            )
             plan, plan_tools, planning_tool_context, plan_invocations = generate_plan(
                 user_message=user_message,
                 base_instructions=base_instructions,
@@ -155,6 +179,7 @@ def run_agent_execution(
                 tools=tools,
                 max_turns=planning_max_turns,
             )
+            models_used["planning"] = pm
             injection_blocks: list[str] = []
             if plan is not None:
                 injection_blocks.append(format_plan_for_injection(plan))
@@ -184,10 +209,22 @@ def run_agent_execution(
                             joined + role_instructions[role_key]
                         )
 
+    tier_for_agents = replace(model_tier_config, executor=exec_model)
+    etrace.detail(
+        "Model tier resolved",
+        module="orchestrator",
+        phase="execution",
+        tier="executor" if exec_model == model_tier_config.executor else "planner",
+        model=exec_model,
+        source="config",
+    )
+    models_used["execution"] = exec_model
+    models_used["handoff"] = tier_for_agents.executor
+
     etrace.detail(
         "Agent execution started",
         module="orchestrator",
-        model=model,
+        model=exec_model,
         max_turns=max_turns,
         has_tools=bool(tool_registry),
         routing_method=routing_method,
@@ -212,7 +249,7 @@ def run_agent_execution(
             RECOMMENDED_PROMPT_PREFIX = ""
 
         agents_map = build_execution_agents(
-            model=model,
+            model_tier_config=tier_for_agents,
             tool_registry=tool_registry,
             role_instructions=dict(role_instructions),
             handoff_records_out=handoff_records,
@@ -223,14 +260,14 @@ def run_agent_execution(
             name=agent_role,
             instructions=base_instructions,
             tools=tools,
-            model=model,
+            model=exec_model,
         )
     else:
         agent = Agent(
             name=agent_role,
             instructions=base_instructions,
             tools=tools,
-            model=model,
+            model=exec_model,
         )
 
     try:
@@ -258,6 +295,7 @@ def run_agent_execution(
             reflection_record=None,
             handoffs=None,
             final_agent=None,
+            models_used=models_used,
         )
 
     exec_tools, turns_used = extract_run_metadata(result)
@@ -287,6 +325,7 @@ def run_agent_execution(
     post_execution_turns = 0
     reflect_tools = tools
     reflect_base = base_instructions
+    improvement_model = model_tier_config.executor
     if use_multi and tool_registry is not None:
         rt_names = tool_names_for_role(
             tool_registry,
@@ -298,6 +337,14 @@ def run_agent_execution(
             reflect_base = role_instructions[agent_role]
 
     if reflection_config is not None:
+        etrace.detail(
+            "Model tier resolved",
+            module="orchestrator",
+            phase="reflection",
+            tier="planner",
+            model=reflection_critic_model,
+            source="config",
+        )
         (
             text_str,
             merged_tools,
@@ -314,11 +361,15 @@ def run_agent_execution(
             agent_role=agent_role,
             base_instructions=reflect_base,
             tools=reflect_tools,
-            execution_model=model,
+            critic_model=reflection_critic_model,
+            improvement_model=improvement_model,
             reflection_config=reflection_config,
-            reflection_model_override=reflection_model,
             max_iterations_default=max_iterations,
         )
+        if reflection_triggered:
+            models_used["reflection"] = reflection_critic_model
+        if reflection_record is not None and reflection_record.improvement_pass_ran:
+            models_used["improvement"] = improvement_model
 
     if plan is not None:
         revisions = extract_plan_revisions(text_str)
@@ -339,4 +390,5 @@ def run_agent_execution(
         reflection_record=reflection_record,
         handoffs=handoff_records or None,
         final_agent=final_agent_name,
+        models_used=dict(models_used),
     )

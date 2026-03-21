@@ -369,9 +369,9 @@ def apply_reflection_pipeline(
     agent_role: str,
     base_instructions: str,
     tools: list[object],
-    execution_model: str,
+    critic_model: str,
+    improvement_model: str,
     reflection_config: ReflectionConfig,
-    reflection_model_override: str | None,
     max_iterations_default: int,
 ) -> tuple[str, list[str], bool, bool, ReflectionRunRecord | None, int]:
     """After execution, optionally run reflection and at most one improvement pass.
@@ -400,11 +400,10 @@ def apply_reflection_pipeline(
         return draft_text, merged_tools, False, False, None, 0
 
     count_at_trigger = tool_invocation_count
-    r_model = reflection_model_override or reflection_config.model or execution_model
     verdict, reflection_turns = run_reflection(
         user_message=user_message,
         draft_result=draft_text,
-        model=r_model,
+        model=critic_model,
     )
 
     if verdict.verdict != "improve" or not verdict.improvements:
@@ -430,7 +429,7 @@ def apply_reflection_pipeline(
         improvements=list(verdict.improvements),
         base_instructions=base_instructions,
         tools=tools,
-        model=execution_model,
+        model=improvement_model,
         max_turns=imp_turns,
     )
 

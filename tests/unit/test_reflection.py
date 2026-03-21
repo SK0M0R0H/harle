@@ -260,9 +260,9 @@ class TestApplyReflectionPipeline:
             agent_role="assistant",
             base_instructions="b",
             tools=[],
-            execution_model="m",
+            critic_model="m",
+            improvement_model="m",
             reflection_config=c,
-            reflection_model_override=None,
             max_iterations_default=10,
         )
         assert text == "draft"
@@ -297,9 +297,9 @@ class TestApplyReflectionPipeline:
             agent_role="assistant",
             base_instructions="b",
             tools=[],
-            execution_model="m",
+            critic_model="m",
+            improvement_model="m",
             reflection_config=c,
-            reflection_model_override=None,
             max_iterations_default=10,
         )
         assert text == "better"
@@ -330,9 +330,9 @@ class TestApplyReflectionPipeline:
             agent_role="assistant",
             base_instructions="b",
             tools=[],
-            execution_model="m",
+            critic_model="m",
+            improvement_model="m",
             reflection_config=c,
-            reflection_model_override=None,
             max_iterations_default=10,
         )
         assert tr is True

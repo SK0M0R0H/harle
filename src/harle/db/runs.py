@@ -94,6 +94,7 @@ def create_run(
     reflection_triggered: bool | None = None,
     reflection_improved: bool | None = None,
     handoffs: list[dict[str, str]] | None = None,
+    models_used: dict[str, str] | None = None,
 ) -> Run:
     """Insert a single run record.
 
@@ -120,6 +121,7 @@ def create_run(
         reflection_triggered: Whether Level 4 reflection ran (optional).
         reflection_improved: Whether an improvement pass replaced the draft (optional).
         handoffs: Optional list of handoff events (source, target, reason).
+        models_used: Per-phase model names when multi-tier routing is active.
 
     Returns:
         The created :class:`Run` instance.
@@ -146,6 +148,7 @@ def create_run(
         reflection_triggered=reflection_triggered,
         reflection_improved=reflection_improved,
         handoffs=handoffs,
+        models_used=models_used,
     )
     session.add(run)
     session.flush()

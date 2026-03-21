@@ -29,7 +29,7 @@ class ExecutionMixin:
             return None
         return ReflectionConfig.from_settings_strings(
             enabled=self.reflection_enabled,
-            model=self.reflection_model,
+            model=self.effective_reflection_critic_model(),
             min_tool_calls=self.reflection_min_tool_calls,
             trigger_keywords_csv=self.reflection_trigger_keywords,
             trigger_roles_csv=self.reflection_trigger_roles,
@@ -124,14 +124,14 @@ class ExecutionMixin:
             system_prompt=system_prompt,
             build_instructions=self._build_instructions,
             tool_registry=self.tool_registry,
-            model=self.model,
+            model_tier_config=self.effective_model_tier_config(),
+            complex_execution_tier=self.complex_execution_tier,
+            reflection_critic_model=self.effective_reflection_critic_model(),
             max_iterations=self.max_iterations,
             planning_enabled=self.planning_enabled,
-            planning_model=self.planning_model,
             planning_max_turns=self.planning_max_turns,
             planned_max_turns=self.planned_max_turns,
             reflection_config=self._reflection_config(),
-            reflection_model=self.reflection_model,
             agent_role=agent_role,
             multi_agent=multi_agent,
             role_instructions=role_instructions,
@@ -152,6 +152,7 @@ class ExecutionMixin:
             reflection_record=r.reflection_record,
             handoffs=r.handoffs,
             final_agent=r.final_agent,
+            models_used=r.models_used or None,
         )
 
     def _execute_with_provider(

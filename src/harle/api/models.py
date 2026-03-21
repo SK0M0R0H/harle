@@ -37,6 +37,7 @@ class RunResponse(BaseModel):
     reflection_triggered: bool | None = None
     reflection_improved: bool | None = None
     handoffs: list[dict[str, str]] | None = None
+    models_used: dict[str, str] | None = None
 
 
 class RunDetail(BaseModel):
@@ -59,6 +60,7 @@ class RunDetail(BaseModel):
     reflection_triggered: bool | None = None
     reflection_improved: bool | None = None
     handoffs: list[dict[str, str]] | None = None
+    models_used: dict[str, str] | None = None
 
 
 class HealthResponse(BaseModel):

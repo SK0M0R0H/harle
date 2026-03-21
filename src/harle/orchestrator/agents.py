@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from pydantic import BaseModel, Field
 
 from harle.debug import etrace
+from harle.orchestrator.model_tier import ModelTierConfig
 from harle.orchestrator.role_tool_modules import DEFAULT_ROLE_TOOL_MODULES
 
 if TYPE_CHECKING:
@@ -121,7 +122,7 @@ def _append_handoff_record(
 
 def build_execution_agents(
     *,
-    model: str,
+    model_tier_config: ModelTierConfig,
     tool_registry: Any,
     role_instructions: dict[str, str],
     handoff_records_out: list[HandoffRecord],
@@ -135,7 +136,7 @@ def build_execution_agents(
     that object when a handoff runs).
 
     Args:
-        model: Model name for every agent.
+        model_tier_config: Tier mapping; handoff agents use the executor tier.
         tool_registry: :class:`~harle.tools.registry.ToolRegistry`.
         role_instructions: Full instruction string per role (P0 or assembled).
         handoff_records_out: Mutable list; ``on_handoff`` appends :class:`HandoffRecord`.
@@ -146,6 +147,8 @@ def build_execution_agents(
         Mapping ``role_name -> Agent`` for all :data:`KNOWN_ROLES`.
     """
     from agents import Agent, handoff
+
+    exec_model = model_tier_config.executor
 
     agents: dict[str, Any] = {}
     for role in KNOWN_ROLES:
@@ -167,7 +170,7 @@ def build_execution_agents(
             name=role,
             instructions=full_instructions,
             tools=tools,
-            model=model,
+            model=exec_model,
             handoffs=[],
         )
 

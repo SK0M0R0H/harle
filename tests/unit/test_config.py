@@ -98,7 +98,10 @@ class TestSettingsDefaults:
         assert s.HARLE_HOST == "127.0.0.1"
         assert s.HARLE_PORT == 8000
         assert s.HARLE_LLM_PROVIDER == "openai"
-        assert s.HARLE_LLM_MODEL == "gpt-4o-mini"
+        assert s.HARLE_MODEL_CLASSIFIER == "gpt-4o-mini"
+        assert s.HARLE_MODEL_PLANNER == "gpt-4o"
+        assert s.HARLE_MODEL_EXECUTOR == "gpt-4o-mini"
+        assert s.HARLE_COMPLEX_EXECUTION_TIER == "executor"
         assert s.HARLE_DATASET_PATH is None
         assert s.DATABASE_URL is None
 
@@ -123,7 +126,9 @@ class TestLoadSettings:
                 "HARLE_HOST",
                 "HARLE_PORT",
                 "HARLE_LLM_PROVIDER",
-                "HARLE_LLM_MODEL",
+                "HARLE_MODEL_CLASSIFIER",
+                "HARLE_MODEL_PLANNER",
+                "HARLE_MODEL_EXECUTOR",
                 "HARLE_DATASET_PATH",
                 "DATABASE_URL",
                 "HARLE_PLANNED_MAX_TURNS",
@@ -225,14 +230,14 @@ class TestGetVaultImportsConfig:
 class TestLoadEnvironment:
     def test_loads_from_default_dotenv_in_cwd(self, tmp_path: Path) -> None:
         dotenv = tmp_path / ".env"
-        dotenv.write_text("HARLE_LLM_MODEL=from_dotenv\n", encoding="utf-8")
+        dotenv.write_text("HARLE_MODEL_EXECUTOR=from_dotenv\n", encoding="utf-8")
 
         with patch.dict(os.environ, {}, clear=True), patch("harle.config._DOTENV_LOADED", False):
             previous_cwd = Path.cwd()
             try:
                 os.chdir(tmp_path)
                 load_environment(force=True)
-                assert os.getenv("HARLE_LLM_MODEL") == "from_dotenv"
+                assert os.getenv("HARLE_MODEL_EXECUTOR") == "from_dotenv"
             finally:
                 os.chdir(previous_cwd)
 

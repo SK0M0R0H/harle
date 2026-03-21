@@ -171,6 +171,7 @@ def build_router(
                 reflection_triggered=run.reflection_triggered,
                 reflection_improved=run.reflection_improved,
                 handoffs=run.handoffs,
+                models_used=run.models_used,
             )
 
     @router.post("/chat", response_model=RunResponse)

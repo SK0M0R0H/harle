@@ -17,8 +17,14 @@ HARLE_PORT: 8000
 
 # --- LLM ---
 HARLE_LLM_PROVIDER: "openai"
-HARLE_LLM_MODEL: "gpt-4o-mini"
 # OPENAI_API_KEY — read exclusively from the environment variable; never put it in this file.
+
+# --- Model tiers (required non-empty) ---
+HARLE_MODEL_CLASSIFIER: "gpt-4o-mini"   # routing / classification
+HARLE_MODEL_PLANNER: "gpt-4o"            # planning + reflection critic
+HARLE_MODEL_EXECUTOR: "gpt-4o-mini"      # execution, handoffs, improvement pass, legacy provider
+# Boost execution to planner tier when the local complexity classifier returns "complex":
+# HARLE_COMPLEX_EXECUTION_TIER: "executor"   # or "planner"
 
 # --- External data (per-user, never committed) ---
 # HARLE_DATASET_PATH: "/path/to/harle-vault"
@@ -29,7 +35,6 @@ HARLE_MAX_ITERATIONS: 10             # Max reasoning turns per request (tool-cal
 
 # --- Level 3 plan-then-execute ---
 # HARLE_PLANNING_ENABLED: true        # false = skip planning (Level 2 only)
-# HARLE_PLANNING_MODEL: null           # Optional: stronger model for planning; null = HARLE_LLM_MODEL
 # HARLE_PLANNING_MAX_TURNS: 5         # Max turns for the planning agent (may use tools)
 # HARLE_PLANNED_MAX_TURNS: null       # Max execution turns when a plan was used; null = HARLE_MAX_ITERATIONS
 
