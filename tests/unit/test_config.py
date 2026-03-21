@@ -48,6 +48,10 @@ class TestCoerce:
         result = _coerce("hello", str | None)
         assert result == "hello"
 
+    def test_optional_int_from_string(self) -> None:
+        """Env vars for ``int | None`` fields must coerce to int (not stay as str)."""
+        assert _coerce("12", int | None) == 12
+
     def test_optional_none(self) -> None:
         result = _coerce(None, str | None)
         assert result is None
@@ -115,8 +119,16 @@ class TestLoadSettings:
         env = {"HARLE_CONFIG_PATH": str(fake_config)}
         with patch.dict(os.environ, env, clear=False):
             # Clear any env vars that would interfere
-            for key in ("HARLE_HOST", "HARLE_PORT", "HARLE_LLM_PROVIDER",
-                        "HARLE_LLM_MODEL", "HARLE_DATASET_PATH", "DATABASE_URL"):
+            for key in (
+                "HARLE_HOST",
+                "HARLE_PORT",
+                "HARLE_LLM_PROVIDER",
+                "HARLE_LLM_MODEL",
+                "HARLE_DATASET_PATH",
+                "DATABASE_URL",
+                "HARLE_PLANNED_MAX_TURNS",
+                "HARLE_RUN_TIMEOUT_SECONDS",
+            ):
                 os.environ.pop(key, None)
             s = load_settings()
         assert s.HARLE_HOST == "127.0.0.1"
@@ -145,6 +157,18 @@ class TestLoadSettings:
         with patch.dict(os.environ, env, clear=False):
             s = load_settings()
         assert s.HARLE_HOST == "10.0.0.1"
+
+    def test_env_optional_int_planned_max_turns_is_int(self, tmp_path: Path) -> None:
+        """HARLE_PLANNED_MAX_TURNS from env must be int (PEP 563 field types)."""
+        fake_config = tmp_path / "nonexistent.yaml"
+        env = {
+            "HARLE_CONFIG_PATH": str(fake_config),
+            "HARLE_PLANNED_MAX_TURNS": "12",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            s = load_settings()
+        assert s.HARLE_PLANNED_MAX_TURNS == 12
+        assert isinstance(s.HARLE_PLANNED_MAX_TURNS, int)
 
     def test_config_file_wins_over_env(self, tmp_path: Path) -> None:
         cfg = tmp_path / "config.yaml"

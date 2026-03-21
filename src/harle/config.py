@@ -18,7 +18,7 @@ import logging
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args, get_type_hints
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
@@ -77,19 +77,22 @@ class Settings:
     HARLE_TRACING_DEBUG_LEVEL: str = "STEP"
 
 
-def _coerce(value: Any, target_type: type) -> Any:
-    """Coerce *value* to *target_type* with basic ``str | None`` handling."""
+def _coerce(value: Any, target_type: Any) -> Any:
+    """Coerce *value* to *target_type* with basic ``T | None`` handling.
+
+    Expects a **resolved** type (e.g. from :func:`typing.get_type_hints`), not a
+    string annotation. Unwraps ``Optional[T]`` / ``T | None`` using
+    :func:`typing.get_args` so PEP 604 unions (``types.UnionType``) and
+    ``typing.Union`` both coerce env/YAML strings to ``int``, etc.
+    """
     if value is None:
         return None
 
-    origin = getattr(target_type, "__origin__", None)
-    # Handle ``str | None`` (unions that include None)
-    if origin is not None:
-        args = [a for a in target_type.__args__ if a is not type(None)]
-        if args:
-            target_type = args[0]
-        else:
-            return value
+    args = get_args(target_type)
+    if args and type(None) in args:
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            target_type = non_none[0]
 
     if target_type is int:
         return int(value)
@@ -185,17 +188,21 @@ def load_settings() -> Settings:
 
     file_values = _load_yaml(_resolve_config_path())
 
+    # Resolve ``str | None``-style annotations (PEP 563) to real types for _coerce.
+    type_hints = get_type_hints(Settings)
+
     resolved: dict[str, Any] = {}
     for f in fields(Settings):
+        field_type = type_hints[f.name]
         # 1. Config file (primary)
         if f.name in file_values and file_values[f.name] is not None:
-            resolved[f.name] = _coerce(file_values[f.name], f.type)
+            resolved[f.name] = _coerce(file_values[f.name], field_type)
             continue
 
         # 2. Environment variable (fallback) — same key name, no mapping
         env_value = os.getenv(f.name)
         if env_value is not None:
-            resolved[f.name] = _coerce(env_value, f.type)
+            resolved[f.name] = _coerce(env_value, field_type)
             continue
 
         # 3. Built-in default (from the dataclass) — no action needed
