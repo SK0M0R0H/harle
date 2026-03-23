@@ -29,6 +29,7 @@ When you **add, change, or remove** either (1) **implementation** in a module th
 | (recommendations apply across data layer) | `docs/trd/architecture/data_layer_best_practices.md` | `docs/current_state/architecture/data_layer_best_practices.md` |
 | `src/harle/debug/` | `docs/trd/execution_tracing.md` | `docs/current_state/execution_tracing.md` |
 | `src/harle/orchestrator/`, `src/harle/config.py` (model tier routing) | `docs/trd/architecture/dynamic_model_switching.md` | `docs/current_state/architecture/dynamic_model_switching.md` |
+| Dockerfile, docker-compose.yml, scripts/, .github/workflows/ | `docs/trd/remote_deployment.md` | `docs/current_state/remote_deployment.md` |
 
 *(Add a row here when you add a current-state doc for another TRD module.)*
 
