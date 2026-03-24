@@ -779,6 +779,12 @@ The system is implemented in phases. Each phase produces a usable result — you
 - From a laptop on the same Tailscale network, run `harle exec "hello"` against the remote server.
 - Verify `/health` returns 200.
 - Verify restart after container kill (`docker kill harle`).
+- Verify restart behavior during in-flight requests (graceful stop; no container restart loop).
+
+**Optional hardening improvements (recommended after first stable deployment):**
+- Add `stop_grace_period: 30s` (or higher for long-running requests) to the `harle` service in `docker-compose.yml`.
+- Observe runtime memory and restart behavior for a few days (`docker stats`, `docker compose ps`) and tune `mem_limit` if needed.
+- Add a lightweight post-restart smoke check in the runbook (`/health` + one `harle exec`) after any manual restart or host reboot.
 
 **Dependencies:** None.
 

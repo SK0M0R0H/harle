@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/skm/harle/harle-cli/internal/client"
+	"github.com/skm/harle/harle-cli/internal/config"
 	"github.com/skm/harle/harle-cli/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -19,6 +20,10 @@ func NewRootCommand() *cobra.Command {
 		Use:   "harle",
 		Short: "Launch a Harle session",
 		Long:  "Session-first CLI for Harle. Run with no arguments to start interactive mode.",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			serverURL = config.ResolveServerURL(serverURL, cmd.Flags().Changed("server"))
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			httpClient := client.NewHTTPClient(serverURL)
 			manager := session.NewManager(httpClient, contextValue, themeValue)

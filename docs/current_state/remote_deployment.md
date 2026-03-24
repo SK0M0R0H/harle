@@ -2,7 +2,7 @@
 title: "Harle Remote Deployment — Current State"
 tags: [deployment, remote, infrastructure, security, cd, monitoring, current-state, implementation-status]
 context: global
-last_updated: 2026-03-23
+last_updated: 2026-03-24
 summary: "Tracks what the remote deployment infrastructure implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Overall Status
 
-**Nothing is implemented yet.** The TRD is newly created. Harle currently runs only as a local development setup: `harle-server` on localhost, PostgreSQL via Docker, vault on the local filesystem. There is no Dockerfile, no `docker-compose.yml` for production, no remote server setup, no CI/CD pipeline, no monitoring, and no multi-client authentication.
+**Phase 1 is implemented.** Harle now has the core artifacts for a manual remote deployment: containerization, production compose stack, server initialization/hardening script, private-repo setup path, and CLI config support for persistent remote server URLs. Deployment is still manual (SSH + pull + restart), and later phases remain pending.
 
 ---
 
@@ -24,16 +24,16 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 | TRD area | Current status | Notes |
 |----------|----------------|-------|
-| Dockerfile | Not implemented | No Dockerfile exists in the repository |
-| docker-compose.yml (production) | Not implemented | No Compose file exists; README shows a `docker run` command for PostgreSQL only |
-| Server hardening script | Not implemented | No `scripts/server-init.sh` |
-| Deployment runbook | Not implemented | No `docs/runbooks/remote-setup.md` |
-| Tailscale setup | Not implemented | Mentioned in overview.md as the networking plan |
+| Dockerfile | Implemented | `Dockerfile` added; runs `harle-server` as non-root user |
+| docker-compose.yml (production) | Implemented | `docker-compose.yml` added with `harle` + `db`, health checks, restart policies, and localhost bind |
+| Server hardening script | Implemented | `scripts/server-init.sh` added (SSH hardening, UFW, unattended-upgrades, Docker, Tailscale) |
+| Deployment runbook | Implemented | `docs/runbooks/remote-setup.md` added |
+| Tailscale setup | Implemented | Included in `scripts/server-init.sh` and runbook |
 | Vault sync (Git-based) | Not implemented | No `scripts/vault-sync.sh` |
 | Vault sync (Syncthing) | Not implemented | — |
 | Auto-reindex after sync | Partially available | `/reindex` API endpoint exists; no filesystem watcher or sync trigger |
 | API token authentication | Not implemented | No auth middleware; server binds to `127.0.0.1` (localhost only) |
-| CLI remote server config | Not implemented | CLI hardcodes `http://127.0.0.1:8000` or reads from config without auth |
+| CLI remote server config | Implemented | CLI now resolves server URL via `--server`, `HARLE_SERVER_URL`, or `~/.config/harle/cli.yaml` |
 | Client identification header | Not implemented | — |
 | CD pipeline (GitHub Actions) | Not implemented | No `.github/workflows/deploy.yml` |
 | Deploy pull script | Not implemented | No `scripts/deploy-pull.sh` |
@@ -42,13 +42,29 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 | DB backup cron | Not implemented | — |
 | Telegram bot interface | Not implemented | — |
 | Caddy reverse proxy | Not implemented | — |
-| `.env.example` (server) | Not implemented | Existing `.env` pattern is for local development |
+| `.env.example` (server) | Implemented | `.env.example` now includes deployment keys (`DATABASE_URL`, `HARLE_DATASET_PATH`, `HARLE_HOST`, Postgres vars) |
 
 ---
 
 ## What Is Implemented
 
-Nothing specific to remote deployment is implemented. The following existing components are prerequisites that already work:
+### Phase 1 deliverables
+
+- **Docker image build** — `Dockerfile` and `.dockerignore` added for a lean Python service image.
+- **Compose deployment stack** — `docker-compose.yml` added with:
+  - `harle` container (`restart: unless-stopped`, localhost-only `127.0.0.1:8000` binding).
+  - `db` container (`pgvector/pgvector:pg16`, persistent `pgdata`, healthcheck).
+  - basic hardening defaults (`no-new-privileges`, memory limits).
+- **Server bootstrap/hardening script** — `scripts/server-init.sh` added for one-time host setup, including GitHub deploy key generation for private repo pulls.
+- **Remote setup runbook** — `docs/runbooks/remote-setup.md` added with end-to-end provisioning, clone, compose startup, initialization, and verification.
+- **CLI remote server persistence** — Go CLI now supports `~/.config/harle/cli.yaml` (`server_url`) with precedence:
+  1. `--server`
+  2. `HARLE_SERVER_URL`
+  3. `~/.config/harle/cli.yaml`
+  4. default localhost URL.
+- **Server environment template** — `.env.example` now includes deployment-ready variables for compose-based remote setup.
+
+### Existing prerequisites still in place
 
 - **`/health` endpoint** — returns server status (usable for monitoring checks).
 - **`/health/connections` endpoint** — checks external service connections.
@@ -64,8 +80,9 @@ Nothing specific to remote deployment is implemented. The following existing com
 
 ### 1. Basic remote deployment (Phase 1)
 
-- **Missing:** Dockerfile, production docker-compose.yml, server hardening script, deployment runbook, Tailscale setup documentation.
-- **Unlocks:** Harle running 24/7 on a remote server, accessible from any Tailscale-connected device.
+- **Status:** Implemented.
+- **Delivered:** Dockerization, compose stack, server setup script, runbook, and CLI remote config persistence.
+- **TRD follow-up (optional hardening):** The TRD now recommends post-deployment hardening checks (for example `stop_grace_period` tuning and memory/restart observation). These are operational tuning steps and are not yet codified in compose defaults.
 
 ### 2. Vault synchronization (Phase 2)
 
@@ -96,10 +113,11 @@ Nothing specific to remote deployment is implemented. The following existing com
 
 ## Key Deviations from TRD
 
-None — the TRD is newly created with no implementation yet.
+- **Compose image source differs for Phase 1:** the compose file builds from local source (`build: .`) instead of pulling from `ghcr.io`. This is intentional and aligns with Phase 1 manual deployment; image registry flow is deferred to Phase 4 (CD).
+- **Server init script includes deploy-key bootstrap:** `scripts/server-init.sh` now generates a GitHub deploy key and SSH config to support private repository cloning. This expands convenience beyond the minimal hardening list but supports practical private-repo deployment.
 
 ---
 
 ## Assessment
 
-The existing architecture (stateless API, conversation model, health endpoints, re-index endpoint) provides a solid foundation for remote deployment. The primary work is infrastructure: containerization, networking, synchronization, and operational tooling. No changes to the core orchestrator or data layer are required for Phase 1.
+Remote deployment moved from "not started" to a working manual baseline. Harle can now be provisioned on a VPS with documented steps and deployed as containers on a private Tailscale-accessible endpoint. The next highest-value gaps are API authentication (Phase 3), vault sync automation (Phase 2), and automated deployment/monitoring (Phases 4-5).
