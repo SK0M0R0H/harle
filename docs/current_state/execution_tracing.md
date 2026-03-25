@@ -2,7 +2,7 @@
 title: "Harle Execution Tracing — Current State"
 tags: [execution-tracing, tracing, observability, opentelemetry, current-state, implementation-status]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-25
 summary: "Tracks what the execution tracing system implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -27,7 +27,7 @@ Reference TRD: [Harle Execution Tracing — Architecture & Functionality](../trd
 | `etrace` API (`trace.py`) | Implemented | `span()`, `step()`, `detail()`, `trace_entry()`, `internal()`, `span_fn()` decorator. Uses OTel `get_tracer("harle")`. |
 | `TraceLevel` enum (`levels.py`) | Implemented | STEP=1, DETAIL=2, TRACE=3, INTERNAL=4 with `from_name()`. |
 | `configure_tracing()` (`setup.py`) | Implemented | Creates `TracerProvider`, wires vault, DB, and CLI SSE exporters based on config. |
-| `VaultExporter` (`exporters/vault.py`) | Implemented | Reconstructs span tree, renders Markdown, writes `_trace.md` to vault `logs/YYYY/MM/`. |
+| `VaultExporter` (`exporters/vault.py`) | Implemented | Pops `RunArtifact` for the run, merges with span tree; writes one `logs/YYYY/MM/<safe_stem>.md` (Result + optional context + Execution trace). Trace-only file if no artifact. |
 | `PostgresExporter` (`exporters/db.py`) | Implemented | Serialises span tree to JSONB, inserts into `execution_traces` table. Uses lazy engine creation. |
 | `CliSseExporter` (`exporters/cli.py`) | Implemented | Pushes qualifying spans to a shared `Queue` for SSE streaming. Level-filtered. |
 | `ExecutionTrace` model (`db/models.py`) | Implemented | SQLAlchemy model with `run_id`, `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`. |
@@ -61,7 +61,7 @@ Reference TRD: [Harle Execution Tracing — Architecture & Functionality](../trd
 ### Exporters (`src/harle/debug/exporters/`)
 
 - **`_spans.py`** — Shared span-processing helpers used by both vault and DB exporters: `group_by_trace`, `filter_by_level`, `find_root`, `extract_run_id`, `span_start_time`, `span_duration_ms`, `build_tree`.
-- **`vault.py`** — Groups spans by trace ID, filters by `min_level`, reconstructs the parent-child tree, and renders a Markdown document with YAML frontmatter. Writes to `logs/YYYY/MM/<run_id>_debug.md`.
+- **`vault.py`** — Groups spans by trace ID, filters by `min_level`, reconstructs the parent-child tree, merges optional `RunArtifact` from `logging/artifacts.py`, and writes `logs/YYYY/MM/<safe_stem>.md`.
 - **`db.py`** — `PostgresExporter` serialises the span tree to JSONB and inserts one row per trace into `execution_traces`. Uses lazy engine creation to avoid importing SQLAlchemy at module level.
 - **`cli.py`** — `CliSseExporter` pushes debug events onto a shared `Queue`. Each event is a dict with `type`, `level`, `name`, `duration_ms`, `module`, and optional `attributes`. Level filtering drops spans below the configured verbosity.
 

@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from harle.dataset.writer import write_log_file
-from harle.logging.run_logger import build_result_body, log_run_to_vault
+from harle.logging.artifacts import clear_run_artifact_store, pop_artifact
+from harle.logging.run_logger import (
+    build_result_body,
+    flush_registered_run_log_without_trace,
+    log_run_to_vault,
+)
 
 
 class TestWriteLogFile:
@@ -97,10 +102,33 @@ class TestBuildResultBody:
         ) == ""
 
 
-class TestLogRunToVault:
-    """Tests for log_run_to_vault."""
+def _flush_artifact(tmp_path: Path, run_id: str, result_path: str) -> None:
+    assert flush_registered_run_log_without_trace(tmp_path, run_id, result_path)
 
-    def test_writes_result_file_with_frontmatter(self, tmp_path: Path) -> None:
+
+def test_flush_registered_run_log_without_trace_returns_false_when_empty() -> None:
+    clear_run_artifact_store()
+    try:
+        assert (
+            flush_registered_run_log_without_trace(
+                Path("/tmp"), "missing", "logs/x.md"
+            )
+            is False
+        )
+    finally:
+        clear_run_artifact_store()
+
+
+class TestLogRunToVault:
+    """Tests for log_run_to_vault (registers artifacts; flush simulates finalize fallback)."""
+
+    def setup_method(self) -> None:
+        clear_run_artifact_store()
+
+    def teardown_method(self) -> None:
+        clear_run_artifact_store()
+
+    def test_registers_result_artifact_and_flush_writes_file(self, tmp_path: Path) -> None:
         ts = datetime(2026, 2, 19, 14, 30, 0, tzinfo=timezone.utc)
         result_path, context_path = log_run_to_vault(
             tmp_path,
@@ -112,9 +140,10 @@ class TestLogRunToVault:
             result_body="The agent did something.",
             store_context=False,
         )
-        assert result_path == "logs/2026/02/run_abc123_result.md"
+        assert result_path == "logs/2026/02/run_abc123.md"
         assert context_path is None
-        path = tmp_path / "logs" / "2026" / "02" / "run_abc123_result.md"
+        _flush_artifact(tmp_path, "run_abc123", result_path)
+        path = tmp_path / "logs" / "2026" / "02" / "run_abc123.md"
         assert path.exists()
         content = path.read_text(encoding="utf-8")
         assert 'run_id: "run_abc123"' in content
@@ -124,7 +153,7 @@ class TestLogRunToVault:
         assert "# Result" in content
         assert "The agent did something." in content
 
-    def test_writes_context_file_when_store_context_true(self, tmp_path: Path) -> None:
+    def test_single_file_includes_context_when_store_context_true(self, tmp_path: Path) -> None:
         ts = datetime(2026, 2, 19, 14, 30, 0, tzinfo=timezone.utc)
         result_path, context_path = log_run_to_vault(
             tmp_path,
@@ -137,14 +166,17 @@ class TestLogRunToVault:
             context_body="System prompt content.",
             store_context=True,
         )
-        assert result_path == "logs/2026/02/run_xyz_result.md"
-        assert context_path == "logs/2026/02/run_xyz_context.md"
-        ctx_path = tmp_path / "logs" / "2026" / "02" / "run_xyz_context.md"
-        assert ctx_path.exists()
-        assert "System prompt content." in ctx_path.read_text(encoding="utf-8")
-        assert "# Assembled context" in ctx_path.read_text(encoding="utf-8")
+        assert result_path == "logs/2026/02/run_xyz.md"
+        assert context_path is None
+        _flush_artifact(tmp_path, "run_xyz", result_path)
+        path = tmp_path / "logs" / "2026" / "02" / "run_xyz.md"
+        assert path.exists()
+        text = path.read_text(encoding="utf-8")
+        assert "System prompt content." in text
+        assert "# Assembled context" in text
+        assert "Result text." in text
 
-    def test_does_not_write_context_when_store_context_false(self, tmp_path: Path) -> None:
+    def test_does_not_include_context_when_store_context_false(self, tmp_path: Path) -> None:
         ts = datetime(2026, 2, 19, 14, 30, 0, tzinfo=timezone.utc)
         result_path, context_path = log_run_to_vault(
             tmp_path,
@@ -159,8 +191,9 @@ class TestLogRunToVault:
         )
         assert result_path is not None
         assert context_path is None
-        ctx_path = tmp_path / "logs" / "2026" / "02" / "run_no_ctx_context.md"
-        assert not ctx_path.exists()
+        _flush_artifact(tmp_path, "run_no_ctx", result_path)
+        text = (tmp_path / "logs" / "2026" / "02" / "run_no_ctx.md").read_text(encoding="utf-8")
+        assert "Should not be written" not in text
 
     def test_returns_none_when_dataset_path_does_not_exist(self) -> None:
         result_path, context_path = log_run_to_vault(
@@ -188,12 +221,13 @@ class TestLogRunToVault:
             result_body="Ok",
         )
         assert result_path is not None
-        content = (tmp_path / "logs" / "2026" / "03" / "run_naive_result.md").read_text(
+        _flush_artifact(tmp_path, "run_naive", result_path)
+        content = (tmp_path / "logs" / "2026" / "03" / "run_naive.md").read_text(
             encoding="utf-8"
         )
         assert "2026-03-10T12:00:00Z" in content
 
-    def test_store_context_true_without_context_body_does_not_write_context(
+    def test_store_context_true_without_context_body_does_not_include_context_section(
         self, tmp_path: Path
     ) -> None:
         ts = datetime(2026, 2, 19, 14, 30, 0, tzinfo=timezone.utc)
@@ -208,9 +242,28 @@ class TestLogRunToVault:
             context_body=None,
             store_context=True,
         )
-        assert result_path == "logs/2026/02/run_no_body_result.md"
+        assert result_path == "logs/2026/02/run_no_body.md"
         assert context_path is None
-        assert not (tmp_path / "logs" / "2026" / "02" / "run_no_body_context.md").exists()
+        _flush_artifact(tmp_path, "run_no_body", result_path)
+        text = (tmp_path / "logs" / "2026" / "02" / "run_no_body.md").read_text(encoding="utf-8")
+        assert "# Assembled context" not in text
+
+    def test_conversation_id_in_frontmatter(self, tmp_path: Path) -> None:
+        ts = datetime(2026, 2, 19, 14, 30, 0, tzinfo=timezone.utc)
+        result_path, _ = log_run_to_vault(
+            tmp_path,
+            run_id="run_conv",
+            timestamp=ts,
+            agent="secretary",
+            status="completed",
+            context_scope="work",
+            result_body="Hi",
+            conversation_id="conv_abc",
+        )
+        assert result_path is not None
+        _flush_artifact(tmp_path, "run_conv", result_path)
+        text = (tmp_path / "logs" / "2026" / "02" / "run_conv.md").read_text(encoding="utf-8")
+        assert 'conversation_id: "conv_abc"' in text
 
     def test_relative_dataset_path_resolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -224,5 +277,6 @@ class TestLogRunToVault:
             context_scope="work",
             result_body="Ok",
         )
-        assert result_path == "logs/2026/02/run_rel_result.md"
-        assert (tmp_path / "logs" / "2026" / "02" / "run_rel_result.md").exists()
+        assert result_path == "logs/2026/02/run_rel.md"
+        _flush_artifact(tmp_path, "run_rel", result_path)
+        assert (tmp_path / "logs" / "2026" / "02" / "run_rel.md").exists()

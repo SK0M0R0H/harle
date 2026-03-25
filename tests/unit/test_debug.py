@@ -28,6 +28,9 @@ from harle.debug.exporters._spans import (
 )
 from harle.debug.exporters.vault import VaultExporter, _render_attrs
 from harle.db.models import ExecutionTrace
+from harle.logging.artifacts import RunArtifact, clear_run_artifact_store, register_artifact
+
+from tests.tracing_harness import flush_otel, reset_tracer_provider_and_configure
 
 
 # ---------------------------------------------------------------------------
@@ -108,26 +111,14 @@ class TestDtraceWithProvider:
 
     @pytest.fixture(autouse=True)
     def _configure_tracing_with_vault(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Set up tracing so spans are captured and written to tmp_path.
-
-        OpenTelemetry allows ``set_tracer_provider`` only once per process.
-        Earlier tests may have configured a provider; reset internal state so
-        this class can install a vault exporter pointing at *tmp_path*.
-        """
-        from opentelemetry import trace as trace_api
-        from opentelemetry.util._once import Once
-
-        monkeypatch.setattr(trace_api, "_TRACER_PROVIDER", None)
-        monkeypatch.setattr(trace_api, "_TRACER_PROVIDER_SET_ONCE", Once())
-        configure_tracing(
+        """Set up tracing so spans are captured and written to tmp_path."""
+        reset_tracer_provider_and_configure(
+            monkeypatch,
             vault_path=str(tmp_path),
             vault_enabled=True,
+            db_enabled=False,
             min_storage_level="TRACE",
         )
-        # etrace binds get_tracer("harle") at import time; refresh after new provider.
-        import harle.debug.trace as etrace_impl
-
-        etrace_impl._tracer = trace_api.get_tracer("harle")
 
     def test_span_and_step_produce_vault_file(self, tmp_path: Path) -> None:
         with etrace.span(
@@ -139,12 +130,9 @@ class TestDtraceWithProvider:
             etrace.step("Context assembled", module="orchestrator", tokens=100)
             etrace.detail("Search query", module="search", query="test")
 
-        from opentelemetry import trace
+        flush_otel()
 
-        provider = trace.get_tracer_provider()
-        provider.force_flush()
-
-        debug_files = list(tmp_path.rglob("*_trace.md"))
+        debug_files = list(tmp_path.rglob("*.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
         assert 'run_id: "run_unittest1"' in content
@@ -153,6 +141,7 @@ class TestDtraceWithProvider:
         assert "Search query" in content
         assert "[STEP]" in content
         assert "[DETAIL]" in content
+        assert "# Execution Trace" in content
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +225,12 @@ def _make_tracer_and_capture_spans():
 class TestVaultExporterIntegration:
     """Tests for VaultExporter using real spans from the SDK."""
 
+    def setup_method(self) -> None:
+        clear_run_artifact_store()
+
+    def teardown_method(self) -> None:
+        clear_run_artifact_store()
+
     def test_export_writes_debug_md_file(self, tmp_path: Path) -> None:
         tracer, exporter, provider = _make_tracer_and_capture_spans()
         with tracer.start_as_current_span("handle_request") as root:
@@ -252,13 +247,54 @@ class TestVaultExporterIntegration:
         result = vault.export(exporter.spans)
         assert result == SpanExportResult.SUCCESS
 
-        debug_files = list(tmp_path.rglob("*_trace.md"))
+        debug_files = list(tmp_path.rglob("*.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
         assert 'run_id: "run_vault_test"' in content
         assert "handle_request" in content
         assert "child_span" in content
         assert "tokens: 100" in content or "100" in content
+        assert "# Execution Trace" in content
+
+    def test_export_merges_registered_run_artifact(self, tmp_path: Path) -> None:
+        from datetime import datetime, timezone
+
+        ts = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+        register_artifact(
+            RunArtifact(
+                run_id="run_merged",
+                timestamp=ts,
+                agent="secretary",
+                status="completed",
+                context_scope="work",
+                result_body="User-visible result.",
+                context_body="CTX",
+                conversation_id="conv_z",
+            )
+        )
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("handle_chat") as root:
+            root.set_attribute("harle.level", "STEP")
+            root.set_attribute("run_id", "run_merged")
+            root.set_attribute("harle.module", "orchestrator")
+
+        provider.force_flush()
+
+        vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
+        assert vault.export(exporter.spans) == SpanExportResult.SUCCESS
+
+        paths = list(tmp_path.rglob("run_merged.md"))
+        assert len(paths) == 1
+        content = paths[0].read_text(encoding="utf-8")
+        assert 'run_id: "run_merged"' in content
+        assert 'agent: "secretary"' in content
+        assert 'conversation_id: "conv_z"' in content
+        assert "User-visible result." in content
+        assert "# Assembled context" in content
+        assert "CTX" in content
+        assert "# Execution Trace" in content
+        assert "handle_chat" in content
+        assert "total_spans" in content
 
     def test_export_empty_spans_returns_success(self, tmp_path: Path) -> None:
         vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
@@ -289,7 +325,7 @@ class TestVaultExporterIntegration:
 
         vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
         vault.export(exporter.spans)
-        assert not list(tmp_path.rglob("*_trace.md"))
+        assert not list(tmp_path.rglob("*.md"))
 
     @pytest.mark.parametrize(
         "run_id_value",
@@ -321,7 +357,7 @@ class TestVaultExporterIntegration:
         result = vault.export(exporter.spans)
         assert result == SpanExportResult.SUCCESS
 
-        debug_files = list(tmp_path.rglob("*_trace.md"))
+        debug_files = list(tmp_path.rglob("*.md"))
         assert len(debug_files) == 1
         content = debug_files[0].read_text(encoding="utf-8")
         meta, _ = parse_frontmatter(content, source_path="trace.md")

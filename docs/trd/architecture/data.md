@@ -2,7 +2,7 @@
 title: "Harle Data Layer — Architecture & Functionality"
 tags: [data-layer, architecture, dataset, indexer, search, postgresql, whoosh]
 context: global
-last_updated: 2026-03-02
+last_updated: 2026-03-25
 summary: "Describes the three data components — User Dataset, Indexer, and Search Algorithm — their internal architecture, interactions, and technology choices."
 ---
 
@@ -167,9 +167,8 @@ The dataset has a specific directory layout. Each directory has a purpose, and a
 └── logs/                       # Agent run artifacts (auto-generated)
     └── 2026/
         └── 02/                 #   Date-based: YYYY/MM for log-friendly search
-            ├── run_2026-02-12_001_result.md
-            ├── run_2026-02-12_001_context.md  #   (Optional) Assembled prompt
-            └── run_2026-02-12_002_result.md
+            ├── run_2026-02-12_001.md   # Result + optional context + execution trace (one file)
+            └── run_2026-02-12_002.md
 ```
 
 ### How each directory is used
@@ -193,17 +192,16 @@ The `logs/` directory holds **agent run artifacts**: result summaries and, optio
 logs/
 ├── 2026/
 │   ├── 01/
-│   │   ├── run_2026-01-15_001_result.md
-│   │   ├── run_2026-01-15_001_context.md   # optional
-│   │   └── run_2026-01-15_002_result.md
+│   │   ├── run_2026-01-15_001.md
+│   │   └── run_2026-01-15_002.md
 │   └── 02/
-│       ├── run_2026-02-12_001_result.md
-│       └── run_2026-02-12_001_context.md
+│       ├── run_2026-02-12_001.md
+│       └── run_2026-02-12_002.md
 └── ...
 ```
 
-- **Path pattern:** `logs/YYYY/MM/<run_id>_result.md` and `logs/YYYY/MM/<run_id>_context.md`. The `run_id` is unique (e.g. `run_2026-02-12_001`) and encodes date, so files sort by time and stay unique. Date-based folders allow **time-bounded listing** (e.g. "last 7 days" = known subdirs) and keep each directory from growing unbounded.
-- **Opening a log:** Given a `run_id` or a path from the Indexer (`result_path`, `context_path`), the user can open the file directly (e.g. `logs/2026/02/run_2026-02-12_001_result.md`) in any editor. Paths are under the vault root, so they work with VS Code, Cursor, or `cat`/`less`.
+- **Path pattern:** `logs/YYYY/MM/<safe_stem>.md` where `<safe_stem>` is derived from `run_id` (special characters sanitized for the filesystem; the full `run_id` remains in YAML frontmatter). Each file contains **# Result**, optional **# Assembled context** (when context logging is enabled), and optional **# Execution trace** (when vault tracing is enabled and OTel export ran). The `run_id` is unique (e.g. `run_abc12def3456`) and date folders allow **time-bounded listing** and keep each directory from growing unbounded.
+- **Opening a log:** Given a `run_id` or `result_path` from the Indexer, the user opens the single merged file (e.g. `logs/2026/02/run_2026-02-12_001.md`). The `runs.context_path` column is deprecated for new runs (always `NULL`); context lives in the same file when stored.
 
 **File format (human-readable, machine-parseable):**
 
@@ -216,6 +214,9 @@ timestamp: "2026-02-12T14:32:00Z"
 agent: secretary
 status: completed
 context_scope: work
+conversation_id: conv_7f3a
+total_spans: 12
+duration_ms: 2100
 ---
 
 # Result
@@ -223,8 +224,7 @@ context_scope: work
 Summary of what the agent returned...
 ```
 
-- **Result files** (`*_result.md`): frontmatter + body = full output for `completed` runs, or a short failure/timeout/abort summary for non-success runs. The Indexer stores the same metadata in the `runs` table and `result_path` points here.
-- **Context files** (`*_context.md`): optional; frontmatter + body = assembled prompt (system prompt + policies + search results + conversation slice). Can be disabled via config to limit size and privacy. If present, `context_path` on `runs` points here. Failed and timed-out runs still write this file when context assembly finished and context logging is enabled; early aborts skip it gracefully when no context was assembled.
+- **Merged run log** (`<safe_stem>.md`): frontmatter + **# Result** + optional **# Assembled context** + optional **# Execution trace**. Full output for `completed` runs, or a short failure/timeout/abort summary for non-success runs. The Indexer stores metadata in `runs` and `result_path` points here. Assembled prompt/context can be disabled via config. For new runs, `context_path` on `runs` is always `NULL` when context is embedded; legacy rows may still reference older split files.
 
 **Expected terminal statuses:**
 - `completed`
@@ -434,10 +434,10 @@ CREATE TABLE runs (
 The `runs` table stores **all terminal outcomes**, not just successful ones. Similarity search and prior-run retrieval may deliberately filter to `completed` runs for relevance, but operational listing/detail views should expect to see `failed`, `timeout`, and `aborted` rows as well.
 
 **Where to store the assembled prompt (Context Assembler output):**  
-The full prompt built by the Context Assembler (system prompt + policies + search results + conversation slice) is not stored in the database — the `runs` table only keeps metadata (`files_used`, token counts, etc.). The **recommended place** to persist it is the **User Dataset** under `logs/`, as described in the [Logs directory](#logs-directory-structure-format-and-search) subsection: same date folder as the run result, filename `<run_id>_context.md` (e.g. `run_2026-02-12_001_context.md`). That keeps run artifacts together, human-readable and version-controlled; storage can be made optional via config (e.g. `logging.store_assembled_context`) to control size and privacy.
+The full prompt built by the Context Assembler (system prompt + policies + search results + conversation slice) is not stored in the database — the `runs` table only keeps metadata (`files_used`, token counts, etc.). The **recommended place** to persist it is the **User Dataset** under `logs/`, in the **same merged file** as the run result and (when enabled) the execution trace: see [Logs directory](#logs-directory-structure-format-and-search). The **# Assembled context** section is included when `logging.store_assembled_context` (or equivalent) is on; otherwise that section is omitted.
 
 - **Search:** Log search (by time, agent, status, or full-text on request/summary) is done via the **Indexer** (`runs` table and optional full-text indexes), not by scanning vault files — see the logs subsection for the split between DB-backed search and vault-backed storage.
-- **Opening:** User opens the file by path; an optional `context_path` column on `runs` can store the vault-relative path so the app can resolve it without reading the filesystem. If the application must fetch the assembled prompt by `run_id` without reading the vault (e.g. for retention or API), the content can alternatively be stored in a `run_contexts` table in PostgreSQL for programmatic access.
+- **Opening:** User opens the merged file by `result_path`. The `context_path` column remains for legacy rows; new runs set it to `NULL` when context is embedded. If the application must fetch the assembled prompt by `run_id` without reading the vault (e.g. for retention or API), the content can alternatively be stored in a `run_contexts` table in PostgreSQL for programmatic access.
 - **Disconnect limitation:** Client-disconnect detection is best-effort in the current HTTP/threadpool runtime shape. Harle reliably records pre-start disconnects, but mid-flight disconnects may only be reflected indirectly through timeout/failure handling if the worker thread continues running after the client connection is gone.
 
 #### Table 3: `artifacts` — agent outputs
