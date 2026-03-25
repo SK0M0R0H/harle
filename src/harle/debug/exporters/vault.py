@@ -84,11 +84,19 @@ class VaultExporter(SpanExporter):
             return
 
         run_id = extract_run_id(filtered)
-        timestamp = span_start_time(root)
+        root_start_time = span_start_time(root)
 
         tree = build_tree(filtered)
         duration_ms = span_duration_ms(root)
         total_spans = len(filtered)
+
+        # Pop before path resolution: ``log_run_to_vault`` / finalize use *ended_at* for
+        # ``result_path`` (``logs/YYYY/MM/...``). Using the root span start here would
+        # mismatch if a run crosses a month boundary and ``GET /run`` would point at
+        # a path where the file was never written.
+        artifact = pop_artifact(run_id)
+        log_dir_timestamp = artifact.timestamp if artifact is not None else root_start_time
+        log_dir = log_dir_for(log_dir_timestamp)
 
         trace_body = _format_execution_trace_body(
             total_spans=total_spans,
@@ -97,8 +105,6 @@ class VaultExporter(SpanExporter):
             tree=tree,
         )
 
-        artifact = pop_artifact(run_id)
-        log_dir = log_dir_for(timestamp)
         safe_stem = safe_log_filename_stem(run_id)
         rel_path = f"{log_dir}/{safe_stem}.md"
 
@@ -112,7 +118,7 @@ class VaultExporter(SpanExporter):
         else:
             content = _render_trace_only_markdown(
                 run_id=run_id,
-                timestamp=timestamp,
+                timestamp=root_start_time,
                 total_spans=total_spans,
                 duration_ms=duration_ms,
                 root=root,

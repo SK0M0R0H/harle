@@ -296,6 +296,34 @@ class TestVaultExporterIntegration:
         assert "handle_chat" in content
         assert "total_spans" in content
 
+    def test_export_merged_uses_artifact_timestamp_for_log_subdir(self, tmp_path: Path) -> None:
+        """``result_path`` uses finalize/artifact time; file must land in that YYYY/MM."""
+        from datetime import datetime, timezone
+
+        artifact_ts = datetime(2035, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        register_artifact(
+            RunArtifact(
+                run_id="run_month_align",
+                timestamp=artifact_ts,
+                agent="secretary",
+                status="completed",
+                context_scope="work",
+                result_body="ok",
+            )
+        )
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("handle_chat") as root:
+            root.set_attribute("harle.level", "STEP")
+            root.set_attribute("run_id", "run_month_align")
+        provider.force_flush()
+
+        vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
+        assert vault.export(exporter.spans) == SpanExportResult.SUCCESS
+
+        expected = tmp_path / "logs" / "2035" / "01" / "run_month_align.md"
+        matches = list(tmp_path.rglob("run_month_align.md"))
+        assert matches == [expected]
+
     def test_export_empty_spans_returns_success(self, tmp_path: Path) -> None:
         vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
         result = vault.export([])
