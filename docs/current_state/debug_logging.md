@@ -2,7 +2,7 @@
 title: "Harle Execution Tracing — Current State"
 tags: [execution-tracing, tracing, observability, opentelemetry, current-state, implementation-status]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-25
 summary: "Tracks what the execution tracing system implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -27,7 +27,7 @@ Reference TRD: [Harle Execution Tracing — Architecture & Functionality](../trd
 | `etrace` API (`trace.py`) | Implemented | `span()`, `step()`, `detail()`, `trace_entry()`, `internal()`, `span_fn()` decorator. Uses OTel `get_tracer("harle")`. |
 | `TraceLevel` enum (`levels.py`) | Implemented | STEP=1, DETAIL=2, TRACE=3, INTERNAL=4 with `from_name()`. |
 | `configure_tracing()` (`setup.py`) | Implemented | Creates `TracerProvider`, wires vault, DB, and CLI SSE exporters based on config. |
-| `VaultExporter` (`exporters/vault.py`) | Implemented | Reconstructs span tree, renders Markdown, writes `_trace.md` to vault `logs/YYYY/MM/`. |
+| `VaultExporter` (`exporters/vault.py`) | Implemented | Merges `RunArtifact` with span tree; writes one `logs/YYYY/MM/<safe_stem>.md` per run. |
 | `PostgresExporter` (`exporters/db.py`) | Implemented | Serialises span tree to JSONB, inserts into `execution_traces` table. Uses lazy engine creation. |
 | `CliSseExporter` (`exporters/cli.py`) | Implemented | Pushes qualifying spans to a shared `Queue` for SSE streaming. Level-filtered. |
 | `ExecutionTrace` model (`db/models.py`) | Implemented | SQLAlchemy model with `run_id`, `trace_json` (JSONB), `total_spans`, `duration_ms`, `created_at`. |

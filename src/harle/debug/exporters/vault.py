@@ -1,9 +1,10 @@
-"""Vault exporter — write span trees as Markdown to the vault logs/ directory.
+"""Vault exporter — write merged run logs + execution traces to the vault.
 
 Receives completed spans from the OTel ``BatchSpanProcessor``,
-reconstructs the parent-child tree, and writes a human-readable
-``<sanitized_run_id>_trace.md`` file alongside the Run Logger's output
-    (the YAML ``run_id`` field keeps the full value).
+reconstructs the parent-child tree, and writes ``logs/YYYY/MM/<safe_stem>.md``
+that merges optional :class:`~harle.logging.artifacts.RunArtifact` data
+(result, assembled context) with the trace tree. YAML ``run_id`` keeps
+the full value; the filename stem is sanitized.
 
 The file is written once when all spans for a trace are flushed
 (at the end of a request or when the batch processor flushes).
@@ -12,7 +13,6 @@ The file is written once when all spans for a trace are flushed
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
@@ -21,7 +21,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from harle.dataset.frontmatter import dump_frontmatter_fields
-from harle.dataset.writer import log_dir_for, write_log_file
+from harle.dataset.writer import log_dir_for, safe_log_filename_stem, write_log_file
 from harle.debug.exporters._spans import (
     build_tree,
     extract_run_id,
@@ -32,21 +32,14 @@ from harle.debug.exporters._spans import (
     span_start_time,
 )
 from harle.debug.levels import TraceLevel
+from harle.logging.artifacts import peek_artifact, pop_artifact
+from harle.logging.run_logger import format_run_log_file_content
 
 logger = logging.getLogger(__name__)
 
-_TRACE_FILENAME_MAX = 120
-
-
-def _safe_trace_filename_stem(run_id: str) -> str:
-    """Make *run_id* safe for log filenames (no ``/``, colons, or wide unicode)."""
-    stem = re.sub(r"[^\w.\-]+", "_", run_id, flags=re.UNICODE)
-    stem = stem.strip("._") or "trace"
-    return stem[:_TRACE_FILENAME_MAX]
-
 
 class VaultExporter(SpanExporter):
-    """Write execution traces as Markdown files to ``vault/logs/YYYY/MM/``.
+    """Write merged run + trace Markdown files to ``vault/logs/YYYY/MM/``.
 
     Each trace (identified by ``trace_id``) produces one file.  Spans
     are filtered by ``min_level`` before rendering.
@@ -91,27 +84,70 @@ class VaultExporter(SpanExporter):
             return
 
         run_id = extract_run_id(filtered)
-        timestamp = span_start_time(root)
+        root_start_time = span_start_time(root)
 
         tree = build_tree(filtered)
         duration_ms = span_duration_ms(root)
+        total_spans = len(filtered)
 
-        content = _render_markdown(
-            run_id=run_id,
-            timestamp=timestamp,
-            total_spans=len(filtered),
+        # Use *artifact.timestamp* for ``logs/YYYY/MM`` so paths match ``result_path``
+        # from finalize (*ended_at*). Root span start can differ across month boundaries.
+        # Peek only until ``write_log_file`` succeeds; popping early would lose
+        # result/context on I/O failure while ``export()`` still swallows errors.
+        artifact = peek_artifact(run_id)
+        log_dir_timestamp = artifact.timestamp if artifact is not None else root_start_time
+        log_dir = log_dir_for(log_dir_timestamp)
+
+        trace_body = _format_execution_trace_body(
+            total_spans=total_spans,
             duration_ms=duration_ms,
             root=root,
             tree=tree,
         )
 
-        log_dir = log_dir_for(timestamp)
-        safe_stem = _safe_trace_filename_stem(run_id)
-        rel_path = f"{log_dir}/{safe_stem}_trace.md"
+        safe_stem = safe_log_filename_stem(run_id)
+        rel_path = f"{log_dir}/{safe_stem}.md"
+
+        if artifact is not None:
+            content = format_run_log_file_content(
+                artifact,
+                total_spans=total_spans,
+                duration_ms=duration_ms,
+                execution_trace_md=trace_body,
+            )
+        else:
+            content = _render_trace_only_markdown(
+                run_id=run_id,
+                timestamp=root_start_time,
+                total_spans=total_spans,
+                duration_ms=duration_ms,
+                root=root,
+                tree=tree,
+            )
+
         write_log_file(self._vault_path, rel_path, content)
+        if artifact is not None:
+            pop_artifact(run_id)
 
 
-def _render_markdown(
+def _format_execution_trace_body(
+    *,
+    total_spans: int,
+    duration_ms: int,
+    root: ReadableSpan,
+    tree: dict[int, list[ReadableSpan]],
+) -> str:
+    """Markdown body under ``# Execution Trace`` (blockquote summary + tree)."""
+    lines = [
+        f">{total_spans} spans | {duration_ms}ms",
+        "",
+    ]
+    _render_span(root, tree, lines, depth=0)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_trace_only_markdown(
     *,
     run_id: str,
     timestamp: datetime,
@@ -120,7 +156,7 @@ def _render_markdown(
     root: ReadableSpan,
     tree: dict[int, list[ReadableSpan]],
 ) -> str:
-    """Render the span tree as a human-readable Markdown document."""
+    """Trace-only file when no run artifact was registered."""
     ts_str = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
     fm = {
         "run_id": run_id,
@@ -129,18 +165,23 @@ def _render_markdown(
         "duration_ms": duration_ms,
     }
     fm_yaml = dump_frontmatter_fields(fm)
-    lines = [
-        "---",
-        fm_yaml,
-        "---",
-        "",
-        f"# Debug Trace — {run_id}",
-        "",
-    ]
-
-    _render_span(root, tree, lines, depth=0)
-    lines.append("")
-    return "\n".join(lines)
+    inner = _format_execution_trace_body(
+        total_spans=total_spans,
+        duration_ms=duration_ms,
+        root=root,
+        tree=tree,
+    )
+    return "\n".join(
+        [
+            "---",
+            fm_yaml,
+            "---",
+            "",
+            "# Execution Trace",
+            "",
+            inner,
+        ]
+    )
 
 
 def _render_span(

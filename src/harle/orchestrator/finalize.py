@@ -19,6 +19,7 @@ def finalize_orchestrator_run(
     ended_at: datetime,
     status: str,
     dataset_path: str | None,
+    vault_tracing_enabled: bool,
     run_log_store_context: bool,
     db: Database | None,
     model: str,
@@ -122,11 +123,18 @@ def finalize_orchestrator_run(
                 context_body=state.system_prompt,
                 store_context=run_log_store_context,
                 handoffs=handoffs_payload,
+                conversation_id=state.conversation_id,
             )
             if not result_path:
                 result_path = None
             if not context_path:
                 context_path = None
+            if result_path and not vault_tracing_enabled:
+                from harle.logging.run_logger import flush_registered_run_log_without_trace
+
+                flush_registered_run_log_without_trace(
+                    dataset_path, state.run_id, result_path
+                )
         except Exception:
             if not suppress_persistence_errors:
                 raise
@@ -195,6 +203,7 @@ class FinalizeMixin:
             ended_at=ended_at,
             status=status,
             dataset_path=self.dataset_path,
+            vault_tracing_enabled=self.vault_tracing_enabled,
             run_log_store_context=self.run_log_store_context,
             db=self.db,
             model=self.model,

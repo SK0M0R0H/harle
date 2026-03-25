@@ -11,24 +11,16 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from opentelemetry import trace
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
-
 from harle.api.routes import build_router
-from harle.debug.setup import configure_tracing
 from harle.db.connection import Database
 from harle.db.models import Conversation, ExecutionTrace, Message
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
 
-
-def _tracer_provider_already_set() -> bool:
-    """True if a real SDK TracerProvider was already set (e.g. by another test in the same run)."""
-    provider = trace.get_tracer_provider()
-    return isinstance(provider, SDKTracerProvider)
+from tests.tracing_harness import flush_otel, reset_tracer_provider_and_configure
 
 
 @pytest.mark.integration
@@ -40,12 +32,7 @@ class TestExecutionTracingIntegration:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """POST /chat with tracing configured writes _trace.md to vault and a row to execution_traces."""
-        if _tracer_provider_already_set():
-            pytest.skip(
-                "Global TracerProvider already set (run with pytest tests/integration for isolation)"
-            )
-
+        """POST /chat with tracing configured writes merged run log to vault and a DB row."""
         db_path = tmp_path / "trace.db"
         db_url = f"sqlite:///{db_path}"
         engine = create_engine(db_url, connect_args={"check_same_thread": False})
@@ -60,18 +47,22 @@ class TestExecutionTracingIntegration:
         db.engine = engine
         db._session_factory = session_factory
 
-        configure_tracing(
+        reset_tracer_provider_and_configure(
+            monkeypatch,
             vault_path=str(tmp_path),
             vault_enabled=True,
             db_url=db_url,
             db_enabled=True,
-            debug_mode=False,
         )
 
         app = FastAPI()
         app.include_router(
             build_router(
-                orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=db),
+                orchestrator=OrchestratorService(
+                    llm_provider=EchoProvider(),
+                    db=db,
+                    dataset_path=str(tmp_path),
+                ),
                 db=db,
             )
         )
@@ -84,16 +75,16 @@ class TestExecutionTracingIntegration:
         run_id = data["run_id"]
         assert run_id.startswith("run_")
 
-        provider = trace.get_tracer_provider()
-        if hasattr(provider, "force_flush"):
-            provider.force_flush(1000)
+        flush_otel(1000)
 
-        trace_files = list(tmp_path.rglob("*_trace.md"))
-        assert len(trace_files) >= 1, f"Expected at least one _trace.md under {tmp_path}"
-        trace_file = next(f for f in trace_files if run_id in f.name)
+        log_files = [f for f in tmp_path.rglob("*.md") if run_id in f.name]
+        assert len(log_files) >= 1, f"Expected at least one run log .md under {tmp_path}"
+        trace_file = log_files[0]
         content = trace_file.read_text(encoding="utf-8")
         assert "handle_chat" in content
         assert run_id in content
+        assert "# Result" in content
+        assert "# Execution Trace" in content
 
         with session_factory() as session:
             from harle.db.execution_traces import get_execution_trace

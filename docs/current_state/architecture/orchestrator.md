@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Current State"
 tags: [orchestrator, current-state, architecture, fastapi, context-assembly, implementation-status]
 context: global
-last_updated: 2026-03-21
+last_updated: 2026-03-26
 summary: "Tracks what the Orchestrator implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -30,7 +30,7 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 | 4. Context Assembler | Implemented | `context/assembler.py`: P0 (prompts + policies), P1 (dataset search), P4 (conversation history). 80/20 budget, tiktoken. No P2 (external data), P3 (prior runs, memories). |
 | 5. Agent Runner | Partially implemented | Execution in `orchestrator/orchestrator_service.py` + `execution.py` / `chat.py` / `finalize.py` + `runner_execution.py` + `agents.py` (`service.py` re-exports): Agents SDK Runner when OpenAI key set, else echo provider. Multi-agent handoffs (Level 5) with per-role tools from `agents.ROLE_TOOL_MODULES`; optional Level 3 planning agent (`planner`) with full tool set; `max_turns` applies across the multi-agent run. Config: `HARLE_PLANNING_*`, `HARLE_PLANNED_MAX_TURNS`. No timeout/token-budget guardrails or output validation in orchestrator. |
 | 6. Tool Module Layer | Implemented | See current-state tools.md. Registry, skills, constraints; vault and web search modules. Approval attributes exist on tools; orchestrator does not pause for approval in the request path. |
-| 7. Run Logger | Partially implemented | `logging/run_logger.py`: vault logs (result + optional context). `## Handoffs` section when handoffs occurred. `db/runs.create_run`: includes `handoffs` JSON array. No full TRD clarification/routing/context_assembled/execution/approval_actions structure. |
+| 7. Run Logger | Partially implemented | `logging/run_logger.py` registers `RunArtifact`; `VaultExporter` or finalize writes one `logs/YYYY/MM/<safe_stem>.md` (merged result + optional context + trace when tracing on). `conversation_id` in frontmatter. `## Handoffs` when handoffs occurred. `db/runs.create_run` includes `handoffs`; `context_path` null for new merged logs. |
 | Request lifecycle | Partially implemented | Single **chat** path: create/load conversation → **route** → assemble → execute → persist messages → log → return. No clarifier step. |
 | Conversation mode | Implemented | All user messages go through chat; one-shot = new conversation + single exchange. `db/conversations`: create_conversation, add_message, get_recent_messages. `conversation_history` passed to assembler (P4). |
 | SSE streaming | Not implemented | No Server-Sent Events for streaming responses. |
@@ -70,7 +70,7 @@ So the agentic loop, tool use, multi-turn reasoning, and multi-agent handoffs ar
 
 ### 4. Run Logger (vault + PostgreSQL)
 
-- **Vault:** `log_run_to_vault` writes `logs/YYYY/MM/<run_id>_result.md` (and optionally `_context.md`) with YAML frontmatter and Markdown body, per TRD logs directory design.
+- **Vault:** `log_run_to_vault` registers artifacts; `OrchestratorService.vault_tracing_enabled` defaults to **True** (aligned with `HARLE_TRACING_VAULT_ENABLED` via `build_orchestrator`). When **True**, only `VaultExporter` adds the execution trace. When **False**, finalize calls `flush_registered_run_log_without_trace` (Result + optional context only). Tests that use `dataset_path` without OTel use `vault_tracing_enabled=False` or `tests/tracing_harness.py`. Single `logs/YYYY/MM/<safe_stem>.md` per run.
 - **PostgreSQL:** `create_run` inserts into `runs` including optional `handoffs` JSON. `routing_method` is set from the router and/or planner (`direct`, `keyword_match`, `default`, `explicit_override`, `conversation_continue` on follow-up turns that keep the conversation’s role, or `planned`).
 
 ### 5. Conversation mode

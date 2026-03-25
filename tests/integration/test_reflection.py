@@ -56,11 +56,12 @@ class TestReflectionVaultAndPersistence:
                 llm_provider=EchoProvider(),
                 db=db,
                 dataset_path=str(tmp_path),
+                vault_tracing_enabled=False,
                 use_agent_runner=True,
             )
             svc.chat(request=RunRequest(message="hello", context="work"))
 
-        result_files = list(tmp_path.glob("logs/**/*_result.md"))
+        result_files = list(tmp_path.glob("logs/**/*.md"))
         assert len(result_files) == 1
         content = result_files[0].read_text(encoding="utf-8")
         assert "## Reflection" in content
