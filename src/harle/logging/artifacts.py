@@ -1,8 +1,9 @@
 """In-memory store for run log payloads consumed by the vault trace exporter.
 
 Registers artifacts during orchestrator finalization; :class:`VaultExporter`
-pops and merges them with span trees. When vault tracing is disabled, the
-orchestrator writes the file directly and clears the store via pop.
+merges them with span trees after a successful vault write (see
+:func:`peek_artifact` / :func:`pop_artifact`). When vault tracing is disabled, :func:`harle.logging.run_logger.flush_registered_run_log_without_trace`
+writes the file and pops only after a successful ``write_log_file`` (same as the vault exporter).
 """
 
 from __future__ import annotations
@@ -37,6 +38,10 @@ class RunArtifactStore:
         with self._lock:
             self._data[artifact.run_id] = artifact
 
+    def peek(self, run_id: str) -> RunArtifact | None:
+        with self._lock:
+            return self._data.get(run_id)
+
     def pop(self, run_id: str) -> RunArtifact | None:
         with self._lock:
             return self._data.pop(run_id, None)
@@ -52,6 +57,11 @@ _store = RunArtifactStore()
 def register_artifact(artifact: RunArtifact) -> None:
     """Store *artifact* for the vault exporter or finalize fallback."""
     _store.register(artifact)
+
+
+def peek_artifact(run_id: str) -> RunArtifact | None:
+    """Return the artifact for *run_id* without removing it (for pre-write reads)."""
+    return _store.peek(run_id)
 
 
 def pop_artifact(run_id: str) -> RunArtifact | None:

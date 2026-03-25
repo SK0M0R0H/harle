@@ -107,7 +107,10 @@ def flush_registered_run_log_without_trace(
     run_id: str,
     vault_relative_path: str,
 ) -> bool:
-    """Pop the registered artifact and write Result (+ optional context) only.
+    """Write Result (+ optional context) only, matching :mod:`VaultExporter` semantics.
+
+    Peeks the artifact, writes after building content, then :func:`pop_artifact`
+    only if ``write_log_file`` succeeds so I/O failure does not drop data.
 
     Does **not** add an execution trace. Use when ``vault_tracing_enabled``
     is ``False`` on :class:`~harle.orchestrator.orchestrator_service.OrchestratorService`
@@ -117,16 +120,14 @@ def flush_registered_run_log_without_trace(
         ``True`` if a file was written.
     """
     from harle.dataset.writer import write_log_file
-    from harle.logging.artifacts import pop_artifact
+    from harle.logging.artifacts import peek_artifact, pop_artifact
 
-    artifact = pop_artifact(run_id)
+    artifact = peek_artifact(run_id)
     if artifact is None:
         return False
-    write_log_file(
-        Path(dataset_path),
-        vault_relative_path,
-        format_run_log_file_content(artifact),
-    )
+    content = format_run_log_file_content(artifact)
+    write_log_file(Path(dataset_path), vault_relative_path, content)
+    pop_artifact(run_id)
     return True
 
 

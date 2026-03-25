@@ -32,7 +32,7 @@ from harle.debug.exporters._spans import (
     span_start_time,
 )
 from harle.debug.levels import TraceLevel
-from harle.logging.artifacts import pop_artifact
+from harle.logging.artifacts import peek_artifact, pop_artifact
 from harle.logging.run_logger import format_run_log_file_content
 
 logger = logging.getLogger(__name__)
@@ -90,11 +90,11 @@ class VaultExporter(SpanExporter):
         duration_ms = span_duration_ms(root)
         total_spans = len(filtered)
 
-        # Pop before path resolution: ``log_run_to_vault`` / finalize use *ended_at* for
-        # ``result_path`` (``logs/YYYY/MM/...``). Using the root span start here would
-        # mismatch if a run crosses a month boundary and ``GET /run`` would point at
-        # a path where the file was never written.
-        artifact = pop_artifact(run_id)
+        # Use *artifact.timestamp* for ``logs/YYYY/MM`` so paths match ``result_path``
+        # from finalize (*ended_at*). Root span start can differ across month boundaries.
+        # Peek only until ``write_log_file`` succeeds; popping early would lose
+        # result/context on I/O failure while ``export()`` still swallows errors.
+        artifact = peek_artifact(run_id)
         log_dir_timestamp = artifact.timestamp if artifact is not None else root_start_time
         log_dir = log_dir_for(log_dir_timestamp)
 
@@ -126,6 +126,8 @@ class VaultExporter(SpanExporter):
             )
 
         write_log_file(self._vault_path, rel_path, content)
+        if artifact is not None:
+            pop_artifact(run_id)
 
 
 def _format_execution_trace_body(

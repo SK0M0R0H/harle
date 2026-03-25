@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from harle.logging.artifacts import (
     RunArtifact,
     clear_run_artifact_store,
+    peek_artifact,
     pop_artifact,
     register_artifact,
 )
@@ -31,6 +32,26 @@ def test_register_and_pop_returns_artifact() -> None:
         assert got.run_id == "run_one"
         assert got.result_body == "Hello"
         assert pop_artifact("run_one") is None
+    finally:
+        clear_run_artifact_store()
+
+
+def test_peek_does_not_remove_artifact() -> None:
+    clear_run_artifact_store()
+    try:
+        a = RunArtifact(
+            run_id="run_peek",
+            timestamp=datetime.now(timezone.utc),
+            agent="s",
+            status="completed",
+            context_scope="work",
+            result_body="b",
+        )
+        register_artifact(a)
+        assert peek_artifact("run_peek") is a
+        assert peek_artifact("run_peek") is a
+        assert pop_artifact("run_peek") is a
+        assert peek_artifact("run_peek") is None
     finally:
         clear_run_artifact_store()
 

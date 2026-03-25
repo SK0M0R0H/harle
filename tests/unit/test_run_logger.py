@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from harle.dataset.writer import write_log_file
-from harle.logging.artifacts import clear_run_artifact_store, pop_artifact
+from harle.logging.artifacts import clear_run_artifact_store, peek_artifact, pop_artifact
 from harle.logging.run_logger import (
     build_result_body,
     flush_registered_run_log_without_trace,
@@ -115,6 +115,39 @@ def test_flush_registered_run_log_without_trace_returns_false_when_empty() -> No
             )
             is False
         )
+    finally:
+        clear_run_artifact_store()
+
+
+def test_flush_registered_write_failure_leaves_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_run_artifact_store()
+    try:
+        ts = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+        result_path, _ = log_run_to_vault(
+            tmp_path,
+            run_id="run_wfail",
+            timestamp=ts,
+            agent="secretary",
+            status="completed",
+            context_scope="work",
+            result_body="keep me",
+        )
+        assert result_path is not None
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("harle.dataset.writer.write_log_file", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            flush_registered_run_log_without_trace(tmp_path, "run_wfail", result_path)
+
+        art = peek_artifact("run_wfail")
+        assert art is not None
+        assert art.result_body == "keep me"
+        assert not (tmp_path / result_path).exists()
     finally:
         clear_run_artifact_store()
 

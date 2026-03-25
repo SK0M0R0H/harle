@@ -28,7 +28,12 @@ from harle.debug.exporters._spans import (
 )
 from harle.debug.exporters.vault import VaultExporter, _render_attrs
 from harle.db.models import ExecutionTrace
-from harle.logging.artifacts import RunArtifact, clear_run_artifact_store, register_artifact
+from harle.logging.artifacts import (
+    RunArtifact,
+    clear_run_artifact_store,
+    peek_artifact,
+    register_artifact,
+)
 
 from tests.tracing_harness import flush_otel, reset_tracer_provider_and_configure
 
@@ -323,6 +328,42 @@ class TestVaultExporterIntegration:
         expected = tmp_path / "logs" / "2035" / "01" / "run_month_align.md"
         matches = list(tmp_path.rglob("run_month_align.md"))
         assert matches == [expected]
+
+    def test_export_write_failure_leaves_artifact_in_store(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Merged write uses peek-then-pop-after-success so I/O errors can retry."""
+        from datetime import datetime, timezone
+
+        register_artifact(
+            RunArtifact(
+                run_id="run_io_fail",
+                timestamp=datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc),
+                agent="secretary",
+                status="completed",
+                context_scope="work",
+                result_body="must survive",
+            )
+        )
+        tracer, exporter, provider = _make_tracer_and_capture_spans()
+        with tracer.start_as_current_span("handle_chat") as root:
+            root.set_attribute("harle.level", "STEP")
+            root.set_attribute("run_id", "run_io_fail")
+        provider.force_flush()
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("harle.debug.exporters.vault.write_log_file", _boom)
+        vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
+        assert vault.export(exporter.spans) == SpanExportResult.SUCCESS
+
+        art = peek_artifact("run_io_fail")
+        assert art is not None
+        assert art.result_body == "must survive"
+        assert not list(tmp_path.rglob("run_io_fail.md"))
 
     def test_export_empty_spans_returns_success(self, tmp_path: Path) -> None:
         vault = VaultExporter(str(tmp_path), min_level=TraceLevel.TRACE)
