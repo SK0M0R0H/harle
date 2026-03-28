@@ -2,7 +2,7 @@
 title: "Harle Remote Deployment — Current State"
 tags: [deployment, remote, infrastructure, security, cd, monitoring, current-state, implementation-status]
 context: global
-last_updated: 2026-03-24
+last_updated: 2026-04-01
 summary: "Tracks what the remote deployment infrastructure implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -26,13 +26,13 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 |----------|----------------|-------|
 | Dockerfile | Implemented | `Dockerfile` added; runs `harle-server` as non-root user |
 | docker-compose.yml (production) | Implemented | `docker-compose.yml` added with `harle` + `db`, health checks, restart policies, and localhost bind |
-| Server hardening script | Implemented | `scripts/server-init.sh` added (SSH hardening, UFW, unattended-upgrades, Docker, Tailscale) |
-| Deployment runbook | Implemented | `docs/runbooks/remote-setup.md` added |
-| Tailscale setup | Implemented | Included in `scripts/server-init.sh` and runbook |
+| Server bootstrap script | Implemented | `scripts/server-init.sh` — SSH hardening, UFW (OpenSSH + optional public `:8000`), unattended-upgrades, Docker, GitHub deploy key (no Tailscale) |
+| Optional Tailscale hardening | Implemented | `scripts/server-hardening-tailscale.sh` + runbook phase 11 |
+| Deployment runbook | Implemented | `docs/runbooks/remote-setup.md` — baseline public path, optional Tailscale-only UFW |
 | Vault sync (Git-based) | Not implemented | No `scripts/vault-sync.sh` |
 | Vault sync (Syncthing) | Not implemented | — |
 | Auto-reindex after sync | Partially available | `/reindex` API endpoint exists; no filesystem watcher or sync trigger |
-| API token authentication | Not implemented | No auth middleware; server binds to `127.0.0.1` (localhost only) |
+| API token authentication | Not implemented | No auth middleware; Compose defaults to publishing `8000` on `127.0.0.1` unless `HARLE_PUBLISH_HOST` is set |
 | CLI remote server config | Implemented | CLI now resolves server URL via `--server`, `HARLE_SERVER_URL`, or `~/.config/harle/cli.yaml` |
 | Client identification header | Not implemented | — |
 | CD pipeline (GitHub Actions) | Not implemented | No `.github/workflows/deploy.yml` |
@@ -52,11 +52,12 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 - **Docker image build** — `Dockerfile` and `.dockerignore` added for a lean Python service image.
 - **Compose deployment stack** — `docker-compose.yml` added with:
-  - `harle` container (`restart: unless-stopped`, localhost-only `127.0.0.1:8000` binding).
+  - `harle` container (`restart: unless-stopped`, published port bind configurable via `HARLE_PUBLISH_HOST`, default `127.0.0.1`).
   - `db` container (`pgvector/pgvector:pg16`, persistent `pgdata`, healthcheck).
   - basic hardening defaults (`no-new-privileges`, memory limits).
-- **Server bootstrap/hardening script** — `scripts/server-init.sh` added for one-time host setup, including GitHub deploy key generation for private repo pulls.
-- **Remote setup runbook** — `docs/runbooks/remote-setup.md` added with end-to-end provisioning, clone, compose startup, initialization, and verification.
+- **Server bootstrap script** — `scripts/server-init.sh` for baseline VPS setup (UFW SSH + optional API port, Docker, deploy key); Tailscale is **not** part of baseline.
+- **Optional Tailscale hardening** — `scripts/server-hardening-tailscale.sh` switches UFW to inbound only on `tailscale0` after interactive confirmation.
+- **Remote setup runbook** — `docs/runbooks/remote-setup.md` documents public-IP (or SSH tunnel) first, then optional phase 11 for Tailscale.
 - **CLI remote server persistence** — Go CLI now supports `~/.config/harle/cli.yaml` (`server_url`) with precedence:
   1. `--server`
   2. `HARLE_SERVER_URL`
@@ -120,4 +121,4 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Assessment
 
-Remote deployment moved from "not started" to a working manual baseline. Harle can now be provisioned on a VPS with documented steps and deployed as containers on a private Tailscale-accessible endpoint. The next highest-value gaps are API authentication (Phase 3), vault sync automation (Phase 2), and automated deployment/monitoring (Phases 4-5).
+Remote deployment moved from "not started" to a working manual baseline. Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. The next highest-value gaps are API authentication (Phase 3), vault sync automation (Phase 2), and automated deployment/monitoring (Phases 4-5).

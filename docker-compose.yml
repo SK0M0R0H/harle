@@ -11,8 +11,10 @@ services:
       HARLE_PORT: ${HARLE_PORT:-8000}
       HARLE_DATASET_PATH: ${HARLE_DATASET_PATH:-/data/vault}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://harle:${POSTGRES_PASSWORD:-changeme}@db:5432/harle}
+    # Host bind for published port: 127.0.0.1 = localhost only; 0.0.0.0 = all interfaces
+    # (required for CLI/curl via Tailscale IP). Set HARLE_PUBLISH_HOST in .env.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${HARLE_PUBLISH_HOST:-127.0.0.1}:8000:8000"
     volumes:
       - ${HARLE_VAULT_PATH:-./vault}:${HARLE_DATASET_PATH:-/data/vault}
       - harle-logs:/data/logs

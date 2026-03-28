@@ -2,7 +2,7 @@
 title: "Harle Remote Deployment — Infrastructure, Security & Operations"
 tags: [deployment, remote, infrastructure, security, cd, monitoring, vault-sync, multi-client, vps, docker, tailscale]
 context: global
-last_updated: 2026-03-23
+last_updated: 2026-04-01
 summary: "Describes the remote deployment architecture for Harle: server setup, security hardening, vault synchronization, continuous deployment, monitoring and alerting, and parallel multi-client access."
 ---
 
@@ -116,19 +116,16 @@ A home mini-PC (Intel NUC, Raspberry Pi 5) works too if you have a stable intern
 
 ### Initial setup steps
 
-The initial setup is a one-time procedure. It produces a server that is hardened, has Docker installed, is on your Tailscale network, and is ready for the application deployment.
+The initial setup is a one-time procedure. The **baseline** runbook path (`docs/runbooks/remote-setup.md`) produces a server with Docker, SSH hardening, UFW (SSH plus optional public API port **8000**), and GitHub deploy-key setup—**without** Tailscale. **Optional** `scripts/server-hardening-tailscale.sh` applies the Tailscale-only inbound model in §2 (Network layer).
 
 ```
 1. Create VPS instance (Ubuntu 24.04, SSH key auth, no password auth)
 2. Connect via SSH
-3. Run initial hardening (see §2 Security Hardening)
-4. Install Docker + Docker Compose
-5. Install and configure Tailscale
-6. Clone the Harle repository
-7. Configure environment (.env, config.yaml)
-8. Start the Docker Compose stack
-9. Run harle-init (inside the container)
-10. Verify: health check from a Tailscale-connected device
+3. Run baseline hardening (`scripts/server-init.sh`)
+4. Clone the Harle repository; configure environment (.env); start Docker Compose
+5. Run harle-init (inside the container)
+6. Verify: health check from your laptop (public IP, SSH tunnel, or—after optional hardening—a Tailscale-connected device)
+7. (Optional) Run `scripts/server-hardening-tailscale.sh` for Tailscale-only inbound traffic
 ```
 
 Detailed commands for each step are provided in the deployment runbook (`docs/runbooks/remote-setup.md`, created as part of Phase 1).
@@ -141,10 +138,12 @@ Security follows a layered approach: network isolation, OS hardening, applicatio
 
 ### Network layer
 
+**Baseline (Phase 1 runbook):** UFW allows **OpenSSH** and, by default, **TCP 8000** on the public interface so the API and CLI work without a VPN. Set `HARLE_UFW_OPEN_API=0` when running `server-init.sh` to omit the public API rule and use an SSH tunnel instead. **Hardened (optional):** after `server-hardening-tailscale.sh`, inbound is **Tailscale-only** as in the table below.
+
 | Control | What it does | Implementation |
 |---|---|---|
-| **Tailscale-only access** | Only devices on your Tailscale network can reach the server | Bind harle-server to `127.0.0.1` or Tailscale IP only; firewall drops all other inbound traffic |
-| **No public ports** | SSH, HTTP API, PostgreSQL are all internal-only | `ufw` allows only Tailscale interface + fallback SSH |
+| **Tailscale-only access** | Only devices on your Tailscale network can reach the server | Optional phase: `server-hardening-tailscale.sh`; UFW `allow in on tailscale0`; publish API per runbook (`HARLE_PUBLISH_HOST`) |
+| **No public ports (hardened)** | SSH, HTTP API, PostgreSQL not reachable from the public internet | After `server-hardening-tailscale.sh`: `ufw` allows inbound only on `tailscale0` (Postgres never published publicly in compose) |
 | **WireGuard encryption** | All traffic between devices is encrypted end-to-end | Provided by Tailscale (WireGuard under the hood) |
 
 **Tailscale setup:**
@@ -165,7 +164,7 @@ sudo ufw allow in on tailscale0
 sudo ufw enable
 ```
 
-This drops all inbound traffic except from the Tailscale network. No public SSH, no public HTTP, no public PostgreSQL — zero public attack surface.
+After optional hardening, this drops all inbound traffic except from the Tailscale network—no public SSH, HTTP, or PostgreSQL on the WAN interface. The **baseline** runbook instead allows OpenSSH and optionally `:8000` on the public interface until you run `server-hardening-tailscale.sh`.
 
 **Disposable server model — why no fallback SSH is needed:**
 
@@ -761,7 +760,7 @@ The system is implemented in phases. Each phase produces a usable result — you
 
 ### Phase 1: Basic remote deployment
 
-**Goal:** Harle runs on a remote server, accessible from any Tailscale-connected device via the CLI. Manual deployment (SSH + git pull + docker compose up).
+**Goal:** Harle runs on a remote server, reachable from your laptop via the **public IP** (or SSH tunnel) by default; **optional** Tailscale-only hardening matches the §2 network posture. Manual deployment (SSH + git pull + docker compose up).
 
 **What is built:**
 
@@ -770,13 +769,14 @@ The system is implemented in phases. Each phase produces a usable result — you
 | `Dockerfile` | Multi-stage build for the Python orchestrator |
 | `docker-compose.yml` | harle-server + PostgreSQL with volume mounts, restart policies, health checks |
 | `.env.example` | Template for server-side environment variables |
-| `docs/runbooks/remote-setup.md` | Step-by-step server setup guide (VPS provisioning → Tailscale → Docker → first start) |
-| Server hardening script | `scripts/server-init.sh` — ufw, fail2ban, unattended-upgrades, SSH hardening |
+| `docs/runbooks/remote-setup.md` | Step-by-step guide: VPS → baseline `server-init.sh` → Docker → first start → optional Tailscale hardening |
+| Server bootstrap script | `scripts/server-init.sh` — UFW (SSH + optional public API port), unattended-upgrades, Docker, SSH hardening, deploy key |
+| Optional hardening script | `scripts/server-hardening-tailscale.sh` — Tailscale + UFW inbound only on `tailscale0` |
 | CLI remote config | CLI supports `server_url` config for connecting to a remote server |
 
 **Verification:**
 - Provision a VPS, run the setup guide, start Docker Compose.
-- From a laptop on the same Tailscale network, run `harle exec "hello"` against the remote server.
+- From your laptop, run `harle exec "hello"` against the remote server (public URL or tunnel; or Tailscale URL after optional hardening).
 - Verify `/health` returns 200.
 - Verify restart after container kill (`docker kill harle`).
 - Verify restart behavior during in-flight requests (graceful stop; no container restart loop).
@@ -790,7 +790,7 @@ The system is implemented in phases. Each phase produces a usable result — you
 
 **Estimated effort:** 2–3 days.
 
-**Result:** Harle is running 24/7 on a server. You can use it from any device on your Tailscale network. Deployment is manual (SSH in, pull, restart).
+**Result:** Harle is running 24/7 on a server. You can use it from your laptop over the public network by default; after optional hardening, from devices on your Tailscale network. Deployment is manual (SSH in, pull, restart).
 
 ---
 
