@@ -2,7 +2,7 @@
 title: "Harle CLI — Architecture & Functionality"
 tags: [cli, architecture, go, session, interface, cobra, bubbletea]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-29
 summary: "Describes the CLI's session-first interaction model, internal modules, technology choices, and project structure for Harle's primary user interface."
 ---
 
@@ -370,9 +370,34 @@ harle auth logout
 | **Request serialization** | Converts command flags and arguments into the JSON format the Orchestrator expects |
 | **Authentication** | Attaches the auth token (stored by `harle auth login`) to every request as a header |
 | **Streaming (SSE)** | Reads Server-Sent Events line by line and passes each chunk to the Response Renderer in real-time |
-| **Timeout handling** | Configurable timeout (default: 5 minutes). Long-running tasks use streaming so the connection stays alive |
-| **Retry logic** | Retries on transient network errors (connection reset, DNS timeout) up to 3 times with backoff |
-| **Error classification** | Translates HTTP status codes into user-friendly error categories (see Error Handling section) |
+| **Timeout handling** | Short-lived calls (`/init`, `/import`, …) use a bounded HTTP client timeout (default **120s** in `harle-cli`, with import optionally overriding). **`POST /chat`** uses **no per-request HTTP deadline** and relies on processing pings (below) so a slow but healthy server is not mistaken for a dead connection. |
+| **Retry logic** | (Target TRD) Retries on transient network errors up to 3 times with backoff — not all of this is implemented in the minimal client yet. |
+| **Error classification** | HTTP status codes map to user-facing messages where applicable (e.g. **504** = server run wall-clock limit; repeated ping failures = unreachable). |
+
+#### Long-running `POST /chat` and processing pings
+
+The reference CLI (`harle-cli`) sends each chat turn with a generated **`X-Request-ID`** header. While **`POST /chat`** is in flight, it periodically calls **`GET /processing/{request_id}`** with a **short HTTP timeout** (e.g. 10s). The server tracks active IDs in an in-memory registry whose **TTL is aligned with `2 × HARLE_RUN_TIMEOUT_SECONDS`** (or **600s** when the server run timeout is disabled).
+
+| Signal | CLI behavior |
+|--------|----------------|
+| `GET /processing/...` returns **`processing`** | Server is alive and still working on this request — **not** treated as a client timeout. |
+| Several **consecutive ping failures** (network / no response) | Cancel `POST /chat` and report **server unreachable** (distinct from “still working”). |
+| **`not_found`** twice in a row (after a short grace period) | Request is no longer tracked (e.g. server restart); fail with a **distinct** message. |
+| **`POST /chat` returns 504** | **Server-side run limit** (`HARLE_RUN_TIMEOUT_SECONDS`) — not the same as unreachable. |
+
+**Default poll tuning:** grace period **5s** (let the server register the ID), ping interval **15s**, **3** failed pings before unreachable. Tune the **server** with `HARLE_RUN_TIMEOUT_SECONDS` for how long one run may run; the CLI pings only need to fire often enough to prove liveness. They do not replace the server’s own timeout.
+
+**Environment overrides** (optional; unset leaves defaults above):
+
+| Variable | Effect |
+|----------|--------|
+| `HARLE_CHAT_PING_INTERVAL_SECONDS` | Seconds between liveness checks after the first ping. |
+| `HARLE_CHAT_GRACE_PERIOD_SECONDS` | Seconds to wait before the first ping (and quick completion check). |
+| `HARLE_CHAT_MAX_MISSED_PINGS` | Consecutive failed pings before treating the server as unreachable. |
+| `HARLE_CHAT_MAX_WAIT_SECONDS` | Optional **client-side** cap on total wait time for one chat turn (`0` / unset = unlimited). |
+| `HARLE_CHAT_SHOW_PROGRESS` | If `1`, `true`, or `yes`, prints a short **stderr** line after each successful “still processing” ping (timestamp + message). |
+
+**Interrupts:** the CLI installs a signal-aware context (`SIGINT` / `SIGTERM`) so **Ctrl+C** can cancel an in-flight chat + ping loop (interactive session and `harle exec`).
 
 **How streaming works:**
 

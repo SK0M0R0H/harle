@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.context.assembler import ContextAssembler
 from harle.llm.providers import EchoProvider
@@ -134,6 +135,7 @@ class TestSearchApiChunkMetadata:
         app.include_router(
             build_router(
                 orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=build_processing_registry(run_timeout_seconds=60),
                 search_engine=_EngineWithChunk(),
             )
         )

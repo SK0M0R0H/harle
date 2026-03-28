@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from harle.api.models import RunRequest
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.agents import HandoffRecord
@@ -144,7 +145,13 @@ class TestHandoffsHttpPipeline:
                 use_agent_runner=True,
             )
             app = FastAPI()
-            app.include_router(build_router(orchestrator=svc, db=db))
+            app.include_router(
+                build_router(
+                    orchestrator=svc,
+                    processing_registry=build_processing_registry(run_timeout_seconds=60),
+                    db=db,
+                )
+            )
             client = TestClient(app)
             r = client.post(
                 "/chat",

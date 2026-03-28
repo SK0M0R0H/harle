@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -55,16 +56,25 @@ func (m *Manager) Run(ctx context.Context) error {
 			continue
 		}
 
-		response, err := m.Client.Chat(
+		response, err := m.Client.ChatWithPolling(
 			ctx,
 			client.RunRequest{
 				Message:        input,
 				Context:        m.Context,
 				ConversationID: m.conversationID,
 			},
+			client.PollConfigFromEnvironment(),
 		)
 		if err != nil {
-			fmt.Printf("%s %v\n", m.renderer.Error("Error:"), err)
+			switch {
+			case errors.Is(err, client.ErrServerUnreachable),
+				errors.Is(err, client.ErrProcessingLost):
+				fmt.Printf("%s %v\n", m.renderer.Error("Error:"), err)
+			case errors.Is(err, client.ErrChatServerTimeout):
+				fmt.Printf("%s Server timed out processing the request (took too long).\n", m.renderer.Error("Error:"))
+			default:
+				fmt.Printf("%s %v\n", m.renderer.Error("Error:"), err)
+			}
 			continue
 		}
 
