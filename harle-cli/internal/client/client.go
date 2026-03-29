@@ -23,21 +23,33 @@ func IsChatServerTimeout(err error) bool {
 	return err != nil && errors.Is(err, ErrChatServerTimeout)
 }
 
+const harleClientHeader = "X-Harle-Client"
+const harleClientValue = "harle-cli"
+
 type HTTPClient struct {
-	BaseURL    string
-	Client     *http.Client // short-lived requests: /init, /import, processing pings use ad-hoc 10s in CheckProcessing
+	BaseURL   string
+	APIToken  string
+	Client    *http.Client // short-lived requests: /init, /import, processing pings use ad-hoc 10s in CheckProcessing
 	LongClient *http.Client // no deadline; POST /chat only
 }
 
-func NewHTTPClient(baseURL string) *HTTPClient {
+func NewHTTPClient(baseURL, apiToken string) *HTTPClient {
 	return &HTTPClient{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		BaseURL:  strings.TrimRight(baseURL, "/"),
+		APIToken: strings.TrimSpace(apiToken),
 		Client: &http.Client{
 			Timeout: 120 * time.Second,
 		},
 		LongClient: &http.Client{
 			Timeout: 0,
 		},
+	}
+}
+
+func (h *HTTPClient) setAuthHeaders(req *http.Request) {
+	req.Header.Set(harleClientHeader, harleClientValue)
+	if h.APIToken != "" {
+		req.Header.Set("Authorization", "Bearer "+h.APIToken)
 	}
 }
 
@@ -53,6 +65,7 @@ func (h *HTTPClient) Chat(ctx context.Context, request RunRequest, requestID str
 		return RunResponse{}, fmt.Errorf("build request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(httpRequest)
 	if requestID != "" {
 		httpRequest.Header.Set("X-Request-ID", requestID)
 	}
@@ -95,6 +108,7 @@ func (h *HTTPClient) CheckProcessing(ctx context.Context, requestID string) (Pro
 	if err != nil {
 		return ProcessingStatusResponse{}, fmt.Errorf("build request: %w", err)
 	}
+	h.setAuthHeaders(httpRequest)
 	pingClient := &http.Client{Timeout: processingPingTimeout}
 	httpResponse, err := pingClient.Do(httpRequest)
 	if err != nil {
@@ -128,6 +142,7 @@ func (h *HTTPClient) Import(ctx context.Context, request ImportRequest) (ImportR
 		return ImportResponse{}, fmt.Errorf("build request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(httpRequest)
 
 	httpResponse, err := h.Client.Do(httpRequest)
 	if err != nil {
@@ -153,6 +168,7 @@ func (h *HTTPClient) Init(ctx context.Context) (InitResponse, error) {
 	if err != nil {
 		return InitResponse{}, fmt.Errorf("build request: %w", err)
 	}
+	h.setAuthHeaders(httpRequest)
 
 	httpResponse, err := h.Client.Do(httpRequest)
 	if err != nil {

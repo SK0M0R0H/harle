@@ -7,6 +7,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI
 
+from harle.api.auth import BearerAuthMiddleware
 from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.config import load_settings
@@ -145,6 +146,11 @@ def create_app() -> FastAPI:
     )
 
     app = FastAPI(title="Harle", version="0.3.0")
+
+    api_token = (settings.HARLE_API_TOKEN or "").strip()
+    if api_token:
+        app.add_middleware(BearerAuthMiddleware, token=api_token)
+
     app.include_router(
         build_router(
             orchestrator=orchestrator,

@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newInitCommand(serverURL *string) *cobra.Command {
+func newInitCommand(serverURL *string, apiToken *string) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "init",
 		Short: "Initialise PostgreSQL database and seed the dataset",
@@ -20,7 +20,7 @@ HARLE_DATASET_PATH.
 Alternatively, run "harle-init" (Python) directly if the
 server is not yet started.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			httpClient := client.NewHTTPClient(*serverURL)
+			httpClient := client.NewHTTPClient(*serverURL, *apiToken)
 
 			fmt.Println("Initialising Harle data layer...")
 			response, err := httpClient.Init(context.Background())

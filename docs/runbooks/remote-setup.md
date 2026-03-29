@@ -10,7 +10,7 @@ summary: "Provision a VPS and run Harle with Docker Compose over the public netw
 
 This runbook provisions a fresh Ubuntu 24.04 VPS and runs Harle as a Docker Compose stack. **Baseline path:** SSH and the HTTP API use the server’s **public IP** (no Tailscale required). **Optional phase 11:** lock inbound traffic to **Tailscale only** for extra hardening.
 
-> Harle’s API is not yet authenticated for remote access. Exposing port **8000** on the public internet is convenient for a first deploy but increases risk; use phase 11 or an **SSH tunnel** (see step 5) if that matters for you.
+> **API authentication (Phase 3):** Set **`HARLE_API_TOKEN`** in the server **`.env`** (see [§8b](#8b-api-bearer-token-recommended-for-remote)) so only clients that send **`Authorization: Bearer <token>`** can call non-health endpoints. Without a token, the API behaves as in local development (no bearer required). Exposing port **8000** on the public internet still warrants **UFW**, an **SSH tunnel** (step 5), and/or **Tailscale** (phase 11) according to your threat model.
 
 ## Prerequisites
 
@@ -138,6 +138,7 @@ Set at minimum:
 - `DATABASE_URL` with the same password (`db` host)
 - `HARLE_DATASET_PATH=/data/vault`
 - `HARLE_HOST=0.0.0.0`
+- **`HARLE_API_TOKEN`** (recommended when the API is reachable beyond localhost): generate a random secret, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`, and set the same value on clients (CLI **`api_token`** in `~/.config/harle/cli.yaml`, optional **`HARLE_API_TOKEN`** for vault-sync — see **§8b**). When unset or empty, Harle does **not** enforce bearer auth.
 - **`HARLE_PUBLISH_HOST=0.0.0.0`** if you opened port 8000 in UFW (default init) and want to reach the API from your laptop using **`http://<server-public-ip>:8000`**. Use **`127.0.0.1`** if you did **not** open 8000 and will use an SSH tunnel:
 
 ```bash
@@ -184,8 +185,47 @@ Replace the host with your server’s **public IP**, or `127.0.0.1` if you use a
 mkdir -p ~/.config/harle
 cat > ~/.config/harle/cli.yaml <<'EOF'
 server_url: "http://<server-public-ip>:8000"
+api_token: "<same value as HARLE_API_TOKEN on the server>"
 EOF
 ```
+
+If you are **not** using API auth yet, omit **`api_token`** (or leave it empty).
+
+## 8b) API bearer token (recommended for remote)
+
+When **`HARLE_API_TOKEN`** is set in **`~/harle/.env`** on the server (non-empty after trim), Harle requires **`Authorization: Bearer <token>`** on every route except **`/health`**, **`/health/connections`**, **`/health/tools`**, and **`/health/all`**. Health checks stay unauthenticated for monitoring and scripts.
+
+1. **Generate a token** (on your laptop or the server):
+
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+2. **Server:** add to **`~/harle/.env`**:
+
+   ```bash
+   HARLE_API_TOKEN='<paste-generated-token>'
+   ```
+
+   Recreate the app container so the process picks it up:
+
+   ```bash
+   cd ~/harle
+   docker compose up -d --force-recreate harle
+   ```
+
+3. **CLI (laptop):** set the same value under **`api_token`** in **`~/.config/harle/cli.yaml`** (see step 8), or export **`HARLE_API_TOKEN`** for the shell session, or pass **`harle --token '<paste>' ...`** (highest precedence).
+
+4. **Vault sync (server):** the systemd service’s **`EnvironmentFile`** (`~/harle/.env`) should already include **`HARLE_API_TOKEN`** so **`scripts/vault-sync.sh`** can call **`POST /reindex`** with **`Authorization`** (see §12e).
+
+**Verify**
+
+- `curl -fsS http://127.0.0.1:8000/health` → **200** (no header).
+- `curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/reindex` → **401** without **`Authorization`**.
+- `curl -fsS -X POST http://127.0.0.1:8000/reindex -H "Authorization: Bearer $HARLE_API_TOKEN"` → **200** (when DB and dataset are configured).
+- **`harle exec "hello"`** from a machine with **`api_token`** set → normal reply.
+
+Optional header **`X-Harle-Client`** (e.g. **`harle-cli`**, **`vault-sync`**) is logged for operations; it is not required for authentication.
 
 ## 9) Verify health and first request
 
@@ -351,7 +391,7 @@ The service loads **`~/harle/.env`**, which must define **`HARLE_VAULT_PATH`**. 
 1. On the laptop, add a unique snippet to a vault note, commit, and push to `main`.
 2. Wait up to ~2 minutes (timer interval).
 3. On the server: `tail -20 ~/vault-sync.log` — expect a pull line and reindex if HEAD moved.
-4. From laptop or server: `curl -fsS "http://<server>:8000/search?q=<unique-snippet>"` (use the same base URL you use for `/health`).
+4. From laptop or server: if **`HARLE_API_TOKEN`** is set, add **`-H "Authorization: Bearer $HARLE_API_TOKEN"`** to authenticated routes, e.g. `curl -fsS -H "Authorization: Bearer $HARLE_API_TOKEN" "http://<server>:8000/search?q=<unique-snippet>"` (use the same base URL you use for `/health`).
 
 To confirm **log push-back**: run a chat on the server, wait for a run log under `logs/` in the vault, then after the next sync run `git pull` on the laptop inside the vault repo and confirm new commits.
 

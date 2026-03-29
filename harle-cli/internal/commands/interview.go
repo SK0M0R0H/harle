@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newInterviewCommand(serverURL *string) *cobra.Command {
+func newInterviewCommand(serverURL *string, apiToken *string) *cobra.Command {
 	var (
 		scope  string
 		tiers  []int
@@ -28,7 +28,7 @@ produces vault Markdown documents.
 The interview is pauseable and resumable. Use --resume to continue
 a previously paused session.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			httpClient := client.NewHTTPClient(*serverURL)
+			httpClient := client.NewHTTPClient(*serverURL, *apiToken)
 			return runInterview(context.Background(), httpClient, scope, tiers, resume)
 		},
 	}

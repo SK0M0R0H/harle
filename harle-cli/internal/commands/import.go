@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newImportCommand(serverURL *string) *cobra.Command {
+func newImportCommand(serverURL *string, apiToken *string) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "import",
 		Short: "Import data from external sources into the vault",
@@ -20,12 +20,12 @@ The orchestrator server must be running with the appropriate
 API credentials configured (e.g. NOTION_API_TOKEN).`,
 	}
 
-	command.AddCommand(newImportNotionCommand(serverURL))
+	command.AddCommand(newImportNotionCommand(serverURL, apiToken))
 
 	return command
 }
 
-func newImportNotionCommand(serverURL *string) *cobra.Command {
+func newImportNotionCommand(serverURL *string, apiToken *string) *cobra.Command {
 	var (
 		dryRun    bool
 		contextV  string
@@ -49,7 +49,7 @@ Examples:
   harle import notion --context work     # set context scope
   harle import notion --db-mode table    # databases as tables`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			httpClient := client.NewHTTPClient(*serverURL)
+			httpClient := client.NewHTTPClient(*serverURL, *apiToken)
 			httpClient.Client.Timeout = 600 * time.Second
 
 			config := map[string]string{

@@ -48,6 +48,8 @@ class Settings:
 
     HARLE_HOST: str = "127.0.0.1"
     HARLE_PORT: int = 8000
+    # When non-empty, require ``Authorization: Bearer <token>`` on all routes except ``/health*``.
+    HARLE_API_TOKEN: str = ""
     HARLE_LLM_PROVIDER: str = PROVIDER_OPENAI
 
     # Model tiers — must be non-empty (see :class:`~harle.orchestrator.model_tier.ModelTierConfig`)

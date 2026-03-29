@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from harle.api.capture_models import (
     InterviewProgressResponse,
@@ -22,6 +22,13 @@ from harle.capture.engine import CaptureEngine, InterviewResponse as EngineRespo
 from harle.db.connection import Database
 
 logger = logging.getLogger(__name__)
+
+HARLE_CLIENT_HEADER = "X-Harle-Client"
+
+
+def _harle_client_from_request(http_request: Request) -> str:
+    label = (http_request.headers.get(HARLE_CLIENT_HEADER) or "").strip()
+    return label or "unknown"
 
 
 def _engine_to_api(resp: EngineResponse) -> InterviewResponse:
@@ -56,12 +63,19 @@ def build_capture_router(
     router = APIRouter(prefix="/capture", tags=["capture"])
 
     @router.post("/interview/start", response_model=InterviewResponse)
-    def start_interview(request: InterviewStartRequest) -> InterviewResponse:
+    def start_interview(
+        http_request: Request,
+        request: InterviewStartRequest,
+    ) -> InterviewResponse:
         """Start a new interview session or resume a paused one.
 
         Creates a capture run, selects topics from the registry based
         on scope and tiers, and returns the first question.
         """
+        logger.info(
+            "POST /capture/interview/start",
+            extra={"harle_client": _harle_client_from_request(http_request)},
+        )
         try:
             with db.session() as session:
                 result = engine.start_interview(
@@ -81,12 +95,19 @@ def build_capture_router(
             ) from exc
 
     @router.post("/interview/respond", response_model=InterviewResponse)
-    def respond_interview(request: InterviewRespondRequest) -> InterviewResponse:
+    def respond_interview(
+        http_request: Request,
+        request: InterviewRespondRequest,
+    ) -> InterviewResponse:
         """Send a response to the current interview question or draft.
 
         Advances the interview state machine and returns the next
         action (question, draft, tier_break, complete, etc.).
         """
+        logger.info(
+            "POST /capture/interview/respond",
+            extra={"harle_client": _harle_client_from_request(http_request)},
+        )
         try:
             with db.session() as session:
                 result = engine.process_response(

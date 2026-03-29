@@ -52,7 +52,7 @@ if [[ "${before_sha}" != "${after_sha}" ]]; then
   log_line "Pulled new commits ${before_sha:0:7}..${after_sha:0:7}; triggering reindex"
   reindex_url="${HARLE_API_URL%/}/reindex"
   _body="$(mktemp)"
-  curl_args=(-sS -o "${_body}" -w "%{http_code}" -X POST "${reindex_url}")
+  curl_args=(-sS -o "${_body}" -w "%{http_code}" -X POST "${reindex_url}" -H "X-Harle-Client: vault-sync")
   if [[ -n "${HARLE_API_TOKEN:-}" ]]; then
     curl_args+=(-H "Authorization: Bearer ${HARLE_API_TOKEN}")
   fi

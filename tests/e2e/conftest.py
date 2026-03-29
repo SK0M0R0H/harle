@@ -18,6 +18,17 @@ import pytest
 
 # Repo root: tests/e2e/conftest.py -> tests -> repo root
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Fixed token for E2E subprocess server (must match Authorization in client requests).
+_E2E_API_TOKEN = "e2e-test-harle-api-token"
+
+
+@pytest.fixture(scope="session")
+def e2e_auth_headers() -> dict[str, str]:
+    """Headers for authenticated API calls when the E2E server runs with HARLE_API_TOKEN."""
+    return {"Authorization": f"Bearer {_E2E_API_TOKEN}"}
+
+
 _E2E_VAULT = _REPO_ROOT / "tests" / "fixtures" / "e2e_vault"
 # Packaged role prompts under src (do not import harle.bootstrap here: pytest may load
 # an older site-packages harle than this checkout; the server subprocess uses PYTHONPATH=src).
@@ -106,6 +117,7 @@ def e2e_base_url(e2e_vault_copy: str) -> str:
     # E2E-only config: no DATABASE_URL so env wins; avoids repo config/.env overriding test URL
     env["HARLE_CONFIG_PATH"] = str(_REPO_ROOT / "tests" / "e2e" / "config_e2e.yaml")
     env["HARLE_DOTENV_PATH"] = str(_REPO_ROOT / "tests" / "e2e" / ".env.e2e")
+    env["HARLE_API_TOKEN"] = _E2E_API_TOKEN
     # Force EchoProvider so E2E is deterministic and fast (override .env if present)
     env["OPENAI_API_KEY"] = ""
     # Ensure the subprocess can import harle (CI does pip install -e .; local may rely on PYTHONPATH)

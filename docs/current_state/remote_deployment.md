@@ -1,6 +1,6 @@
 ---
 title: "Harle Remote Deployment — Current State"
-tags: [deployment, remote, infrastructure, security, cd, monitoring, current-state, implementation-status, vault-sync]
+tags: [deployment, remote, infrastructure, security, cd, monitoring, current-state, implementation-status, vault-sync, api-auth]
 context: global
 last_updated: 2026-03-29
 summary: "Tracks what the remote deployment infrastructure implements vs the TRD, and what each missing part would unlock."
@@ -16,7 +16,7 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Overall Status
 
-**Phases 1 and 2 are implemented.** Harle has a manual remote deployment baseline (Docker, compose, server init, runbook, CLI remote URL) **and** optional Git-based vault synchronization: `scripts/vault-sync.sh`, user systemd timer units under `scripts/systemd/`, runbook §12, and `POST /reindex` after a successful fast-forward pull. Phases 3–6 remain pending.
+**Phases 1–3 are implemented.** Harle has a manual remote deployment baseline (Docker, compose, server init, runbook, CLI remote URL), optional Git-based vault synchronization, **and** optional bearer API authentication with client identification logging. Phases 4–6 remain pending.
 
 ---
 
@@ -28,14 +28,15 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 | docker-compose.yml (production) | Implemented | `docker-compose.yml` added with `harle` + `db`, health checks, restart policies, and localhost bind |
 | Server bootstrap script | Implemented | `scripts/server-init.sh` — SSH hardening, UFW (OpenSSH + optional public `:8000`), unattended-upgrades, Docker, GitHub deploy key (no Tailscale) |
 | Optional Tailscale hardening | Implemented | `scripts/server-hardening-tailscale.sh` + runbook phase 11 |
-| Deployment runbook | Implemented | `docs/runbooks/remote-setup.md` — baseline public path, optional Tailscale-only UFW, optional vault sync §12 |
+| Deployment runbook | Implemented | `docs/runbooks/remote-setup.md` — baseline public path, optional Tailscale-only UFW, optional vault sync §12, API token §8b |
 | Vault sync (Git-based) | Implemented | `scripts/vault-sync.sh` — `git fetch` / fast-forward merge, conditional `POST /reindex`, commit+push `logs/` |
 | Vault sync (Syncthing) | Not implemented | — |
 | Auto-reindex after sync | Implemented | Triggered from `vault-sync.sh` when `HEAD` advances after merge; `/reindex` endpoint unchanged |
 | Systemd vault-sync timer | Implemented | `scripts/systemd/harle-vault-sync.service` + `harle-vault-sync.timer` (~2 min); user installs under `~/.config/systemd/user/` |
-| API token authentication | Not implemented | No auth middleware; `vault-sync.sh` sends `Authorization` only if `HARLE_API_TOKEN` is set (Phase 3) |
-| CLI remote server config | Implemented | CLI now resolves server URL via `--server`, `HARLE_SERVER_URL`, or `~/.config/harle/cli.yaml` |
-| Client identification header | Not implemented | — |
+| API token authentication | Implemented | `BearerAuthMiddleware` in `src/harle/api/auth.py` when `HARLE_API_TOKEN` is set (non-empty); `/health*` exempt; timing-safe compare |
+| CLI remote server config | Implemented | CLI resolves server URL via `--server`, `HARLE_SERVER_URL`, or `~/.config/harle/cli.yaml` |
+| CLI API token | Implemented | `--token`, `HARLE_API_TOKEN`, or `api_token` in `cli.yaml`; sends `Authorization` + `X-Harle-Client: harle-cli` |
+| Client identification header | Implemented | Optional `X-Harle-Client` logged on `/chat`, `/init`, `/reindex`, `/import`, capture interview routes; `vault-sync.sh` sends `vault-sync` |
 | CD pipeline (GitHub Actions) | Not implemented | No `.github/workflows/deploy.yml` |
 | Deploy pull script | Not implemented | No `scripts/deploy-pull.sh` |
 | Health monitoring script | Not implemented | No `scripts/health-monitor.sh` |
@@ -43,7 +44,7 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 | DB backup cron | Not implemented | — |
 | Telegram bot interface | Not implemented | — |
 | Caddy reverse proxy | Not implemented | — |
-| `.env.example` (server) | Implemented | Includes `HARLE_VAULT_PATH`, `HARLE_API_URL`, and deployment keys |
+| `.env.example` (server) | Implemented | Includes `HARLE_VAULT_PATH`, `HARLE_API_URL`, `HARLE_API_TOKEN` (commented), deployment keys |
 
 ---
 
@@ -59,18 +60,25 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 - **Server bootstrap script** — `scripts/server-init.sh` for baseline VPS setup (UFW SSH + optional API port, Docker, deploy key); Tailscale is **not** part of baseline.
 - **Optional Tailscale hardening** — `scripts/server-hardening-tailscale.sh` switches UFW to inbound only on `tailscale0` after interactive confirmation.
 - **Remote setup runbook** — `docs/runbooks/remote-setup.md` documents public-IP (or SSH tunnel) first, then optional phase 11 for Tailscale.
-- **CLI remote server persistence** — Go CLI now supports `~/.config/harle/cli.yaml` (`server_url`) with precedence:
+- **CLI remote server persistence** — Go CLI supports `~/.config/harle/cli.yaml` (`server_url`) with precedence:
   1. `--server`
   2. `HARLE_SERVER_URL`
   3. `~/.config/harle/cli.yaml`
   4. default localhost URL.
-- **Server environment template** — `.env.example` includes deployment-ready variables including `HARLE_VAULT_PATH` and `HARLE_API_URL` for compose and vault-sync.
+- **Server environment template** — `.env.example` includes deployment-ready variables including `HARLE_VAULT_PATH`, `HARLE_API_URL`, and documented `HARLE_API_TOKEN` for compose and vault-sync.
 
 ### Phase 2 deliverables
 
-- **`scripts/vault-sync.sh`** — On the host: requires `HARLE_VAULT_PATH` (git checkout); fast-forward merge from `origin/main` (override via `VAULT_SYNC_BRANCH` / `VAULT_SYNC_REMOTE`); calls `POST ${HARLE_API_URL}/reindex` only when `HEAD` changes; optional `Authorization: Bearer` when `HARLE_API_TOKEN` is set; stages `logs/`, commits `vault-sync: server logs`, pushes to the vault remote; logs to `VAULT_SYNC_LOG_FILE` or `~/vault-sync.log`.
+- **`scripts/vault-sync.sh`** — On the host: requires `HARLE_VAULT_PATH` (git checkout); fast-forward merge from `origin/main` (override via `VAULT_SYNC_BRANCH` / `VAULT_SYNC_REMOTE`); calls `POST ${HARLE_API_URL}/reindex` only when `HEAD` changes; optional `Authorization: Bearer` when `HARLE_API_TOKEN` is set; **`X-Harle-Client: vault-sync`** on reindex; stages `logs/`, commits `vault-sync: server logs`, pushes to the vault remote; logs to `VAULT_SYNC_LOG_FILE` or `~/vault-sync.log`.
 - **Systemd user units** — `scripts/systemd/harle-vault-sync.service` (oneshot, `EnvironmentFile` `~/harle/.env`) and `harle-vault-sync.timer` (`OnUnitActiveSec=2min`); runbook documents `loginctl enable-linger` and enablement.
 - **Runbook vault Git guide** — `docs/runbooks/remote-setup.md` §12: private vault repo, **write** deploy key (separate from code repo), clone layout, `HARLE_VAULT_PATH`, git identity for server commits, timer install, verification, troubleshooting.
+
+### Phase 3 deliverables
+
+- **`HARLE_API_TOKEN` in settings** — `src/harle/config.py` `Settings`; empty/unset disables auth (local dev default).
+- **Bearer middleware** — `src/harle/api/auth.py` registered from `src/harle/main.py` when token is non-empty after trim; public **`/health*`** only.
+- **CLI** — Go client sends bearer + `X-Harle-Client: harle-cli` on all API calls; token resolution documented in runbook §8b.
+- **Docs** — `.env.example`, runbook §5/§8/§8b/§12; E2E tests run server with a fixed test token.
 
 ### Existing prerequisites still in place
 
@@ -100,8 +108,8 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ### 3. API security and multi-client (Phase 3)
 
-- **Missing:** Bearer token auth middleware, CLI auth config, client identification header.
-- **Unlocks:** Safe remote access; multiple devices can connect simultaneously. Until then, `HARLE_API_TOKEN` in `.env` is optional and unused by the API.
+- **Status:** Implemented.
+- **Delivered:** Bearer auth when `HARLE_API_TOKEN` is set; CLI and vault-sync integration; `X-Harle-Client` logging on selected routes.
 
 ### 4. Continuous deployment (Phase 4)
 
@@ -130,4 +138,4 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Assessment
 
-Remote deployment has a working manual baseline plus **optional** automated vault Git sync and reindex. Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. The next highest-value gap is **API authentication (Phase 3)**; after that, CD and monitoring (Phases 4–5) and the Telegram bot (Phase 6).
+Remote deployment has a working manual baseline, **optional** automated vault Git sync and reindex, and **optional** bearer API authentication for safe multi-client remote use. Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. The next highest-value gaps are **CD (Phase 4)**, **monitoring (Phase 5)**, and the **Telegram bot (Phase 6)**.

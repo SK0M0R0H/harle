@@ -36,6 +36,29 @@ func ResolveServerURL(flagValue string, flagChanged bool) string {
 	return defaultServerURL
 }
 
+// ResolveAPIToken returns the bearer token for Harle API requests.
+// Precedence: non-empty --token flag, HARLE_API_TOKEN, api_token in cli.yaml, then flag default.
+func ResolveAPIToken(flagValue string, flagChanged bool) string {
+	if flagChanged && strings.TrimSpace(flagValue) != "" {
+		return strings.TrimSpace(flagValue)
+	}
+	if envValue := strings.TrimSpace(os.Getenv("HARLE_API_TOKEN")); envValue != "" {
+		return envValue
+	}
+
+	cfg, err := Load()
+	if err == nil {
+		if cfgValue := strings.TrimSpace(cfg.APIToken); cfgValue != "" {
+			return cfgValue
+		}
+	}
+
+	if fallback := strings.TrimSpace(flagValue); fallback != "" {
+		return fallback
+	}
+	return ""
+}
+
 func Load() (CLIConfig, error) {
 	path, err := resolvePath()
 	if err != nil {
