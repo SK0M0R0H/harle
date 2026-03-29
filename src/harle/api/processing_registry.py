@@ -31,12 +31,14 @@ class ProcessingEntry:
 class ProcessingRegistry:
     """Thread-safe map (hashed request id) -> processing entry with lazy TTL eviction."""
 
-    def __init__(self, ttl_seconds: int) -> None:
+    def __init__(self, ttl_seconds: int | None) -> None:
         self._entries: dict[str, ProcessingEntry] = {}
         self._lock = threading.Lock()
-        self._ttl_seconds = max(1, ttl_seconds)
+        self._ttl_seconds: int | None = None if ttl_seconds is None else max(1, int(ttl_seconds))
 
     def _evict_expired(self, now: datetime) -> None:
+        if self._ttl_seconds is None:
+            return
         cutoff = now - timedelta(seconds=self._ttl_seconds)
         stale = [rid for rid, e in self._entries.items() if e.started_at < cutoff]
         for rid in stale:
@@ -91,9 +93,14 @@ class ProcessingRegistry:
 
 
 def build_processing_registry(*, run_timeout_seconds: int | None) -> ProcessingRegistry:
-    """Create a registry whose entry TTL matches ``2 * run_timeout_seconds`` (or 600s if disabled)."""
+    """Create a registry whose entry TTL is ``2 * run_timeout_seconds``, or no TTL when disabled.
+
+    When ``HARLE_RUN_TIMEOUT_SECONDS`` is unset or non-positive, the orchestrator has no wall-clock
+    run cap; registry entries are not time-evicted so long jobs stay visible to ``GET /processing``
+    until ``deregister`` runs (typically in a ``finally`` after the chat handler completes).
+    """
     if run_timeout_seconds is None or run_timeout_seconds <= 0:
-        ttl_seconds = 600
+        ttl_seconds: int | None = None
     else:
         ttl_seconds = 2 * int(run_timeout_seconds)
     return ProcessingRegistry(ttl_seconds=ttl_seconds)

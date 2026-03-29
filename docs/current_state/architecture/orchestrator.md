@@ -24,7 +24,7 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 
 | TRD area | Current status | Notes |
 |----------|----------------|-------|
-| 1. HTTP API (FastAPI) | Implemented | `api/routes.py`: **POST /chat** (user tasks; requires DB), **GET /processing/{request_id}** (in-flight chat liveness for CLI; optional `X-Request-ID` on /chat), GET /run/{id}, GET /health. `api/processing_registry.py`: in-memory active-request tracking with TTL. Request/response models in `api/models.py`. Additional endpoints: /init, /reindex, /search. |
+| 1. HTTP API (FastAPI) | Implemented | `api/routes.py`: **POST /chat** (user tasks; requires DB), **GET /processing/{request_id}** (in-flight chat liveness for CLI; optional `X-Request-ID` on /chat), GET /run/{id}, GET /health. `api/processing_registry.py`: in-memory active-request tracking with optional TTL (`2×` run timeout, or none when run timeout disabled). Request/response models in `api/models.py`. Additional endpoints: /init, /reindex, /search. |
 | 2. Router | Partially implemented | `orchestrator/router.py`: explicit `as <role>:` and keyword routing to researcher, secretary, specialist, writer (default **assistant**). No workflow-template match or LLM fallback (per TRD). |
 | 3. Clarifier | Not implemented | No `clarifier/` package. No ambiguity check, no clarification questions, no round-trip before execution. |
 | 4. Context Assembler | Implemented | `context/assembler.py`: P0 (prompts + policies), P1 (dataset search), P4 (conversation history). 80/20 budget, tiktoken. No P2 (external data), P3 (prior runs, memories). |
@@ -45,7 +45,7 @@ The Orchestrator is **partially implemented**. The request lifecycle works end-t
 ### 1. HTTP API and request/response shape
 
 - **Endpoints:** POST `/chat` (only path for user-initiated work; returns 503 if DB not configured), **GET `/processing/{request_id}`** (returns `processing` or `not_found` for CLI liveness; always backed by a `ProcessingRegistry` passed into `build_router`), GET `/run/{run_id}`, GET `/health`, plus POST `/init`, POST `/reindex`, GET `/search`.
-- **Chat correlation:** Optional header **`X-Request-ID`** on POST `/chat`. When set, the server registers a **SHA-256** of the id (max **4096** UTF-8 bytes); duplicate in-flight id → **409**; deregisters in `finally`. Clients poll `/processing/{request_id}` with the same string (lazy TTL eviction on register and get).
+- **Chat correlation:** Optional header **`X-Request-ID`** on POST `/chat`. When set, the server registers a **SHA-256** of the id (max **4096** UTF-8 bytes); duplicate in-flight id → **409**; deregisters in `finally`. Clients poll `/processing/{request_id}` with the same string (lazy TTL eviction on register and get when a run timeout is configured; otherwise entries age out only on deregister).
 - **RunRequest:** `message`, `context` (work/personal), `conversation_id`.
 - **RunResponse:** `run_id`, `status`, `result`, `context`, `agent`, `conversation_id`, `tools_called`, `turns_used`, reflection fields, optional `handoffs`.
 - **RunDetail:** run metadata for GET /run/{id} (includes `handoffs` when stored).

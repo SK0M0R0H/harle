@@ -376,7 +376,7 @@ harle auth logout
 
 #### Long-running `POST /chat` and processing pings
 
-The reference CLI (`harle-cli`) sends each chat turn with a generated **`X-Request-ID`** header. While **`POST /chat`** is in flight, it periodically calls **`GET /processing/{request_id}`** with a **short HTTP timeout** (e.g. 10s). The server tracks active IDs in an in-memory registry whose **TTL is aligned with `2 × HARLE_RUN_TIMEOUT_SECONDS`** (or **600s** when the server run timeout is disabled).
+The reference CLI (`harle-cli`) sends each chat turn with a generated **`X-Request-ID`** header. While **`POST /chat`** is in flight, it periodically calls **`GET /processing/{request_id}`** with a **short HTTP timeout** (e.g. 10s). The server tracks active IDs in an in-memory registry whose **TTL is `2 × HARLE_RUN_TIMEOUT_SECONDS`** when a run timeout is configured, and **no time-based TTL** when the server run timeout is disabled (entries remain until the handler deregisters).
 
 | Signal | CLI behavior |
 |--------|----------------|

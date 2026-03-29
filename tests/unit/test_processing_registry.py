@@ -55,9 +55,19 @@ def test_get_status_on_other_id_triggers_eviction_for_stale() -> None:
     assert reg.get_status("a") is None
 
 
-def test_build_processing_registry_disabled_timeout_uses_600_ttl() -> None:
-    r = build_processing_registry(run_timeout_seconds=None)
-    assert r._ttl_seconds == 600
+@pytest.mark.parametrize("run_timeout", [None, 0])
+def test_build_processing_registry_when_run_timeout_disabled_has_no_ttl(run_timeout: int | None) -> None:
+    r = build_processing_registry(run_timeout_seconds=run_timeout)
+    assert r._ttl_seconds is None
+
+
+def test_no_ttl_registry_does_not_evict_by_age() -> None:
+    reg = ProcessingRegistry(ttl_seconds=None)
+    reg.register("long-job")
+    time.sleep(1.15)
+    assert reg.get_status("long-job") is not None
+    reg.deregister("long-job")
+    assert reg.get_status("long-job") is None
 
 
 def test_build_processing_registry_positive_timeout_doubles() -> None:
