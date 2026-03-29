@@ -18,6 +18,7 @@ from harle.api.models import (
     ImportRequest,
     ImportResponse,
     InitResponse,
+    ProcessingStatusResponse,
     ReindexResponse,
     RunDetail,
     RunRequest,
@@ -26,6 +27,11 @@ from harle.api.models import (
     SearchResultItem,
     ToolStatusItem,
     ToolsHealthResponse,
+)
+from harle.api.processing_registry import (
+    MAX_REQUEST_ID_BYTES,
+    DuplicateActiveProcessingError,
+    ProcessingRegistry,
 )
 from harle.api.streaming import drain_debug_events, result_event
 from harle.config import Settings
@@ -36,9 +42,18 @@ from harle.search.engine import SearchEngine
 logger = logging.getLogger(__name__)
 
 
+def _raise_if_processing_id_too_large(request_id: str) -> None:
+    if len(request_id.encode("utf-8")) > MAX_REQUEST_ID_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"request_id exceeds maximum length ({MAX_REQUEST_ID_BYTES} bytes).",
+        )
+
+
 def build_router(
     *,
     orchestrator: OrchestratorService,
+    processing_registry: ProcessingRegistry,
     db: Database | None = None,
     search_engine: SearchEngine | None = None,
     settings: Settings | None = None,
@@ -50,6 +65,7 @@ def build_router(
 
     Args:
         orchestrator: The LLM orchestrator service.
+        processing_registry: In-flight ``/chat`` tracking for ``GET /processing/{request_id}``.
         db: Optional database instance (enables ``/init``).
         search_engine: Optional search engine (enables ``/search``).
         settings: Application settings (needed for ``/init``).
@@ -140,6 +156,23 @@ def build_router(
             all_healthy=conn_healthy and tool_healthy,
         )
 
+    @router.get("/processing/{request_id}", response_model=ProcessingStatusResponse)
+    def get_processing_status(request_id: str) -> ProcessingStatusResponse:
+        """Return whether the given request ID is still being processed by /chat."""
+        _raise_if_processing_id_too_large(request_id)
+        entry = processing_registry.get_status(request_id)
+        if entry is None:
+            return ProcessingStatusResponse(
+                request_id=request_id,
+                status="not_found",
+                started_at=None,
+            )
+        return ProcessingStatusResponse(
+            request_id=request_id,
+            status=entry.status,
+            started_at=entry.started_at.isoformat(),
+        )
+
     @router.get("/run/{run_id}", response_model=RunDetail)
     def get_run(run_id: str) -> RunDetail:
         """Return metadata for a single run by run_id."""
@@ -217,6 +250,19 @@ def build_router(
                 "conversation_id": request.conversation_id,
             },
         )
+        client_request_id = (http_request.headers.get("X-Request-ID") or "").strip()
+        if client_request_id:
+            try:
+                processing_registry.register(client_request_id)
+            except DuplicateActiveProcessingError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A chat request with this X-Request-ID is already in progress."
+                    ),
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             response = await run_in_threadpool(orchestrator.chat, request=request)
         except RunTimeoutError as exc:
@@ -234,6 +280,9 @@ def build_router(
             raise
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            if client_request_id:
+                processing_registry.deregister(client_request_id)
         if debug:
             return _sse_response(response)
         return response

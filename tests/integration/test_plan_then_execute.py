@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from harle.api.models import RunRequest
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.db.connection import Database
 from harle.llm.providers import EchoProvider
@@ -60,6 +61,7 @@ class TestPlanThenExecuteVaultAndPersistence:
                 llm_provider=EchoProvider(),
                 db=db,
                 dataset_path=str(tmp_path),
+                vault_tracing_enabled=False,
                 use_agent_runner=True,
                 planning_enabled=True,
             )
@@ -74,7 +76,7 @@ class TestPlanThenExecuteVaultAndPersistence:
             )
 
         assert resp.status == "completed"
-        result_files = list(tmp_path.glob("logs/**/*_result.md"))
+        result_files = list(tmp_path.glob("logs/**/*.md"))
         assert len(result_files) == 1
         content = result_files[0].read_text(encoding="utf-8")
         assert "## Plan" in content
@@ -116,6 +118,7 @@ class TestPlanThenExecuteVaultAndPersistence:
                 llm_provider=EchoProvider(),
                 db=db,
                 dataset_path=str(tmp_path),
+                vault_tracing_enabled=False,
                 use_agent_runner=True,
                 planning_enabled=True,
             )
@@ -130,7 +133,7 @@ class TestPlanThenExecuteVaultAndPersistence:
             )
 
         assert resp.status == "completed"
-        result_files = list(tmp_path.glob("logs/**/*_result.md"))
+        result_files = list(tmp_path.glob("logs/**/*.md"))
         assert len(result_files) == 1
         content = result_files[0].read_text(encoding="utf-8")
         assert "### Planning tool outputs" in content
@@ -171,6 +174,7 @@ class TestPlanThenExecuteVaultAndPersistence:
                 llm_provider=EchoProvider(),
                 db=db,
                 dataset_path=str(tmp_path),
+                vault_tracing_enabled=False,
                 use_agent_runner=True,
             )
             svc.chat(
@@ -215,8 +219,10 @@ class TestPlanThenExecuteHttpPipeline:
                         llm_provider=EchoProvider(),
                         db=chat_db,
                         dataset_path=str(tmp_path),
+                        vault_tracing_enabled=False,
                         use_agent_runner=True,
                     ),
+                    processing_registry=build_processing_registry(run_timeout_seconds=60),
                     db=chat_db,
                 )
             )

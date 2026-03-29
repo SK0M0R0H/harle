@@ -1,8 +1,6 @@
 package commands
 
 import (
-	"context"
-
 	"github.com/skm/harle/harle-cli/internal/client"
 	"github.com/skm/harle/harle-cli/internal/config"
 	"github.com/skm/harle/harle-cli/internal/session"
@@ -27,7 +25,7 @@ func NewRootCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			httpClient := client.NewHTTPClient(serverURL)
 			manager := session.NewManager(httpClient, contextValue, themeValue)
-			return manager.Run(context.Background())
+			return manager.Run()
 		},
 	}
 

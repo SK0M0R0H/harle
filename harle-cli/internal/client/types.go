@@ -1,5 +1,11 @@
 package client
 
+type ProcessingStatusResponse struct {
+	RequestID string  `json:"request_id"`
+	Status    string  `json:"status"`
+	StartedAt *string `json:"started_at"`
+}
+
 type RunRequest struct {
 	Message        string  `json:"message"`
 	Context        string  `json:"context"`

@@ -468,7 +468,7 @@ You can view execution traces (orchestrator steps, tool calls, context assembly,
    ```yaml
    HARLE_TRACING_SSE_ENABLED: true
    ```
-   Then restart the server. Traces are also written to the vault (`logs/YYYY/MM/<run_id>_trace.md`) and to the `execution_traces` table when the DB is configured.
+   Then restart the server. Traces are merged into the vault run log (`logs/YYYY/MM/<safe_stem>.md` with **Result**, optional context, and **Execution trace** sections) and stored in the `execution_traces` table when the DB is configured.
 
 2. **Request the debug stream** — use `?debug=true` on `/chat`. The response becomes an SSE stream: `event: debug` (trace spans) then `event: result` (final answer).
 

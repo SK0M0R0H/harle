@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Architecture & Functionality"
 tags: [orchestrator, architecture, fastapi, agents, routing, context-assembly, tools]
 context: global
-last_updated: 2026-03-19
+last_updated: 2026-03-29
 summary: "Describes the Orchestrator's internal modules, request lifecycle, conversation mode, and technology choices for Harle's central coordination component."
 ---
 
@@ -75,7 +75,8 @@ Flask is simpler but synchronous by default. Since every Orchestrator request in
 
 | Endpoint | Method | What it does |
 |---|---|---|
-| `POST /chat` | POST | **Single entry point** for user-initiated work: submit a task or continue a conversation. Same JSON body for one-shot and multi-turn. **Requires a configured database** (conversations and messages are persisted). Returns the result (and `run_id`, `conversation_id`, etc.). |
+| `POST /chat` | POST | **Single entry point** for user-initiated work: submit a task or continue a conversation. Same JSON body for one-shot and multi-turn. **Requires a configured database** (conversations and messages are persisted). Returns the result (and `run_id`, `conversation_id`, etc.). Optional header **`X-Request-ID`**: when present, the server registers a **SHA-256** of the value (max **4096** UTF-8 bytes; **400** if larger) until the handler finishes; a second in-flight chat with the same id → **409**. Enables `GET /processing/{request_id}` liveness. |
+| `GET /processing/{request_id}` | GET | **In-flight chat liveness** using the same string as `X-Request-ID` (max **4096** UTF-8 bytes; **400** if larger). Returns JSON with `status`: `processing` or `not_found`. Does not return the chat body. |
 | `GET /run/{id}` | GET | Look up **run** metadata for a run produced by a chat turn (e.g. polling or audit). Not a separate “run mode” entry point — every run is tied to a conversation/message. |
 | `GET /health` | GET | Simple health check — returns "ok" if the service is running. |
 
@@ -459,6 +460,8 @@ For the full architecture — the `BaseToolModule` interface, the Tool Registry,
 
 **What it does:** The Run Logger records every detail of every Orchestrator execution. This is the audit trail that lets you understand what happened, debug problems, and build trust in the system over time.
 
+**Implementation note:** `log_run_to_vault` registers a `RunArtifact` (result + optional assembled context + `conversation_id`). When **vault tracing** is enabled (`HARLE_TRACING_VAULT_ENABLED` and `OrchestratorService.vault_tracing_enabled`), the `VaultExporter` merges that payload with the OTel span tree into one `logs/YYYY/MM/<safe_stem>.md` file. When vault tracing is off, finalize writes the same document **without** the execution trace section. See [execution_tracing.md](../execution_tracing.md) and [data.md](./data.md) § logs.
+
 **Why logging matters more than you think:**
 
 Without logs, an AI agent is a black box. You get a result, but you do not know:
@@ -512,7 +515,7 @@ The Run Logger answers all of these questions for every single run.
   "result": {
     "type": "text",
     "length_chars": 1240,
-    "stored_as": "logs/2026-02/run_001_result.md"
+    "stored_as": "logs/2026-02/run_001.md"
   },
   "approval_actions": []
 }
@@ -524,12 +527,12 @@ The Run Logger answers all of these questions for every single run.
 
 **Run artifact behavior by status:**
 
-| Status | Vault result log | Vault context log | `runs` table row | Notes |
-|---|---|---|---|---|
-| `completed` | Yes | Optional | Yes | Result body contains the full model output. |
-| `failed` | Yes | Optional if context assembly completed and context logging is enabled | Yes | Result body contains a short error summary including the exception class. |
-| `timeout` | Yes | Optional if context assembly completed and context logging is enabled | Yes | Result body contains a short timeout summary and elapsed time when known. |
-| `aborted` | Best-effort | Optional only if assembled context already existed | Best-effort | Used for detected disconnect/cancellation before normal completion. |
+| Status | Vault merged log (`logs/YYYY/MM/<safe_stem>.md`) | `runs` table row | Notes |
+|---|---|---|---|
+| `completed` | Yes | Yes | Single file: Result + optional Assembled context + Execution trace (when tracing enabled). |
+| `failed` | Yes | Yes | Same layout; result section is a short error summary when applicable. |
+| `timeout` | Yes | Yes | Result section includes timeout summary and elapsed time when known. |
+| `aborted` | Best-effort | Best-effort | Context section only if assembly produced it; used for disconnect/cancellation before normal completion. |
 
 **Minimum data guaranteed in early-failure logs:**
 - `run_id`

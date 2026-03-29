@@ -7,6 +7,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI
 
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.config import load_settings
 from harle.debug.levels import TraceLevel
@@ -139,10 +140,15 @@ def create_app() -> FastAPI:
         tool_registry=tool_registry,
     )
 
+    processing_registry = build_processing_registry(
+        run_timeout_seconds=settings.HARLE_RUN_TIMEOUT_SECONDS,
+    )
+
     app = FastAPI(title="Harle", version="0.3.0")
     app.include_router(
         build_router(
             orchestrator=orchestrator,
+            processing_registry=processing_registry,
             db=db,
             search_engine=search_engine,
             settings=settings,

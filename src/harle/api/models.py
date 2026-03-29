@@ -69,6 +69,14 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class ProcessingStatusResponse(BaseModel):
+    """Status of an in-flight /chat request (CLI processing ping)."""
+
+    request_id: str
+    status: str  # "processing" | "not_found"
+    started_at: str | None = None  # ISO format when processing
+
+
 class ConnectionStatusItem(BaseModel):
     """Health status of a single connection (Notion, Trello, Tavily, etc.)."""
 

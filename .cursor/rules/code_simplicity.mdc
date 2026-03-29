@@ -1,0 +1,44 @@
+---
+description: Prefer simplicity and readability when writing or modifying code
+globs: "**/*.{py,ts,tsx,js,jsx,go,rs,java,kt,c,cpp,h,hpp}"
+alwaysApply: false
+---
+
+# Code Simplicity
+
+Prioritize **ease of understanding** over raw efficiency. When there is a trade-off, choose the approach that is simpler to read and maintain.
+
+## Principles
+
+1. **DRY** — extract repeated logic into shared helpers; never copy-paste blocks.
+2. **Meaningful abstractions** — small, well-named functions/classes that each do one thing; prefer composition over inheritance.
+3. **Module isolation** — keep modules loosely coupled; depend on interfaces/protocols, not concrete implementations; avoid circular imports.
+4. **Small signatures** — if a function takes more than 3-4 parameters, group related ones into a dataclass / struct / TypedDict / interface.
+5. **Readable naming** — names reveal intent; avoid abbreviations and single-letter variables outside tiny scopes.
+6. **Flat over nested** — prefer early returns and guard clauses to deeply nested if/else trees.
+7. **Simplicity over cleverness** — choose the straightforward approach even if a "clever" one is slightly faster.
+
+## Examples
+
+```python
+# BAD — long signature, nested logic
+def send(user_id, user_email, user_name, subject, body, cc, bcc, retries):
+    if user_email:
+        if subject:
+            if retries > 0:
+                ...
+
+# GOOD — grouped params, flat flow
+@dataclass
+class Recipient:
+    id: str
+    email: str
+    name: str
+
+def send(recipient: Recipient, message: Message, *, retries: int = 3):
+    if not recipient.email:
+        return
+    if not message.subject:
+        raise ValueError("subject required")
+    ...
+```
