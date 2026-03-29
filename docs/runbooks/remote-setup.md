@@ -72,7 +72,23 @@ chown harle:harle /home/harle/.ssh/authorized_keys
 chmod 600 /home/harle/.ssh/authorized_keys
 ```
 
-Optional: set a login password for **`harle`** (`passwd harle`) if you want **`sudo`** to work in later SSH sessions (the deploy user has no password by default).
+**Optional — password for `sudo` as `harle`:** The deploy user has **no password** by default, so `sudo` in a later SSH session as **`harle`** will fail unless you set one (or you configure passwordless sudo separately).
+
+While still logged in as **root** in this step-2 session (before switching to `harle` for daily use), run:
+
+```bash
+passwd harle
+```
+
+Enter the new password twice when prompted. Root may set any user’s password without knowing the old one.
+
+From any other account that can run commands as root (for example a rescue console or a second admin user), the same effect is:
+
+```bash
+sudo passwd harle
+```
+
+After a password is set, when you run `sudo` as **`harle`**, the shell will ask for **`harle`’s** login password (not root’s).
 
 Later SSH (baseline):
 
@@ -130,16 +146,29 @@ ssh -N -L 8000:127.0.0.1:8000 harle@<server-public-ip>
 
 Then on the laptop, `server_url` / `curl` can use `http://127.0.0.1:8000`.
 
-After edits: `docker compose up -d --force-recreate harle` and check `docker compose port harle 8000`.
+Do **not** run Compose yet: step 6 creates **`./vault`**, builds images, and starts **db** and **harle** together. If you already have the stack running and you change **`HARLE_PUBLISH_HOST`** (or other compose-time settings), recreate the app container and recheck the bind:
+
+```bash
+docker compose up -d --force-recreate harle
+docker compose port harle 8000
+```
 
 ## 6) Start Compose stack
 
+The **`harle`** image runs the app as **UID 1000**. The host directory bind-mounted as the vault (**`HARLE_VAULT_PATH`**, default **`./vault`**) must be writable by that UID, or startup seeding fails with **`Permission denied: '/data/vault/...'`** and the container restarts in a loop.
+
 ```bash
 mkdir -p ./vault
+sudo chown -R 1000:1000 ./vault
 docker compose build
 docker compose up -d
 docker compose ps
+docker compose port harle 8000
 ```
+
+If **`HARLE_VAULT_PATH`** is an absolute path (e.g. **`/home/harle/harle-vault`**), run **`chown -R 1000:1000`** on that path instead of **`./vault`**.
+
+The **`port`** line confirms how **`8000`** is published on the host (**`127.0.0.1`** vs **`0.0.0.0`**) after the first successful **`up`**.
 
 ## 7) Initialize DB and index
 
@@ -333,8 +362,10 @@ To confirm **log push-back**: run a chat on the server, wait for a run log under
 - **`Connection refused` to `:8000` from laptop:** On server, `docker compose port harle 8000`. If **`127.0.0.1:8000`**, set `HARLE_PUBLISH_HOST=0.0.0.0` in `.env` and recreate `harle`, **or** use an SSH tunnel and `127.0.0.1` on the laptop. If the bind is `0.0.0.0:8000`, check UFW (`sudo ufw status`) includes `8000/tcp` unless you use Tailscale-only phase 11.
 - **After phase 11, cannot SSH on public IP:** Expected; use Tailscale or console.
 - **Harle cannot connect to DB:** `DATABASE_URL` host must be `db`; password matches `POSTGRES_PASSWORD`.
+- **`Permission denied: '/data/vault/...'` / `harle` stuck Restarting:** The vault bind mount on the host is not writable by container UID **1000**. **`chown -R 1000:1000`** the host path from **`HARLE_VAULT_PATH`** in **`.env`** (default **`./vault`** under the repo), then **`docker compose up -d --force-recreate harle`**.
 - **Health fails:** `docker compose logs -f harle db`.
 - **Vault sync: fast-forward failed:** Local and server histories diverged. On the server, `cd "$HARLE_VAULT_PATH"` and resolve with `git status` / manual merge, or reset to remote only if you accept losing server-only commits (dangerous).
 - **Vault sync: `git push` failed:** Confirm vault deploy key has **write** access and `git@github-vault:...` (or your remote URL) uses the correct key.
+- **`Could not resolve hostname github-vault`:** Not a key problem — **`github-vault`** is an **SSH config alias**, not DNS. Add the **`Host github-vault`** block to **`/home/harle/.ssh/config`** (step **12b**), then retry clone. Without it, SSH never reaches GitHub.
 - **Vault sync: reindex WARN in log:** Harle not listening on loopback, wrong `HARLE_API_URL`, or API returned non-200. Check `curl -fsS http://127.0.0.1:8000/health` on the server and `.env` `HARLE_PUBLISH_HOST`.
 - **Vault sync: git commit failed:** Set `user.name` and `user.email` in the vault repo (step 12d).
