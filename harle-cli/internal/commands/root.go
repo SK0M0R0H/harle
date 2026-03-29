@@ -20,7 +20,7 @@ func NewRootCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			httpClient := client.NewHTTPClient(serverURL)
 			manager := session.NewManager(httpClient, contextValue, themeValue)
-			return manager.Run(cmd.Context())
+			return manager.Run()
 		},
 	}
 
