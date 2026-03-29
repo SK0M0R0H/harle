@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from harle.api.models import RunRequest
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.context.assembler import ContextAssembler
 from harle.dataset.reader import DatasetReader
@@ -18,6 +19,8 @@ from harle.db.models import Message
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.service import OrchestratorService
 from harle.search.types import QueryMetadata, SearchQuery, SearchResponse, SearchResult
+
+_TEST_PROCESSING_REGISTRY = build_processing_registry(run_timeout_seconds=60)
 
 
 class _StaticSearchEngine:
@@ -120,6 +123,7 @@ class TestApiPipelines:
         app.include_router(
             build_router(
                 orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=chat_db),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
                 db=chat_db,
             )
         )
@@ -140,7 +144,12 @@ class TestApiPipelines:
     def test_chat_validates_request(self) -> None:
         """POST /chat returns 422 for empty message or invalid context."""
         app = FastAPI()
-        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
+            )
+        )
         client = TestClient(app)
 
         empty_message = client.post("/chat", json={"message": "", "context": "work"})
@@ -161,6 +170,7 @@ class TestApiPipelines:
         app.include_router(
             build_router(
                 orchestrator=OrchestratorService(llm_provider=EchoProvider(), db=chat_db),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
                 db=chat_db,
             )
         )
@@ -186,7 +196,12 @@ class TestApiPipelines:
     def test_chat_requires_database(self) -> None:
         """POST /chat returns 503 when database is not configured."""
         app = FastAPI()
-        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
+            )
+        )
         client = TestClient(app)
 
         response = client.post("/chat", json={"message": "Hi", "context": "personal"})
@@ -196,7 +211,12 @@ class TestApiPipelines:
     def test_health_returns_ok(self) -> None:
         """GET /health returns 200 and status ok."""
         app = FastAPI()
-        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
+            )
+        )
         client = TestClient(app)
 
         response = client.get("/health")
@@ -206,7 +226,12 @@ class TestApiPipelines:
     def test_search_requires_search_engine(self) -> None:
         """GET /search returns 503 when search is not configured."""
         app = FastAPI()
-        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
+            )
+        )
         client = TestClient(app)
 
         response = client.get("/search", params={"q": "roadmap"})
@@ -219,6 +244,7 @@ class TestApiPipelines:
         app.include_router(
             build_router(
                 orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
                 search_engine=_StaticSearchEngine(),
             )
         )
@@ -237,7 +263,12 @@ class TestApiPipelines:
     def test_get_run_requires_database(self) -> None:
         """GET /run/{run_id} returns 503 when database is not configured."""
         app = FastAPI()
-        app.include_router(build_router(orchestrator=OrchestratorService(llm_provider=EchoProvider())))
+        app.include_router(
+            build_router(
+                orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
+            )
+        )
         client = TestClient(app)
 
         response = client.get("/run/run_abc123")
@@ -371,6 +402,7 @@ class TestApiPipelines:
         app.include_router(
             build_router(
                 orchestrator=OrchestratorService(llm_provider=EchoProvider()),
+                processing_registry=_TEST_PROCESSING_REGISTRY,
                 import_registry=registry,
                 settings=Settings(HARLE_DATASET_PATH=str(tmp_path)),
             )

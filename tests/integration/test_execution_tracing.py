@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.db.connection import Database
 from harle.db.models import Conversation, ExecutionTrace, Message
@@ -63,6 +64,7 @@ class TestExecutionTracingIntegration:
                     db=db,
                     dataset_path=str(tmp_path),
                 ),
+                processing_registry=build_processing_registry(run_timeout_seconds=60),
                 db=db,
             )
         )

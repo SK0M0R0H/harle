@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from harle.api.models import RunRequest
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.db.connection import Database
 from harle.llm.providers import EchoProvider
@@ -221,6 +222,7 @@ class TestPlanThenExecuteHttpPipeline:
                         vault_tracing_enabled=False,
                         use_agent_runner=True,
                     ),
+                    processing_registry=build_processing_registry(run_timeout_seconds=60),
                     db=chat_db,
                 )
             )

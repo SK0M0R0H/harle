@@ -2,7 +2,7 @@
 title: "Harle Orchestrator — Architecture & Functionality"
 tags: [orchestrator, architecture, fastapi, agents, routing, context-assembly, tools]
 context: global
-last_updated: 2026-03-25
+last_updated: 2026-03-29
 summary: "Describes the Orchestrator's internal modules, request lifecycle, conversation mode, and technology choices for Harle's central coordination component."
 ---
 
@@ -75,7 +75,8 @@ Flask is simpler but synchronous by default. Since every Orchestrator request in
 
 | Endpoint | Method | What it does |
 |---|---|---|
-| `POST /chat` | POST | **Single entry point** for user-initiated work: submit a task or continue a conversation. Same JSON body for one-shot and multi-turn. **Requires a configured database** (conversations and messages are persisted). Returns the result (and `run_id`, `conversation_id`, etc.). |
+| `POST /chat` | POST | **Single entry point** for user-initiated work: submit a task or continue a conversation. Same JSON body for one-shot and multi-turn. **Requires a configured database** (conversations and messages are persisted). Returns the result (and `run_id`, `conversation_id`, etc.). Optional header **`X-Request-ID`**: when present, the server registers a **SHA-256** of the value (max **4096** UTF-8 bytes; **400** if larger) until the handler finishes; a second in-flight chat with the same id → **409**. Enables `GET /processing/{request_id}` liveness. |
+| `GET /processing/{request_id}` | GET | **In-flight chat liveness** using the same string as `X-Request-ID` (max **4096** UTF-8 bytes; **400** if larger). Returns JSON with `status`: `processing` or `not_found`. Does not return the chat body. |
 | `GET /run/{id}` | GET | Look up **run** metadata for a run produced by a chat turn (e.g. polling or audit). Not a separate “run mode” entry point — every run is tied to a conversation/message. |
 | `GET /health` | GET | Simple health check — returns "ok" if the service is running. |
 

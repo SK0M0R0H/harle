@@ -3,9 +3,12 @@ package session
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/skm/harle/harle-cli/internal/client"
 	"github.com/skm/harle/harle-cli/internal/render"
@@ -28,7 +31,9 @@ func NewManager(httpClient *client.HTTPClient, contextValue string, theme string
 	}
 }
 
-func (m *Manager) Run(ctx context.Context) error {
+// Run starts the interactive REPL. Each chat turn uses a fresh signal.NotifyContext
+// so SIGINT only cancels the in-flight request, not later turns.
+func (m *Manager) Run() error {
 	fmt.Println(m.renderer.Header("Harle v0.2.0"), m.renderer.Muted(fmt.Sprintf("| context: %s | theme: %s (%s)", m.Context, m.renderer.Theme, render.ThemeConfigSource(m.Theme))))
 	fmt.Println(m.renderer.Muted("Type a message, /help, or /quit."))
 
@@ -55,16 +60,31 @@ func (m *Manager) Run(ctx context.Context) error {
 			continue
 		}
 
-		response, err := m.Client.Chat(
-			ctx,
-			client.RunRequest{
-				Message:        input,
-				Context:        m.Context,
-				ConversationID: m.conversationID,
-			},
-		)
+		var response client.RunResponse
+		var err error
+		func() {
+			reqCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stopSignals()
+			response, err = m.Client.ChatWithPolling(
+				reqCtx,
+				client.RunRequest{
+					Message:        input,
+					Context:        m.Context,
+					ConversationID: m.conversationID,
+				},
+				client.PollConfigFromEnvironment(),
+			)
+		}()
 		if err != nil {
-			fmt.Printf("%s %v\n", m.renderer.Error("Error:"), err)
+			switch {
+			case errors.Is(err, client.ErrServerUnreachable),
+				errors.Is(err, client.ErrProcessingLost):
+				fmt.Printf("%s %v\n", m.renderer.Error("Error:"), err)
+			case errors.Is(err, client.ErrChatServerTimeout):
+				fmt.Printf("%s Server timed out processing the request (took too long).\n", m.renderer.Error("Error:"))
+			default:
+				fmt.Printf("%s %v\n", m.renderer.Error("Error:"), err)
+			}
 			continue
 		}
 
