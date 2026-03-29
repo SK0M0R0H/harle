@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from harle.api.models import RunRequest
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.llm.providers import EchoProvider
 from harle.orchestrator.reflection import ReflectionRunRecord
@@ -56,11 +57,12 @@ class TestReflectionVaultAndPersistence:
                 llm_provider=EchoProvider(),
                 db=db,
                 dataset_path=str(tmp_path),
+                vault_tracing_enabled=False,
                 use_agent_runner=True,
             )
             svc.chat(request=RunRequest(message="hello", context="work"))
 
-        result_files = list(tmp_path.glob("logs/**/*_result.md"))
+        result_files = list(tmp_path.glob("logs/**/*.md"))
         assert len(result_files) == 1
         content = result_files[0].read_text(encoding="utf-8")
         assert "## Reflection" in content
@@ -128,7 +130,13 @@ class TestReflectionHttpPipeline:
                 use_agent_runner=True,
             )
             app = FastAPI()
-            app.include_router(build_router(orchestrator=svc, db=db))
+            app.include_router(
+                build_router(
+                    orchestrator=svc,
+                    processing_registry=build_processing_registry(run_timeout_seconds=60),
+                    db=db,
+                )
+            )
             client = TestClient(app)
             r = client.post(
                 "/chat",

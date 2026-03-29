@@ -2,7 +2,7 @@
 title: "Harle Execution Tracing — Architecture & Functionality"
 tags: [execution-tracing, tracing, observability, opentelemetry, cli, vault, architecture]
 context: global
-last_updated: 2026-03-12
+last_updated: 2026-03-25
 summary: "Describes the execution tracing system built on OpenTelemetry that captures hierarchical processing traces across all subsystems, stores them to DB and vault unconditionally, and surfaces them in the UI when debug mode is active."
 ---
 
@@ -25,7 +25,7 @@ Harle already has two kinds of logging:
 
 1. **Standard Python logging** (`logging.getLogger(__name__)`) — used throughout the codebase for developer-facing messages (`INFO`, `WARNING`, `ERROR`). This is operational logging: it goes to the server console and is useful for diagnosing crashes or configuration problems. It is **not** visible to the end user.
 
-2. **Run Logger** (`src/harle/logging/run_logger.py`) — writes per-run result files and optional context snapshots to the vault `logs/` directory and to PostgreSQL. This is a structured record of **what** happened (which agent, which tools, final result), but not **how** it happened step by step.
+2. **Run Logger** (`src/harle/logging/run_logger.py`) — registers per-run result and optional assembled context in `RunArtifactStore` for merging into a single vault log file (with the execution trace) under `logs/`; metadata still lands in PostgreSQL `runs`. This is a structured record of **what** happened (which agent, which tools, final result), but not **how** it happened step by step until combined with the trace in that file.
 
 Neither of these answers the question: *"Why did Harle do that?"*
 
@@ -332,29 +332,43 @@ trace.set_tracer_provider(provider)
 
 ### 1. Vault exporter (always active)
 
-Receives completed spans, reconstructs the span tree, and writes a human-readable Markdown file to the vault alongside the Run Logger's output:
+Receives completed spans, reconstructs the span tree, **pops** the corresponding `RunArtifact` (if the orchestrator registered one), and writes **one** Markdown file per run under `logs/YYYY/MM/`:
 
 ```
 vault/
 └── logs/
     └── 2026/
         └── 03/
-            ├── run_abc123_result.md       ← Run Logger (existing)
-            ├── run_abc123_context.md      ← Run Logger (existing, optional)
-            └── run_abc123_trace.md        ← Execution trace (new)
+            └── run_abc123.md   ← Result + optional Assembled context + Execution trace (single file)
 ```
 
-**Example `run_abc123_trace.md`:**
+The filename stem is a sanitized form of `run_id` (unsafe characters replaced); the full `run_id` stays in YAML frontmatter. When no artifact was registered (e.g. tracing-only tests), the exporter still writes a trace-only document with minimal frontmatter. When vault tracing is disabled at runtime, the orchestrator writes the same layout **without** the execution trace section via finalize fallback.
+
+**Example merged `run_abc123.md` (excerpt — Result section omitted for brevity in trace portion):**
 
 ```markdown
 ---
 run_id: run_abc123
 timestamp: 2026-03-12T14:23:01Z
+agent: secretary
+status: completed
+context_scope: work
+conversation_id: conv_01
 total_spans: 14
 duration_ms: 4200
 ---
 
-# Debug Trace — run_abc123
+# Result
+…
+
+# Assembled context
+…
+
+---
+
+# Execution Trace
+
+>14 spans | 4200ms
 
 ## [STEP] handle_request (4200ms)
 
@@ -704,7 +718,7 @@ A complete trace for the request *"Find stalled tasks in Trello"*:
 │   ├── [DETAIL] P1: search returned 3 results — context
 │   │   ├── [TRACE] Whoosh query: "trello stalled tasks" — search
 │   │   ├── [TRACE] Result: workflows/task-triage.md (score 4.2) — search
-│   │   ├── [TRACE] Result: logs/2026/02/run_prev01_result.md (score 2.1) — search
+│   │   ├── [TRACE] Result: logs/2026/02/run_prev01.md (score 2.1) — search
 │   │   └── [TRACE] Result: notes/trello-boards.md (score 1.8) — search
 │   ├── [DETAIL] P3: 1 prior run referenced — context
 │   └── [DETAIL] Token budget: 3420 / 4096 (83%) — context
@@ -719,7 +733,7 @@ A complete trace for the request *"Find stalled tasks in Trello"*:
 │   │   └── [TRACE] Response: 482 tokens, finish_reason: stop — orchestrator
 │   └── [STEP] Agent execution complete (3800ms, 2 iterations) — orchestrator
 └── [STEP] Run logged — orchestrator
-    ├── [DETAIL] Vault: logs/2026/03/run_abc123_result.md — logging
+    ├── [DETAIL] Vault: logs/2026/03/run_abc123.md — logging
     └── [DETAIL] DB: runs table updated — logging
 ```
 
@@ -775,7 +789,7 @@ The system is implemented incrementally. Each phase is independently useful.
 - Wire `configure_tracing()` into application startup (`bootstrap.py`).
 - Add root span creation in the orchestrator request lifecycle.
 
-**Result:** Every run produces a `_trace.md` file in the vault. No CLI changes yet.
+**Result:** The vault exporter writes merged run logs (result + optional context + execution trace) as one `.md` file per run under `logs/YYYY/MM/` when tracing is enabled; see § Vault exporter above. No CLI changes yet.
 
 ### Phase 2: Database exporter and CLI streaming
 

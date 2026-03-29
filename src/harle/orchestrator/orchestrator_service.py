@@ -43,6 +43,11 @@ class OrchestratorService(ExecutionMixin, ChatMixin, FinalizeMixin):
     context_assembler: ContextAssembler | None = field(default=None)
     db: Database | None = field(default=None)
     dataset_path: str | None = field(default=None)
+    #: When ``True`` (default, matches :func:`~harle.orchestrator.builder.build_orchestrator`),
+    #: :class:`~harle.debug.exporters.vault.VaultExporter` is the only writer of execution
+    #: traces and merges them into the vault log after OTel export. Set ``False`` in tests
+    #: that use ``dataset_path`` but do not install a vault exporter (see ``tests/tracing_harness.py``).
+    vault_tracing_enabled: bool = field(default=True)
     run_log_store_context: bool = field(default=False)
     tool_registry: ToolRegistry | None = field(default=None)
     #: Resolved tier mapping; when ``None``, :meth:`effective_model_tier_config` uses ``model`` for all tiers.

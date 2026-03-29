@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,15 +17,24 @@ func newExecCommand(serverURL *string, contextValue *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			httpClient := client.NewHTTPClient(*serverURL)
 			message := strings.Join(args, " ")
-			response, err := httpClient.Chat(
-				context.Background(),
+			response, err := httpClient.ChatWithPolling(
+				cmd.Context(),
 				client.RunRequest{
 					Message: message,
 					Context: *contextValue,
 				},
+				client.PollConfigFromEnvironment(),
 			)
 			if err != nil {
-				return err
+				switch {
+				case errors.Is(err, client.ErrServerUnreachable),
+					errors.Is(err, client.ErrProcessingLost):
+					return err
+				case errors.Is(err, client.ErrChatServerTimeout):
+					return fmt.Errorf("server timed out processing the request (took too long): %w", err)
+				default:
+					return err
+				}
 			}
 			fmt.Println(response.Result)
 			return nil

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from harle.api.processing_registry import build_processing_registry
 from harle.api.routes import build_router
 from harle.config import Settings
 from harle.db.conversations import create_conversation
@@ -34,6 +35,7 @@ def _make_client(
         orchestrator = OrchestratorService(llm_provider=EchoProvider())
     router = build_router(
         orchestrator=orchestrator,
+        processing_registry=build_processing_registry(run_timeout_seconds=60),
         db=db,  # type: ignore[arg-type]
         search_engine=search_engine,  # type: ignore[arg-type]
         settings=settings,
@@ -66,6 +68,27 @@ class TestHealthEndpoint:
         resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
+
+
+class TestProcessingEndpoint:
+    """GET /processing/{request_id} — in-flight chat liveness."""
+
+    def test_unknown_returns_not_found(self, client: TestClient) -> None:
+        rid = "550e8400-e29b-41d4-a716-446655440000"
+        resp = client.get(f"/processing/{rid}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["request_id"] == rid
+        assert data["status"] == "not_found"
+        assert data["started_at"] is None
+
+    def test_oversized_request_id_returns_400(self, client: TestClient) -> None:
+        from harle.api.processing_registry import MAX_REQUEST_ID_BYTES
+
+        huge = "x" * (MAX_REQUEST_ID_BYTES + 1)
+        resp = client.get(f"/processing/{huge}")
+        assert resp.status_code == 400
+        assert "maximum length" in resp.json()["detail"].lower()
 
 
 class TestHealthConnectionsEndpoint:

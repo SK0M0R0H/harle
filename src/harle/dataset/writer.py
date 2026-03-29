@@ -9,12 +9,21 @@ Agents writing to ``logs/`` may auto-approve; writes to
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 LOGS_DIR = "logs"
+LOG_FILENAME_STEM_MAX = 120
+
+
+def safe_log_filename_stem(run_id: str) -> str:
+    """Make *run_id* safe for log filenames (no ``/``, colons, or problematic unicode)."""
+    stem = re.sub(r"[^\w.\-]+", "_", run_id, flags=re.UNICODE)
+    stem = stem.strip("._") or "trace"
+    return stem[:LOG_FILENAME_STEM_MAX]
 
 
 def log_dir_for(timestamp: datetime) -> str:

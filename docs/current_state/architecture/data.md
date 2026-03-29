@@ -2,7 +2,7 @@
 title: "Harle Data Layer — Current State"
 tags: [data-layer, current-state, architecture, dataset, indexer, search, implementation-status]
 context: global
-last_updated: 2026-03-21
+last_updated: 2026-03-25
 summary: "Tracks what the Data Layer (User Dataset, Indexer, Search) implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Data Layer — Architecture & Functionality](../../trd/arc
 
 ## Overall Status
 
-The Data Layer is **partially implemented**. The fundamental principle (data external to the repo) is respected via config and env vars. The **User Dataset** has a working reader, writer, frontmatter parser, and sync convention; the **Indexer** has the full six-table schema, hash-based sync for `file_index`, **tiktoken `token_count`**, and optional **chunk-aware Whoosh** updates when `whoosh_index_path` is set; the **Run Logger** writes result and optional context files to `logs/YYYY/MM/` and records runs in the DB. The **Search Algorithm** supports Phase 1 (keyword) and Phase 2 (Whoosh with **chunking**); Phase 3 (pgvector / hybrid RRF) is not implemented. LLM auto-summary for `file_index.summary` is not wired.
+The Data Layer is **partially implemented**. The fundamental principle (data external to the repo) is respected via config and env vars. The **User Dataset** has a working reader, writer, frontmatter parser, and sync convention; the **Indexer** has the full six-table schema, hash-based sync for `file_index`, **tiktoken `token_count`**, and optional **chunk-aware Whoosh** updates when `whoosh_index_path` is set; the **Run Logger** registers run artifacts merged by **VaultExporter** (or finalize fallback) into a single `logs/YYYY/MM/<safe_stem>.md` per run and records runs in the DB. The **Search Algorithm** supports Phase 1 (keyword) and Phase 2 (Whoosh with **chunking**); Phase 3 (pgvector / hybrid RRF) is not implemented. LLM auto-summary for `file_index.summary` is not wired.
 
 From the **Data Layer Best Practices** TRD: token budgeting, explicit §4.2 context ordering (top/supporting split + end-positioned conversation history), frontmatter, the files-vs-DB split, **chunking** (`indexing/chunker.py`), **chunk-aware Whoosh indexing**, and **contextual enrichment at index time** (prepended metadata block per §5.3) are in place. Gaps include hybrid/semantic retrieval (pgvector), memory/prior-run retrieval integration, and auto-generated LLM summaries.
 
@@ -31,7 +31,7 @@ From the **Data Layer Best Practices** TRD: token budgeting, explicit §4.2 cont
 | User Dataset: frontmatter | Implemented | `dataset/frontmatter.py`: parse YAML frontmatter; title, tags, context, last_updated supported. → Best practices §2 (how to structure Markdown files), §8 (required frontmatter). |
 | User Dataset: writer | Implemented | `dataset/writer.py`: write_log_file; path under `logs/` with approval policy (logs/ auto-approve; others require approval). → Best practices §3. |
 | User Dataset: directory structure | Convention only | prompts/, policies/, workflows/, knowledge/, examples/, logs/ are documented and used; not enforced by code. → Best practices §11 (file authoring). |
-| User Dataset: logs format | Implemented | `logging/run_logger.py`: `logs/YYYY/MM/<run_id>_result.md`, `_context.md`; YAML frontmatter (run_id, timestamp, agent, status, context_scope). → Best practices §3. |
+| User Dataset: logs format | Implemented | `logging/run_logger.py` + `logging/artifacts.py` + `debug/exporters/vault.py`: one `logs/YYYY/MM/<safe_stem>.md` with Result, optional Assembled context, optional Execution trace; frontmatter includes optional `conversation_id`, `total_spans`, `duration_ms`. → Best practices §3. |
 | User Dataset: agent write controls | Partially implemented | Writer has path checks; tools/orchestrator approval flow for non-logs writes not fully wired (see tools current-state). |
 | User Dataset: sync (Git / external) | Not implemented | No `dataset/sync.py` Git pull or periodic sync in app; user/manual or external process. |
 | Indexer: file_index table | Implemented | `db/models.py` FileIndex: file_path, title, tags, context, content_hash, char_count, token_count, summary, last_modified, last_indexed, created_at. → Best practices §3, §8. |
@@ -85,8 +85,8 @@ From the **Data Layer Best Practices** TRD: token budgeting, explicit §4.2 cont
 
 ### 3. User Dataset: writer and logs (§3)
 
-- **write_log_file** writes to vault-relative paths (e.g. `logs/2026/02/run_xyz_result.md`); approval policy: writes under `logs/` can auto-approve; other paths require approval.
-- **Run Logger** builds result and optional context files with YAML frontmatter (run_id, timestamp, agent, status, context_scope) and body; returns result_path and context_path to the orchestrator, which persists them on the `runs` row. Supports auditability and “open by path” as in the Best Practices TRD.
+- **write_log_file** writes to vault-relative paths (e.g. `logs/2026/02/run_xyz.md`); approval policy: writes under `logs/` can auto-approve; other paths require approval.
+- **Run Logger** registers `RunArtifact` and returns `result_path` (merged log path) and `context_path=None`; finalize or `VaultExporter` writes the markdown. Orchestrator persists paths on `runs` (`context_path` null for new runs when context is embedded).
 
 ### 4. Indexer: schema and file_index sync
 
