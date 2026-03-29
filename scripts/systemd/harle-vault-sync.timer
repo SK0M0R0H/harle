@@ -1,0 +1,15 @@
+# User systemd timer: trigger harle-vault-sync.service every 2 minutes.
+# Pair with harle-vault-sync.service; enable with:
+#   systemctl --user enable --now harle-vault-sync.timer
+
+[Unit]
+Description=Harle vault sync every 2 minutes
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=2min
+AccuracySec=30s
+Unit=harle-vault-sync.service
+
+[Install]
+WantedBy=timers.target

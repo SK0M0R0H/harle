@@ -1,0 +1,29 @@
+# User systemd oneshot: run Harle vault sync (git pull, reindex, push logs).
+# Install: copy or symlink to ~/.config/systemd/user/ and adjust paths below.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/systemd/harle-vault-sync.service ~/.config/systemd/user/
+#   cp scripts/systemd/harle-vault-sync.timer ~/.config/systemd/user/
+#   # If the repo is not at ~/harle, edit EnvironmentFile= and ExecStart= paths in the copied unit.
+#   systemctl --user daemon-reload
+#   loginctl enable-linger "$USER"
+#   systemctl --user enable --now harle-vault-sync.timer
+#
+# Required in EnvironmentFile (.env): HARLE_VAULT_PATH (absolute host path to vault git checkout).
+# Optional: HARLE_API_URL, HARLE_API_TOKEN, VAULT_SYNC_BRANCH, VAULT_SYNC_LOG_FILE.
+
+[Unit]
+Description=Harle vault git sync (pull, reindex, push server logs)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# So HARLE_VAULT_PATH=./vault in .env resolves to <repo>/vault.
+WorkingDirectory=%h/harle
+# Paths assume repo clone at ~/harle; change %h/harle if your layout differs.
+EnvironmentFile=-%h/harle/.env
+ExecStart=%h/harle/scripts/vault-sync.sh
+
+[Install]
+WantedBy=default.target
