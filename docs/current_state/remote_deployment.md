@@ -2,7 +2,7 @@
 title: "Harle Remote Deployment — Current State"
 tags: [deployment, remote, infrastructure, security, cd, monitoring, current-state, implementation-status, vault-sync, api-auth]
 context: global
-last_updated: 2026-03-29
+last_updated: 2026-03-30
 summary: "Tracks what the remote deployment infrastructure implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Overall Status
 
-**Phases 1–3 are implemented.** Harle has a manual remote deployment baseline (Docker, compose, server init, runbook, CLI remote URL), optional Git-based vault synchronization, **and** optional bearer API authentication with client identification logging. Phases 4–6 remain pending.
+**Phases 1–4 are implemented.** Harle has a manual remote deployment baseline (Docker, compose, server init, runbook, CLI remote URL), optional Git-based vault synchronization, bearer API authentication with client identification logging, **and** a continuous deployment pipeline (GitHub Actions → GHCR → server pull timer). Phases 5–6 remain pending.
 
 ---
 
@@ -37,14 +37,16 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 | CLI remote server config | Implemented | CLI resolves server URL via `--server`, `HARLE_SERVER_URL`, or `~/.config/harle/cli.yaml` |
 | CLI API token | Implemented | `--token`, `HARLE_API_TOKEN`, or `api_token` in `cli.yaml`; sends `Authorization` + `X-Harle-Client: harle-cli` |
 | Client identification header | Implemented | Optional `X-Harle-Client` logged on `/chat`, `/init`, `/reindex`, `/import`, capture interview routes; `vault-sync.sh` sends `vault-sync` |
-| CD pipeline (GitHub Actions) | Not implemented | No `.github/workflows/deploy.yml` |
-| Deploy pull script | Not implemented | No `scripts/deploy-pull.sh` |
+| CD pipeline (GitHub Actions) | Implemented | `.github/workflows/deploy.yml` — lint, test, build+push to GHCR, post-deploy health check |
+| Production compose override | Implemented | `docker-compose.prod.yml` — replaces `build:` with `image:` from GHCR |
+| Deploy pull script | Implemented | `scripts/deploy-pull.sh` — pulls image, compares digest, restarts if changed, health check |
+| Deploy pull systemd timer | Implemented | `scripts/systemd/harle-deploy-pull.service` + `.timer` (5 min interval) |
 | Health monitoring script | Not implemented | No `scripts/health-monitor.sh` |
 | Telegram alerting | Not implemented | — |
 | DB backup cron | Not implemented | — |
 | Telegram bot interface | Not implemented | — |
 | Caddy reverse proxy | Not implemented | — |
-| `.env.example` (server) | Implemented | Includes `HARLE_VAULT_PATH`, `HARLE_API_URL`, `HARLE_API_TOKEN` (commented), deployment keys |
+| `.env.example` (server) | Implemented | Includes `HARLE_VAULT_PATH`, `HARLE_API_URL`, `HARLE_API_TOKEN`, `HARLE_IMAGE_TAG`, `DEPLOY_LOG_FILE` (commented), deployment keys |
 
 ---
 
@@ -113,8 +115,14 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ### 4. Continuous deployment (Phase 4)
 
-- **Missing:** GitHub Actions workflow for build+push, server-side deploy-pull script, systemd timer.
-- **Unlocks:** Push to main → automatic deployment. No SSH needed for routine updates.
+- **Status:** Implemented.
+- **Delivered:**
+  - `.github/workflows/deploy.yml` — on push to `main`: lint → unit tests → Docker build → push to GHCR (`latest` + `sha-<commit>` tags). Includes `workflow_dispatch` for branch testing. Post-deploy `verify-deploy` job curls server `/health` after ~8 minutes (requires `DEPLOY_HOST` secret).
+  - `docker-compose.prod.yml` — production override that replaces `build:` with `image: ghcr.io/sk0m0r0h/harle:${HARLE_IMAGE_TAG:-latest}`.
+  - `scripts/deploy-pull.sh` — pulls image via compose, compares digest with running container, restarts `harle` if changed, retries health check up to 6 times.
+  - `scripts/systemd/harle-deploy-pull.service` + `.timer` — user systemd units; polls every 5 minutes.
+  - Runbook §13 — GHCR auth, prod compose, timer install, rollback procedure, verification, troubleshooting.
+  - `.env.example` — `HARLE_IMAGE_TAG` and `DEPLOY_LOG_FILE` added.
 
 ### 5. Monitoring and alerting (Phase 5)
 
@@ -130,7 +138,7 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Key Deviations from TRD
 
-- **Compose image source differs for Phase 1:** the compose file builds from local source (`build: .`) instead of pulling from `ghcr.io`. This is intentional and aligns with Phase 1 manual deployment; image registry flow is deferred to Phase 4 (CD).
+- **Compose uses dual-file approach for image source:** `docker-compose.yml` retains `build: .` for local development; `docker-compose.prod.yml` overrides with `image:` from GHCR for production. The TRD's single-file approach is replaced by this compose override pattern, which keeps dev and prod paths cleanly separated.
 - **Server init script includes deploy-key bootstrap:** `scripts/server-init.sh` now generates a GitHub deploy key and SSH config to support private repository cloning. This expands convenience beyond the minimal hardening list but supports practical private-repo deployment.
 - **Vault sync uses `OnUnitActiveSec=2min`:** interval is ~2 minutes from end of each run (not wall-clock `OnCalendar`), which matches the TRD intent; exact cadence varies slightly with job duration.
 
@@ -138,4 +146,4 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Assessment
 
-Remote deployment has a working manual baseline, **optional** automated vault Git sync and reindex, and **optional** bearer API authentication for safe multi-client remote use. Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. The next highest-value gaps are **CD (Phase 4)**, **monitoring (Phase 5)**, and the **Telegram bot (Phase 6)**.
+Remote deployment has a working manual baseline, automated vault Git sync and reindex, bearer API authentication for safe multi-client remote use, and a continuous deployment pipeline (push to `main` -> GHCR -> server auto-pull). Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. The next highest-value gaps are **monitoring (Phase 5)** and the **Telegram bot (Phase 6)**.

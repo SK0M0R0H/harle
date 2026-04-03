@@ -1,8 +1,8 @@
 ---
 title: "Harle Remote Setup Runbook"
-tags: [deployment, remote, runbook, vps, docker, ufw, github-ssh, tailscale-optional, vault-sync]
+tags: [deployment, remote, runbook, vps, docker, ufw, github-ssh, tailscale-optional, vault-sync, cd, ghcr]
 context: global
-last_updated: 2026-03-29
+last_updated: 2026-03-30
 summary: "Provision a VPS and run Harle with Docker Compose over the public network; optional Tailscale hardening; optional Git-based vault sync with systemd timer."
 ---
 
@@ -395,6 +395,119 @@ The service loads **`~/harle/.env`**, which must define **`HARLE_VAULT_PATH`**. 
 
 To confirm **log push-back**: run a chat on the server, wait for a run log under `logs/` in the vault, then after the next sync run `git pull` on the laptop inside the vault repo and confirm new commits.
 
+## 13) Continuous deployment from GHCR (Phase 4)
+
+Use this **after** baseline (steps 1–10) and vault sync (step 12) work. Pushes to `main` trigger a GitHub Actions workflow that builds a Docker image and pushes it to **GitHub Container Registry** (`ghcr.io`). A systemd timer on the server polls GHCR every 5 minutes, pulls the new image if the digest changed, restarts the `harle` service, and verifies health.
+
+### 13a) GitHub secrets
+
+In the GitHub repository **Settings** → **Secrets and variables** → **Actions**, add:
+
+| Secret | Value | Purpose |
+|--------|-------|---------|
+| `DEPLOY_HOST` | Server's public IP (e.g. `203.0.113.42`) | Post-deploy health check from GitHub Actions (main branch only) |
+
+`DEPLOY_HOST` is required for `main` deploys: the `verify-deploy` job fails if this secret is missing.
+
+`GITHUB_TOKEN` (automatic) handles GHCR authentication in the workflow — no extra secret needed for the CI side.
+
+### 13b) GHCR authentication on the server
+
+The server needs to pull images from the **private** `ghcr.io` registry. Create a GitHub **Personal Access Token (classic)** with the **`read:packages`** scope:
+
+1. Go to **GitHub** → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token**.
+2. Select scope **`read:packages`** only. Set a descriptive name (e.g. `harle-server-ghcr-pull`) and a long expiration.
+3. Copy the token.
+
+On the server as **`harle`**:
+
+```bash
+echo "<paste-token>" | docker login ghcr.io -u <github-username> --password-stdin
+```
+
+Docker stores credentials in `~/.docker/config.json`. Verify:
+
+```bash
+docker pull ghcr.io/sk0m0r0h/harle:latest
+```
+
+If the image hasn't been pushed yet (first-time setup), this will fail — that's expected; it will succeed after the first workflow run on `main`.
+
+### 13c) Switch Compose to use GHCR image
+
+The repo already includes `docker-compose.prod.yml` (override that replaces `build:` with `image:` from GHCR). From now on, use the production override for all Compose commands on the server:
+
+```bash
+cd ~/harle
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull harle
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+To simplify, add a shell alias to `~/.bashrc`:
+
+```bash
+alias dcp='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
+```
+
+Then: `dcp pull harle && dcp up -d`.
+
+### 13d) Install deploy-pull systemd timer
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/harle/scripts/systemd/harle-deploy-pull.service ~/.config/systemd/user/
+cp ~/harle/scripts/systemd/harle-deploy-pull.timer ~/.config/systemd/user/
+# If Harle is not at ~/harle, edit both files and replace %h/harle with your clone path.
+systemctl --user daemon-reload
+loginctl enable-linger "$USER"
+systemctl --user enable --now harle-deploy-pull.timer
+systemctl --user list-timers harle-deploy-pull.timer
+```
+
+The timer runs `scripts/deploy-pull.sh` every 5 minutes. Logs go to `DEPLOY_LOG_FILE` (default `~/deploy-pull.log`).
+
+Optional variables in `~/harle/.env`:
+
+| Variable | Purpose |
+|----------|---------|
+| `HARLE_IMAGE_TAG` | Image tag to pull (default `latest`). Set to `sha-<commit>` for rollback. |
+| `DEPLOY_LOG_FILE` | Log path (default `~/deploy-pull.log`). |
+| `HARLE_API_URL` | Base URL for health check (default `http://127.0.0.1:8000`). |
+
+### 13e) Rollback
+
+Every image pushed by CI is tagged with its commit SHA (e.g. `sha-a1b2c3d`). To roll back to a known-good version:
+
+1. Find the good commit SHA (from `git log`, GitHub commits page, or `~/deploy-pull.log`).
+2. Set the tag in `.env`:
+
+   ```bash
+   cd ~/harle
+   # Replace with the actual short SHA of the known-good commit.
+   echo 'HARLE_IMAGE_TAG=sha-a1b2c3d' >> .env
+   ```
+
+   Or edit `.env` directly to change the existing `HARLE_IMAGE_TAG` line.
+
+3. Pull and restart:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull harle
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d harle
+   ```
+
+4. Verify: `curl -fsS http://127.0.0.1:8000/health`
+
+5. After fixing `main`, remove or reset `HARLE_IMAGE_TAG` in `.env` (or set it back to `latest`) so the deploy timer picks up new images again.
+
+### 13f) Verify
+
+1. Push a code change to `main` on GitHub.
+2. Check **GitHub Actions** → **Deploy** workflow: lint, test, build-and-push should all pass.
+3. On the server, wait up to ~5 minutes, then check: `tail -20 ~/deploy-pull.log` — expect "New image detected" and "Deploy complete".
+4. Verify: `curl -fsS http://127.0.0.1:8000/health` → `{"status":"ok"}`.
+5. On GitHub, the `verify-deploy` job should show a green check (if `DEPLOY_HOST` secret is configured).
+
 ## Troubleshooting
 
 - **`git fetch` / `git pull` → `Permission denied (publickey)`:** Run Git as **`harle`**, not root (see step 4). Check `sudo -u harle ssh -T git@github.com` and `chown -R harle:harle /home/harle/harle` if needed.
@@ -409,3 +522,7 @@ To confirm **log push-back**: run a chat on the server, wait for a run log under
 - **`Could not resolve hostname github-vault`:** Not a key problem — **`github-vault`** is an **SSH config alias**, not DNS. Add the **`Host github-vault`** block to **`/home/harle/.ssh/config`** (step **12b**), then retry clone. Without it, SSH never reaches GitHub.
 - **Vault sync: reindex WARN in log:** Harle not listening on loopback, wrong `HARLE_API_URL`, or API returned non-200. Check `curl -fsS http://127.0.0.1:8000/health` on the server and `.env` `HARLE_PUBLISH_HOST`.
 - **Vault sync: git commit failed:** Set `user.name` and `user.email` in the vault repo (step 12d).
+- **Deploy pull: `docker compose pull` → authentication required:** Run `docker login ghcr.io` as `harle` (step 13b). Token may have expired — regenerate if needed.
+- **Deploy pull: image unchanged but code was pushed:** Check that the Deploy workflow passed on GitHub Actions. If it failed at test or build, no image was pushed.
+- **Deploy pull: health check fails after restart:** Check `docker compose logs -f harle` for startup errors. To rollback: set `HARLE_IMAGE_TAG=sha-<known-good>` in `.env` and re-run `deploy-pull.sh` (step 13e).
+- **Deploy pull: `verify-deploy` job fails on GitHub:** Server may be down or unreachable. SSH in and check `docker compose ps` and `~/deploy-pull.log`. Verify `DEPLOY_HOST` secret matches the server's public IP.

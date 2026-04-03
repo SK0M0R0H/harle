@@ -1,0 +1,27 @@
+# User systemd oneshot: pull latest Harle image from GHCR, restart if changed.
+# Install: copy to ~/.config/systemd/user/ and adjust paths below.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/systemd/harle-deploy-pull.service ~/.config/systemd/user/
+#   cp scripts/systemd/harle-deploy-pull.timer ~/.config/systemd/user/
+#   # If the repo is not at ~/harle, edit EnvironmentFile= and ExecStart= paths in the copied unit.
+#   systemctl --user daemon-reload
+#   loginctl enable-linger "$USER"
+#   systemctl --user enable --now harle-deploy-pull.timer
+#
+# Required: docker login ghcr.io (one-time, see docs/runbooks/remote-setup.md §13).
+# Optional in EnvironmentFile (.env): HARLE_IMAGE_TAG, DEPLOY_LOG_FILE, HARLE_API_URL.
+
+[Unit]
+Description=Harle deploy pull (GHCR image pull, restart if changed, health check)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/harle
+EnvironmentFile=-%h/harle/.env
+ExecStart=%h/harle/scripts/deploy-pull.sh
+
+[Install]
+WantedBy=default.target

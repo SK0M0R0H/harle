@@ -1,0 +1,15 @@
+# User systemd timer: trigger harle-deploy-pull.service every 5 minutes.
+# Pair with harle-deploy-pull.service; enable with:
+#   systemctl --user enable --now harle-deploy-pull.timer
+
+[Unit]
+Description=Harle deploy pull every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=harle-deploy-pull.service
+
+[Install]
+WantedBy=timers.target
