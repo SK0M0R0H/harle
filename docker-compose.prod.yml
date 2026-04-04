@@ -1,0 +1,12 @@
+# Production override: pull pre-built image from GHCR instead of building locally.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull harle
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Rollback: set HARLE_IMAGE_TAG=sha-<commit> in .env, then re-pull and restart.
+
+services:
+  harle:
+    image: ghcr.io/sk0m0r0h/harle:${HARLE_IMAGE_TAG:-latest}
+    build: !reset null

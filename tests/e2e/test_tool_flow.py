@@ -7,11 +7,15 @@ import httpx
 
 
 @pytest.mark.e2e
-def test_chat_completes_with_result(e2e_base_url: str) -> None:
+def test_chat_completes_with_result(
+    e2e_base_url: str,
+    e2e_auth_headers: dict[str, str],
+) -> None:
     """POST /chat completes and returns a result (pipeline runs; EchoProvider returns echo)."""
     r = httpx.post(
         f"{e2e_base_url}/chat",
         json={"message": "Search for roadmap and milestones", "context": "work"},
+        headers=e2e_auth_headers,
         timeout=60.0,
     )
     assert r.status_code == 200

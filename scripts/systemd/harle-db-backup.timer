@@ -1,0 +1,15 @@
+# User systemd timer: trigger harle-db-backup.service daily at 03:00.
+# Pair with harle-db-backup.service; enable with:
+#   systemctl --user enable --now harle-db-backup.timer
+
+[Unit]
+Description=Harle daily database backup at 03:00
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+AccuracySec=5min
+Persistent=true
+Unit=harle-db-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -15,11 +15,15 @@ def test_health_returns_ok(e2e_base_url: str) -> None:
 
 
 @pytest.mark.e2e
-def test_chat_one_shot_returns_completed(e2e_base_url: str) -> None:
+def test_chat_one_shot_returns_completed(
+    e2e_base_url: str,
+    e2e_auth_headers: dict[str, str],
+) -> None:
     """POST /chat with new conversation returns 200, completed status, and echo in result."""
     r = httpx.post(
         f"{e2e_base_url}/chat",
         json={"message": "Find stalled tasks", "context": "work"},
+        headers=e2e_auth_headers,
         timeout=30.0,
     )
     assert r.status_code == 200
@@ -32,11 +36,15 @@ def test_chat_one_shot_returns_completed(e2e_base_url: str) -> None:
 
 
 @pytest.mark.e2e
-def test_chat_multi_turn(e2e_base_url: str) -> None:
+def test_chat_multi_turn(
+    e2e_base_url: str,
+    e2e_auth_headers: dict[str, str],
+) -> None:
     """POST /chat creates a conversation; second message uses same conversation_id."""
     first = httpx.post(
         f"{e2e_base_url}/chat",
         json={"message": "First", "context": "personal"},
+        headers=e2e_auth_headers,
         timeout=30.0,
     )
     assert first.status_code == 200
@@ -50,7 +58,20 @@ def test_chat_multi_turn(e2e_base_url: str) -> None:
             "context": "personal",
             "conversation_id": conv_id,
         },
+        headers=e2e_auth_headers,
         timeout=30.0,
     )
     assert second.status_code == 200
     assert second.json()["conversation_id"] == conv_id
+
+
+@pytest.mark.e2e
+def test_protected_route_without_token_returns_401(e2e_base_url: str) -> None:
+    """When HARLE_API_TOKEN is set, /chat without Authorization returns 401."""
+    r = httpx.post(
+        f"{e2e_base_url}/chat",
+        json={"message": "hello", "context": "personal"},
+        timeout=10.0,
+    )
+    assert r.status_code == 401
+    assert "detail" in r.json()

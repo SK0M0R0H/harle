@@ -9,13 +9,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newExecCommand(serverURL *string, contextValue *string) *cobra.Command {
+func newExecCommand(serverURL *string, apiToken *string, contextValue *string) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "exec <message>",
 		Short: "Run one non-interactive task",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			httpClient := client.NewHTTPClient(*serverURL)
+			httpClient := client.NewHTTPClient(*serverURL, *apiToken)
 			message := strings.Join(args, " ")
 			response, err := httpClient.ChatWithPolling(
 				cmd.Context(),

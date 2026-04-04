@@ -1,0 +1,48 @@
+services:
+  harle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HARLE_HOST: ${HARLE_HOST:-0.0.0.0}
+      HARLE_PORT: ${HARLE_PORT:-8000}
+      HARLE_DATASET_PATH: ${HARLE_DATASET_PATH:-/data/vault}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-harle}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-harle}}
+    # Host bind for published port: 127.0.0.1 = localhost only; 0.0.0.0 = all interfaces
+    # (required for CLI/curl via Tailscale IP). Set HARLE_PUBLISH_HOST in .env.
+    ports:
+      - "${HARLE_PUBLISH_HOST:-127.0.0.1}:8000:8000"
+    volumes:
+      - ${HARLE_VAULT_PATH:-./vault}:${HARLE_DATASET_PATH:-/data/vault}
+      - harle-logs:/data/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-harle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-harle}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-harle} -d ${POSTGRES_DB:-harle}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pgdata:
+  harle-logs:

@@ -7,11 +7,15 @@ import httpx
 
 
 @pytest.mark.e2e
-def test_search_returns_vault_results(e2e_base_url: str) -> None:
+def test_search_returns_vault_results(
+    e2e_base_url: str,
+    e2e_auth_headers: dict[str, str],
+) -> None:
     """GET /search with query matching e2e_vault content returns 200 and results from the vault."""
     r = httpx.get(
         f"{e2e_base_url}/search",
         params={"q": "roadmap", "context": "work"},
+        headers=e2e_auth_headers,
         timeout=10.0,
     )
     assert r.status_code == 200
@@ -28,11 +32,15 @@ def test_search_returns_vault_results(e2e_base_url: str) -> None:
 
 
 @pytest.mark.e2e
-def test_search_returns_chunk_metadata_for_workflow_section(e2e_base_url: str) -> None:
+def test_search_returns_chunk_metadata_for_workflow_section(
+    e2e_base_url: str,
+    e2e_auth_headers: dict[str, str],
+) -> None:
     """Chunked workflow in e2e_vault returns chunk_index and heading_path for a section-only term."""
     r = httpx.get(
         f"{e2e_base_url}/search",
         params={"q": "unique_e2e_token_chunk_beta_only", "context": "work"},
+        headers=e2e_auth_headers,
         timeout=10.0,
     )
     assert r.status_code == 200

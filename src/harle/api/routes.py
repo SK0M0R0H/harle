@@ -41,6 +41,13 @@ from harle.search.engine import SearchEngine
 
 logger = logging.getLogger(__name__)
 
+HARLE_CLIENT_HEADER = "X-Harle-Client"
+
+
+def _harle_client_from_request(http_request: Request) -> str:
+    label = (http_request.headers.get(HARLE_CLIENT_HEADER) or "").strip()
+    return label or "unknown"
+
 
 def _raise_if_processing_id_too_large(request_id: str) -> None:
     if len(request_id.encode("utf-8")) > MAX_REQUEST_ID_BYTES:
@@ -248,6 +255,7 @@ def build_router(
                 "path": str(http_request.url.path),
                 "context_scope": request.context,
                 "conversation_id": request.conversation_id,
+                "harle_client": _harle_client_from_request(http_request),
             },
         )
         client_request_id = (http_request.headers.get("X-Request-ID") or "").strip()
@@ -288,8 +296,12 @@ def build_router(
         return response
 
     @router.post("/init", response_model=InitResponse)
-    def init_system() -> InitResponse:
+    def init_system(http_request: Request) -> InitResponse:
         """Create database tables, seed the dataset, and run initial indexing."""
+        logger.info(
+            "POST /init",
+            extra={"harle_client": _harle_client_from_request(http_request)},
+        )
         if db is None or settings is None:
             raise HTTPException(
                 status_code=503,
@@ -314,8 +326,12 @@ def build_router(
         )
 
     @router.post("/reindex", response_model=ReindexResponse)
-    def reindex() -> ReindexResponse:
+    def reindex(http_request: Request) -> ReindexResponse:
         """Re-index dataset files without seeding or recreating tables."""
+        logger.info(
+            "POST /reindex",
+            extra={"harle_client": _harle_client_from_request(http_request)},
+        )
         if db is None or settings is None:
             raise HTTPException(
                 status_code=503,
@@ -377,8 +393,15 @@ def build_router(
         )
 
     @router.post("/import", response_model=ImportResponse)
-    def run_import(request: ImportRequest) -> ImportResponse:
+    def run_import(http_request: Request, request: ImportRequest) -> ImportResponse:
         """Run an import from an external source into the vault."""
+        logger.info(
+            "POST /import",
+            extra={
+                "harle_client": _harle_client_from_request(http_request),
+                "source": request.source,
+            },
+        )
         if import_registry is None:
             raise HTTPException(
                 status_code=503,

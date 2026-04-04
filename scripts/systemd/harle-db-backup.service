@@ -1,0 +1,27 @@
+# User systemd oneshot: dump Harle PostgreSQL DB, compress, upload to S3.
+# Install: copy to ~/.config/systemd/user/ and adjust paths below.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/systemd/harle-db-backup.service ~/.config/systemd/user/
+#   cp scripts/systemd/harle-db-backup.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   loginctl enable-linger "$USER"
+#   systemctl --user enable --now harle-db-backup.timer
+#
+# Required in EnvironmentFile (.env): HARLE_BACKUP_S3_BUCKET (for off-site).
+# Optional: HARLE_BACKUP_S3_ENDPOINT, HARLE_BACKUP_RETENTION_DAYS, HARLE_BACKUP_DIR,
+#           DB_BACKUP_LOG_FILE, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY.
+
+[Unit]
+Description=Harle database backup (pg_dump + S3 upload)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/harle
+EnvironmentFile=-%h/harle/.env
+ExecStart=%h/harle/scripts/db-backup.sh
+
+[Install]
+WantedBy=default.target

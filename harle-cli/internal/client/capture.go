@@ -21,6 +21,7 @@ func (h *HTTPClient) InterviewStart(ctx context.Context, request InterviewStartR
 		return InterviewResponse{}, fmt.Errorf("build request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(httpRequest)
 
 	httpResponse, err := h.Client.Do(httpRequest)
 	if err != nil {
@@ -52,6 +53,7 @@ func (h *HTTPClient) InterviewRespond(ctx context.Context, request InterviewResp
 		return InterviewResponse{}, fmt.Errorf("build request: %w", err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(httpRequest)
 
 	httpResponse, err := h.Client.Do(httpRequest)
 	if err != nil {
