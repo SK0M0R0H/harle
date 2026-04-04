@@ -594,4 +594,4 @@ Once this loop works reliably, the next steps are:
 - Enable write tools with approval gates
 - Add semantic search (pgvector)
 - Deploy to a VPS for always-on access
-- Add Telegram or web chat interface
+- Add Telegram bot as primary interface (see [telegram_bot.md](./telegram_bot.md))
