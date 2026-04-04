@@ -50,9 +50,11 @@ cd "${HARLE_REPO_DIR}" || die "cannot cd to ${HARLE_REPO_DIR}"
 
 # --- Dump database ---
 
+# Use POSTGRES_USER / POSTGRES_DB from inside the db container (same as compose/.env),
+# not hardcoded defaults, so custom credentials still backup correctly.
 log_line "Starting pg_dump..."
 if ! docker compose "${COMPOSE_ARGS[@]}" exec -T db \
-    pg_dump -U harle harle 2>>"${LOG_FILE}" | gzip > "${DUMP_PATH}"; then
+    sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' 2>>"${LOG_FILE}" | gzip > "${DUMP_PATH}"; then
   rm -f "${DUMP_PATH}"
   die "pg_dump failed"
 fi
