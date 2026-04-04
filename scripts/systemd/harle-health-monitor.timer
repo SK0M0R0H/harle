@@ -1,0 +1,15 @@
+# User systemd timer: trigger harle-health-monitor.service every 1 minute.
+# Pair with harle-health-monitor.service; enable with:
+#   systemctl --user enable --now harle-health-monitor.timer
+
+[Unit]
+Description=Harle health monitor every 1 minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=harle-health-monitor.service
+
+[Install]
+WantedBy=timers.target

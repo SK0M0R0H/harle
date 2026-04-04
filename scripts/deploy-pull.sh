@@ -5,6 +5,9 @@ set -euo pipefail
 
 HARLE_REPO_DIR="${HARLE_REPO_DIR:-${HOME}/harle}"
 LOG_FILE="${DEPLOY_LOG_FILE:-${HOME}/deploy-pull.log}"
+STATE_DIR="${HARLE_STATE_DIR:-/tmp}"
+# Touch this file before restarting harle; health-monitor.sh suppresses DOWN alerts until removed.
+DEPLOY_LOCK_FILE="${HARLE_DEPLOY_IN_PROGRESS_FILE:-${STATE_DIR}/harle-deploy-in-progress}"
 HEALTH_URL="${HARLE_API_URL:-http://127.0.0.1:8000}/health"
 COMPOSE_ARGS=(
   -f "${HARLE_REPO_DIR}/docker-compose.yml"
@@ -28,6 +31,9 @@ if [[ ! -f "${HARLE_REPO_DIR}/docker-compose.yml" ]]; then
 fi
 if [[ ! -f "${HARLE_REPO_DIR}/docker-compose.prod.yml" ]]; then
   die "docker-compose.prod.yml not found in ${HARLE_REPO_DIR}"
+fi
+if ! mkdir -p "${STATE_DIR}" 2>>"${LOG_FILE}"; then
+  die "cannot create state directory ${STATE_DIR}"
 fi
 
 cd "${HARLE_REPO_DIR}" || die "cannot cd to ${HARLE_REPO_DIR}"
@@ -55,6 +61,9 @@ fi
 
 from_id="${running_image_id:-none}"
 log_line "Image update detected (${from_id:0:12} -> ${target_image_id:0:12}); restarting harle..."
+touch "${DEPLOY_LOCK_FILE}"
+trap 'rm -f "${DEPLOY_LOCK_FILE}"' EXIT
+log_line "Deploy lock active (${DEPLOY_LOCK_FILE}); health monitor will suppress DOWN alerts until deploy finishes"
 if ! docker compose "${COMPOSE_ARGS[@]}" up -d harle 2>>"${LOG_FILE}"; then
   die "docker compose up -d harle failed"
 fi

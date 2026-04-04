@@ -150,6 +150,14 @@ def finalize_orchestrator_run(
             from harle.db.runs import create_run
 
             with db.session() as session:
+                # TODO(phase5-usage): Extract actual LLM token counts from the
+                # SDK RunResult (e.g. result.usage.input_tokens / output_tokens)
+                # or from OpenAI response.usage and pass them as tokens_input=
+                # and tokens_output= below.  This requires propagating the
+                # RunResult through RunState so it is available here.  The
+                # estimated_cost can be derived from per-model pricing tables.
+                # Until wired, the runs.tokens_input/tokens_output columns stay
+                # NULL and /metrics/usage returns zeros.
                 create_run(
                     session,
                     run_id=state.run_id,

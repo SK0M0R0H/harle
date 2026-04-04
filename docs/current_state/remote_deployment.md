@@ -2,7 +2,7 @@
 title: "Harle Remote Deployment — Current State"
 tags: [deployment, remote, infrastructure, security, cd, monitoring, current-state, implementation-status, vault-sync, api-auth]
 context: global
-last_updated: 2026-03-30
+last_updated: 2026-04-04
 summary: "Tracks what the remote deployment infrastructure implements vs the TRD, and what each missing part would unlock."
 ---
 
@@ -16,7 +16,7 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ## Overall Status
 
-**Phases 1–4 are implemented.** Harle has a manual remote deployment baseline (Docker, compose, server init, runbook, CLI remote URL), optional Git-based vault synchronization, bearer API authentication with client identification logging, **and** a continuous deployment pipeline (GitHub Actions → GHCR → server pull timer). Phases 5–6 remain pending.
+**Phases 1–5 are implemented.** Harle has a manual remote deployment baseline (Docker, compose, server init, runbook, CLI remote URL), optional Git-based vault synchronization, bearer API authentication with client identification logging, a continuous deployment pipeline (GitHub Actions → GHCR → server pull timer), **and** monitoring with Telegram alerts, disk usage checks, daily database backups to S3-compatible storage, and usage tracking infrastructure (dummy — token population pending). Phase 6 (Telegram bot) remains pending.
 
 ---
 
@@ -41,12 +41,17 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 | Production compose override | Implemented | `docker-compose.prod.yml` — replaces `build:` with `image:` from GHCR |
 | Deploy pull script | Implemented | `scripts/deploy-pull.sh` — pulls image, compares digest, restarts if changed, health check |
 | Deploy pull systemd timer | Implemented | `scripts/systemd/harle-deploy-pull.service` + `.timer` (5 min interval) |
-| Health monitoring script | Not implemented | No `scripts/health-monitor.sh` |
-| Telegram alerting | Not implemented | — |
-| DB backup cron | Not implemented | — |
+| Health monitoring script | Implemented | `scripts/health-monitor.sh` — API health check, disk usage, container status, Telegram alerts with state-file flood prevention |
+| Telegram alerting | Implemented | Down/recovered + disk warning/cleared alerts via Telegram Bot API; graceful skip when vars unset |
+| Health monitoring systemd timer | Implemented | `scripts/systemd/harle-health-monitor.service` + `.timer` (1 min interval) |
+| Disk usage monitoring | Implemented | Integrated into `health-monitor.sh`; threshold via `HARLE_DISK_WARN_PCT` (default 85%) |
+| DB backup (off-site) | Implemented | `scripts/db-backup.sh` — `pg_dump` via compose, gzip, upload to S3-compatible storage, remote retention |
+| DB backup systemd timer | Implemented | `scripts/systemd/harle-db-backup.service` + `.timer` (daily at 03:00, `Persistent=true`) |
+| Usage metrics API | Partially implemented | `GET /metrics/usage` endpoint; DB query infrastructure ready; token columns not yet populated by orchestrator |
+| Usage report script | Partially implemented | `scripts/usage-report.sh` — fetches `/metrics/usage`, formats Telegram message; returns zeros until token tracking is wired |
 | Telegram bot interface | Not implemented | — |
 | Caddy reverse proxy | Not implemented | — |
-| `.env.example` (server) | Implemented | Includes `HARLE_VAULT_PATH`, `HARLE_API_URL`, `HARLE_API_TOKEN`, `HARLE_IMAGE_TAG`, `DEPLOY_LOG_FILE` (commented), deployment keys |
+| `.env.example` (server) | Implemented | Includes deployment, CD, monitoring (Telegram, disk, S3 backup), and API key variables |
 
 ---
 
@@ -81,6 +86,26 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 - **Bearer middleware** — `src/harle/api/auth.py` registered from `src/harle/main.py` when token is non-empty after trim; public **`/health*`** only.
 - **CLI** — Go client sends bearer + `X-Harle-Client: harle-cli` on all API calls; token resolution documented in runbook §8b.
 - **Docs** — `.env.example`, runbook §5/§8/§8b/§12; E2E tests run server with a fixed test token.
+
+### Phase 4 deliverables
+
+- `.github/workflows/deploy.yml` — on push to `main`: lint → unit tests → Docker build → push to GHCR (`latest` + `sha-<commit>` tags). Includes `workflow_dispatch` for branch testing. Post-deploy `verify-deploy` job curls server `/health` after ~8 minutes (requires `DEPLOY_HOST` secret).
+- `docker-compose.prod.yml` — production override that replaces `build:` with `image: ghcr.io/sk0m0r0h/harle:${HARLE_IMAGE_TAG:-latest}`.
+- `scripts/deploy-pull.sh` — pulls image via compose, compares digest with running container, restarts `harle` if changed, retries health check up to 6 times.
+- `scripts/systemd/harle-deploy-pull.service` + `.timer` — user systemd units; polls every 5 minutes.
+- Runbook §13 — GHCR auth, prod compose, timer install, rollback procedure, verification, troubleshooting.
+
+### Phase 5 deliverables
+
+- **`scripts/health-monitor.sh`** — Checks API health (`/health`), root disk usage (configurable threshold via `HARLE_DISK_WARN_PCT`, default 85%), and container status. Uses state files to prevent alert flooding — sends one "down" and one "recovered" notification per incident. Gracefully skips Telegram when bot token/chat ID are unset (logs locally instead).
+- **`scripts/systemd/harle-health-monitor.service` + `.timer`** — User systemd units running every 1 minute (`OnUnitActiveSec=1min`).
+- **`scripts/db-backup.sh`** — Dumps PostgreSQL via `docker compose exec -T db pg_dump`, compresses with gzip, uploads to S3-compatible storage (`HARLE_BACKUP_S3_BUCKET` + optional `HARLE_BACKUP_S3_ENDPOINT` for non-AWS providers). Remote retention deletes S3 objects older than `HARLE_BACKUP_RETENTION_DAYS` (default 7). Local staging files cleaned after 2 days; kept if S3 upload fails. Gracefully degrades to local-only if S3 bucket is not configured.
+- **`scripts/systemd/harle-db-backup.service` + `.timer`** — User systemd units running daily at 03:00 (`OnCalendar`, `Persistent=true`).
+- **`scripts/usage-report.sh`** — Skeleton script that fetches `GET /metrics/usage?days=7`, formats a Telegram summary with run count, token usage, estimated cost, and per-model breakdown. Returns zeros until token tracking is wired into the orchestrator.
+- **`src/harle/db/usage.py`** — Aggregation queries over the `runs` table: `get_usage_summary()` (totals + per-model breakdown) and `get_usage_by_day()` (daily breakdown). Coalesces NULL token columns to zero.
+- **`GET /metrics/usage`** endpoint — Authenticated endpoint returning `UsageResponse` with token/cost aggregates, per-model and per-day breakdowns. Query parameter `days` (1–90, default 7).
+- **`.env.example`** — Added monitoring section with `HARLE_TELEGRAM_ALERT_BOT_TOKEN`, `HARLE_TELEGRAM_ALERT_CHAT_ID`, `HARLE_DISK_WARN_PCT`, `HARLE_BACKUP_S3_BUCKET`, `HARLE_BACKUP_S3_ENDPOINT`, `HARLE_BACKUP_RETENTION_DAYS`, and log file paths.
+- **Runbook §14** — Monitoring and alerting guide: Telegram bot setup, health-monitor and db-backup timer installation, S3 backup configuration (Backblaze B2 example), verification steps, restore procedure, troubleshooting.
 
 ### Existing prerequisites still in place
 
@@ -126,8 +151,9 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 
 ### 5. Monitoring and alerting (Phase 5)
 
-- **Missing:** Health check script, Telegram alert integration, disk usage monitoring, DB backup cron.
-- **Unlocks:** Automatic notification when the server goes down; daily database backups.
+- **Status:** Implemented (core monitoring). Usage tracking partially implemented (infrastructure ready, token population pending).
+- **Delivered:** Health monitor script with Telegram alerts, disk usage monitoring, daily DB backup to S3-compatible storage, usage metrics API endpoint, usage report script.
+- **Remaining gap:** The orchestrator does not yet populate `tokens_input` / `tokens_output` / `estimated_cost` on run rows (see `TODO(phase5-usage)` in `src/harle/orchestrator/finalize.py`). Once wired, `/metrics/usage` and `usage-report.sh` will report real data.
 
 ### 6. Telegram bot (Phase 6)
 
@@ -141,9 +167,11 @@ Reference TRD: [Harle Remote Deployment — Infrastructure, Security & Operation
 - **Compose uses dual-file approach for image source:** `docker-compose.yml` retains `build: .` for local development; `docker-compose.prod.yml` overrides with `image:` from GHCR for production. The TRD's single-file approach is replaced by this compose override pattern, which keeps dev and prod paths cleanly separated.
 - **Server init script includes deploy-key bootstrap:** `scripts/server-init.sh` now generates a GitHub deploy key and SSH config to support private repository cloning. This expands convenience beyond the minimal hardening list but supports practical private-repo deployment.
 - **Vault sync uses `OnUnitActiveSec=2min`:** interval is ~2 minutes from end of each run (not wall-clock `OnCalendar`), which matches the TRD intent; exact cadence varies slightly with job duration.
+- **DB backup uses S3 off-site storage:** The TRD Phase 5 table describes "Daily `pg_dump` to a backup directory with 7-day retention". The implementation uploads to S3-compatible storage (as recommended in the TRD Technology Choices table) with remote retention, since local-only backups do not protect against server loss. Local copies are staging only (2-day retention).
+- **Usage tracking is infrastructure-only (dummy):** The `/metrics/usage` endpoint and `usage-report.sh` exist but return zeros because the orchestrator does not yet populate token columns on run rows. This is intentional — the query, API, and reporting infrastructure is in place for when token tracking is wired.
 
 ---
 
 ## Assessment
 
-Remote deployment has a working manual baseline, automated vault Git sync and reindex, bearer API authentication for safe multi-client remote use, and a continuous deployment pipeline (push to `main` -> GHCR -> server auto-pull). Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. The next highest-value gaps are **monitoring (Phase 5)** and the **Telegram bot (Phase 6)**.
+Remote deployment has a working manual baseline, automated vault Git sync and reindex, bearer API authentication for safe multi-client remote use, a continuous deployment pipeline (push to `main` -> GHCR -> server auto-pull), and operational monitoring with Telegram alerts, disk usage checks, and daily off-site database backups. Harle can be provisioned on a VPS with documented steps and reached over the **public internet** (SSH and optional port 8000) by default; **optional** Tailscale-only inbound matches the TRD’s hardened network posture. Usage tracking infrastructure (`/metrics/usage`, aggregation queries, report script) is in place but returns zeros until the orchestrator populates token columns. The next highest-value gap is the **Telegram bot (Phase 6)**.

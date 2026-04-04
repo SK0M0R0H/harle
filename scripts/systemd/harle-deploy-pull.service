@@ -10,7 +10,8 @@
 #   systemctl --user enable --now harle-deploy-pull.timer
 #
 # Required: docker login ghcr.io (one-time, see docs/runbooks/remote-setup.md §13).
-# Optional in EnvironmentFile (.env): HARLE_IMAGE_TAG, DEPLOY_LOG_FILE, HARLE_API_URL.
+# Optional in EnvironmentFile (.env): HARLE_IMAGE_TAG, DEPLOY_LOG_FILE, HARLE_API_URL,
+# HARLE_STATE_DIR, HARLE_DEPLOY_IN_PROGRESS_FILE (deploy lock suppresses health-monitor DOWN during restart).
 
 [Unit]
 Description=Harle deploy pull (GHCR image pull, restart if changed, health check)

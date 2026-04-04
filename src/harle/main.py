@@ -164,6 +164,11 @@ def create_app() -> FastAPI:
         )
     )
 
+    # ── Metrics routes (usage tracking dummies, Phase 5) ───────────────
+    from harle.api.metrics_routes import build_metrics_router
+
+    app.include_router(build_metrics_router(db=db))
+
     # ── Capture interview routes ──────────────────────────────────────
     if db is not None and settings.HARLE_DATASET_PATH:
         from pathlib import Path

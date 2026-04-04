@@ -169,6 +169,47 @@ class ImportResponse(BaseModel):
     updated_paths: list[str] = Field(default_factory=list)
 
 
+# --- Usage / metrics models ---
+
+
+class ModelUsageSummary(BaseModel):
+    """Token usage for a single LLM model within the reporting window."""
+
+    model: str
+    tokens_input: int = 0
+    tokens_output: int = 0
+    estimated_cost: float = 0.0
+    run_count: int = 0
+
+
+class DailyUsageSummary(BaseModel):
+    """Token usage for a single calendar day."""
+
+    date: str
+    tokens_input: int = 0
+    tokens_output: int = 0
+    estimated_cost: float = 0.0
+    run_count: int = 0
+
+
+class UsageResponse(BaseModel):
+    """Aggregated LLM usage over a time window (GET /metrics/usage).
+
+    All token/cost fields return zero until the orchestrator populates
+    ``tokens_input`` / ``tokens_output`` on the ``runs`` table rows.
+    """
+
+    days: int
+    since: str  # ISO datetime
+    until: str  # ISO datetime
+    tokens_input: int = 0
+    tokens_output: int = 0
+    estimated_cost: float = 0.0
+    run_count: int = 0
+    by_model: list[ModelUsageSummary] = Field(default_factory=list)
+    by_day: list[DailyUsageSummary] = Field(default_factory=list)
+
+
 # --- Search models ---
 
 

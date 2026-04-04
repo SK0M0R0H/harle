@@ -1,8 +1,8 @@
 ---
 title: "Harle Remote Setup Runbook"
-tags: [deployment, remote, runbook, vps, docker, ufw, github-ssh, tailscale-optional, vault-sync, cd, ghcr]
+tags: [deployment, remote, runbook, vps, docker, ufw, github-ssh, tailscale-optional, vault-sync, cd, ghcr, monitoring, telegram-alerts, db-backup, s3]
 context: global
-last_updated: 2026-03-30
+last_updated: 2026-04-04
 summary: "Provision a VPS and run Harle with Docker Compose over the public network; optional Tailscale hardening; optional Git-based vault sync with systemd timer."
 ---
 
@@ -508,6 +508,145 @@ Every image pushed by CI is tagged with its commit SHA (e.g. `sha-a1b2c3d`). To 
 4. Verify: `curl -fsS http://127.0.0.1:8000/health` → `{"status":"ok"}`.
 5. On GitHub, the `verify-deploy` job should show a green check (if `DEPLOY_HOST` secret is configured).
 
+## 14) Monitoring and alerting
+
+### 14a) Create a Telegram alert bot
+
+1. Open Telegram, search for **@BotFather**, and send `/newbot`.
+2. Follow the prompts: give the bot a name (e.g. "Harle Alerts") and a username (e.g. `harle_alerts_bot`).
+3. BotFather returns a **bot token** — a string like `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`. Copy it.
+4. To find your **chat ID**, start a conversation with the bot (send `/start`), then open:
+
+   ```
+   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
+   ```
+
+   Look for `"chat":{"id":<number>}` — that number is your chat ID.
+
+### 14b) Configure monitoring environment
+
+Add to `.env` on the server:
+
+```bash
+cd ~/harle
+cat >> .env <<'EOF'
+
+# --- Monitoring (Phase 5) ---
+HARLE_TELEGRAM_ALERT_BOT_TOKEN=<your-bot-token>
+HARLE_TELEGRAM_ALERT_CHAT_ID=<your-chat-id>
+# HARLE_DISK_WARN_PCT=85
+EOF
+```
+
+### 14c) Install health monitor timer
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/harle/scripts/systemd/harle-health-monitor.service ~/.config/systemd/user/
+cp ~/harle/scripts/systemd/harle-health-monitor.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now harle-health-monitor.timer
+```
+
+Verify the timer is active:
+
+```bash
+systemctl --user list-timers | grep health
+```
+
+**Deploy vs health monitor:** `deploy-pull.sh` creates a short-lived lock file (`${HARLE_STATE_DIR:-/tmp}/harle-deploy-in-progress` by default) before `docker compose up -d harle` and removes it when the script exits (success or failure). While that file exists, `health-monitor.sh` does **not** treat failed `/health` as a DOWN event and does not send Telegram DOWN/RECOVERED for that window — so routine image deploys do not spam alerts. If a deploy is killed abnormally (`kill -9`), the lock may linger; after `HARLE_DEPLOY_LOCK_MAX_AGE_SEC` (default 900s) the health monitor removes a stale lock and resumes normal alerting.
+
+### 14d) Set up S3-compatible storage for backups
+
+The backup script uploads compressed database dumps to any S3-compatible storage. Example with **Backblaze B2**:
+
+1. Create a B2 bucket (e.g. `harle-backups-<your-name>`).
+2. Create an application key with read/write access to that bucket.
+3. Install the AWS CLI on the server:
+
+   ```bash
+   sudo apt install -y awscli
+   ```
+
+4. Configure credentials:
+
+   ```bash
+   aws configure
+   # Access Key ID: your B2 keyID
+   # Secret Access Key: your B2 applicationKey
+   # Default region: us-west-004 (or your B2 region)
+   # Default output format: json
+   ```
+
+5. Add to `.env`:
+
+   ```bash
+   cat >> ~/harle/.env <<'EOF'
+   HARLE_BACKUP_S3_BUCKET=harle-backups-<your-name>
+   HARLE_BACKUP_S3_ENDPOINT=https://s3.<region>.backblazeb2.com
+   # HARLE_BACKUP_RETENTION_DAYS=7
+   EOF
+   ```
+
+6. Test manually:
+
+   ```bash
+   ~/harle/scripts/db-backup.sh
+   tail -20 ~/db-backup.log
+   aws --endpoint-url https://s3.<region>.backblazeb2.com s3 ls s3://harle-backups-<your-name>/harle-db/
+   ```
+
+### 14e) Install database backup timer
+
+```bash
+cp ~/harle/scripts/systemd/harle-db-backup.service ~/.config/systemd/user/
+cp ~/harle/scripts/systemd/harle-db-backup.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now harle-db-backup.timer
+```
+
+Verify:
+
+```bash
+systemctl --user list-timers | grep backup
+```
+
+### 14f) Verify monitoring
+
+1. **Health alerts:** Stop the harle container and wait up to 2 minutes:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml stop harle
+   # Wait ~1-2 minutes, check Telegram for the DOWN alert.
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml start harle
+   # Wait ~1-2 minutes, check Telegram for the RECOVERED alert.
+   ```
+
+2. **Disk alerts:** Temporarily lower the threshold to test:
+
+   ```bash
+   HARLE_DISK_WARN_PCT=1 ~/harle/scripts/health-monitor.sh
+   # Should fire a disk warning since any usage > 1%.
+   ```
+
+3. **Database backup:** Trigger manually and verify:
+
+   ```bash
+   ~/harle/scripts/db-backup.sh
+   tail -20 ~/db-backup.log
+   ls -la ~/harle-backups/
+   ```
+
+4. **Restore from backup** (test on a non-production database):
+
+   ```bash
+   # Download from S3:
+   aws --endpoint-url "$HARLE_BACKUP_S3_ENDPOINT" s3 cp \
+     s3://$HARLE_BACKUP_S3_BUCKET/harle-db/harle-2026-04-04.sql.gz ./restore.sql.gz
+   # Restore:
+   gunzip -c restore.sql.gz | docker compose exec -T db psql -U harle harle
+   ```
+
 ## Troubleshooting
 
 - **`git fetch` / `git pull` → `Permission denied (publickey)`:** Run Git as **`harle`**, not root (see step 4). Check `sudo -u harle ssh -T git@github.com` and `chown -R harle:harle /home/harle/harle` if needed.
@@ -526,3 +665,8 @@ Every image pushed by CI is tagged with its commit SHA (e.g. `sha-a1b2c3d`). To 
 - **Deploy pull: image unchanged but code was pushed:** Check that the Deploy workflow passed on GitHub Actions. If it failed at test or build, no image was pushed.
 - **Deploy pull: health check fails after restart:** Check `docker compose logs -f harle` for startup errors. To rollback: set `HARLE_IMAGE_TAG=sha-<known-good>` in `.env` and re-run `deploy-pull.sh` (step 13e).
 - **Deploy pull: `verify-deploy` job fails on GitHub:** Server may be down or unreachable. SSH in and check `docker compose ps` and `~/deploy-pull.log`. Verify `DEPLOY_HOST` secret matches the server's public IP.
+- **Health monitor: no Telegram alerts:** Check `HARLE_TELEGRAM_ALERT_BOT_TOKEN` and `HARLE_TELEGRAM_ALERT_CHAT_ID` in `.env`. Run `~/harle/scripts/health-monitor.sh` manually and check `~/health-monitor.log` for `TELEGRAM_SKIP` (vars unset) or `Telegram send failed`. Verify the bot is not blocked — send it a message on Telegram first.
+- **Health monitor: constant DOWN alerts:** The health check URL defaults to `http://127.0.0.1:8000/health`. If `HARLE_PUBLISH_HOST` is not `127.0.0.1`, set `HARLE_API_URL` in `.env` to match. Also check `docker compose ps` — the `harle` container may be restarting.
+- **DB backup: pg_dump failed:** Run `docker compose exec db pg_isready -U harle` to confirm the database is reachable. Check `~/db-backup.log` for details.
+- **DB backup: S3 upload failed:** Run `aws --endpoint-url "$HARLE_BACKUP_S3_ENDPOINT" s3 ls s3://$HARLE_BACKUP_S3_BUCKET/` to test credentials. Check that `aws` is installed and `~/.aws/credentials` (or env vars) are configured.
+- **DB backup: local files accumulating:** If `HARLE_BACKUP_S3_BUCKET` is unset, backups stay local only. Set the bucket to enable off-site upload and automatic local cleanup.
