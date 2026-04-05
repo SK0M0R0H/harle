@@ -2,7 +2,7 @@
 title: "Harle Telegram Bot — Architecture & Staged Delivery"
 tags: [telegram, bot, frontend, architecture, orchestrator, api-client, security]
 context: global
-last_updated: 2026-04-04
+last_updated: 2026-04-05
 summary: "Describes the Telegram bot as Harle's primary frontend: how it maps to the orchestrator HTTP API, staged delivery plan, security posture, and configuration."
 ---
 
@@ -93,11 +93,13 @@ The smallest possible slice: Telegram message in → orchestrator → assistant 
 
 - Bot responds to `/start` with a welcome message.
 - Any other text message is forwarded to `POST /chat` with `context="personal"` and `conversation_id=null` (every message is a new conversation — no memory between messages).
-- The `result` field from `RunResponse` is sent back as a plain Telegram text message.
+- The `result` field from `RunResponse` is sent back as plain Telegram text. If the result exceeds Telegram's per-message limit, the bot splits it into multiple sequential messages.
 - Errors (orchestrator 5xx, timeout, network) produce a user-friendly error reply instead of a crash or silence.
+- Unsupported content types (photo, voice, audio, video, document, sticker, location, contact, poll, etc.) receive an explicit reply that the bot currently supports text messages and commands only.
 - Bot identifies itself via `X-Harle-Client: telegram`.
 - Bot authenticates to the orchestrator with `Bearer <HARLE_API_TOKEN>` when configured.
-- Optional `HARLE_TELEGRAM_ALLOWED_USER_IDS` allowlist: if set, reject messages from unlisted users with a polite refusal. If empty, allow all (single-operator assumption).
+- Access is controlled by `HARLE_TELEGRAM_ACCESS_POLICY`. Stage 1 supports `allowlist` and `open`; default is `allowlist`. When in `allowlist`, unlisted users are rejected with a polite refusal.
+- Bot generates `X-Request-ID` for `/chat` requests and follows the same long-running liveness contract as the CLI where feasible: no short per-request timeout for `POST /chat`, distinct handling for server timeout vs unreachable server, and optional `/processing/{request_id}` polling.
 - `/help` command lists available commands and basic usage.
 
 **Out of scope (deferred to later stages):**
@@ -105,7 +107,7 @@ The smallest possible slice: Telegram message in → orchestrator → assistant 
 - Conversation continuity (`conversation_id` mapping).
 - Markdown or HTML rendering of replies.
 - Typing indicator while orchestrator is working.
-- Streaming or chunked replies.
+- Streaming or edit-in-place partial replies.
 - Inline keyboards or callback buttons.
 - Rate limiting.
 - Group chat or forum topic support.
@@ -118,7 +120,10 @@ The smallest possible slice: Telegram message in → orchestrator → assistant 
 2. Sending `/start` to the bot returns a welcome message.
 3. Sending a text message returns the orchestrator's assistant reply.
 4. Sending a message when the orchestrator is unreachable returns a user-friendly error.
-5. With `HARLE_TELEGRAM_ALLOWED_USER_IDS` set, messages from unlisted users are rejected.
+5. With `HARLE_TELEGRAM_ACCESS_POLICY=allowlist`, messages from unlisted users are rejected.
+6. Sending an unsupported content type returns an explicit "text only for now" reply.
+7. If the orchestrator returns a reply longer than one Telegram message, the bot splits it into multiple messages in order.
+8. If the orchestrator returns 504, the bot reports server-side timeout distinctly from network/unreachable errors.
 
 ---
 
@@ -131,8 +136,9 @@ The bot becomes a proper assistant you can have an ongoing conversation with.
 - Persistent `conversation_id` mapping: one conversation per DM `chat_id`. The bot stores the `conversation_id` returned by the orchestrator and sends it on subsequent messages.
 - `/new` command resets the conversation (sets `conversation_id=null`).
 - Typing indicator (`sendChatAction: typing`) while the orchestrator is processing.
-- Markdown rendering of assistant replies (Telegram `parse_mode: "HTML"` with fallback to plain text on parse errors).
+- Markdown rendering of assistant replies (Telegram `parse_mode: "HTML"` with escaping and fallback to plain text on parse errors).
 - `/id` command shows the current `conversation_id`.
+- Single in-flight request per DM `chat_id`; later messages are queued or rejected with a "please wait" response until the active turn completes.
 
 **Out of scope:** group/topic support, context switching, rate limiting, capture/import.
 
@@ -147,7 +153,7 @@ Adds support for forum supergroups as dedicated project workspaces alongside the
 - Forum supergroup support: bot joins a private forum supergroup, each topic maps to an independent `conversation_id`.
 - Topic-aware routing: bot reads `message_thread_id` from incoming group messages and replies to the correct topic.
 - DM continues to work as the primary single-conversation surface.
-- Allowlist management improvements (config-based group allowlisting).
+- Policy-driven access control for organizational use (allowed users, allowed groups, and allowed forum topics via config-driven policy definitions).
 - Rate limiting per `user_id` (simple token bucket or fixed-window).
 - Structured error messages (categorized: auth, timeout, server error).
 
@@ -195,11 +201,13 @@ This section is the contract for the Stage 1 implementation.
 | 1 | `/start` returns a welcome message explaining what the bot does | Yes — send `/start`, verify reply |
 | 2 | `/help` returns a list of available commands | Yes — send `/help`, verify reply |
 | 3 | Any text message → `POST /chat` with `message=<text>`, `context="personal"`, `conversation_id=null` | Yes — send message, verify orchestrator receives request |
-| 4 | `RunResponse.result` is sent back as a Telegram text message | Yes — verify reply content matches |
-| 5 | Orchestrator errors (5xx, timeout, unreachable) → user-friendly error reply | Yes — stop orchestrator, send message, verify error reply |
-| 6 | `X-Harle-Client: telegram` header on every orchestrator request | Yes — inspect orchestrator logs |
-| 7 | `Authorization: Bearer <token>` header when `HARLE_API_TOKEN` is set | Yes — set token, verify auth header |
-| 8 | Allowlist enforcement: reject unlisted users when `HARLE_TELEGRAM_ALLOWED_USER_IDS` is set | Yes — set allowlist, send from unlisted user, verify rejection |
+| 4 | `RunResponse.result` is sent back as Telegram text; oversized replies are split into multiple messages | Yes — verify reply content and chunk ordering |
+| 5 | Orchestrator errors (5xx, timeout, unreachable) → user-friendly error reply with distinct timeout vs unreachable messaging | Yes — stop orchestrator or force 504, verify error reply |
+| 6 | Unsupported content types receive an explicit "text only for now" reply and do not call the orchestrator | Yes — send photo/sticker, verify reply and no `/chat` request |
+| 7 | `X-Harle-Client: telegram` header on every orchestrator request | Yes — inspect orchestrator logs |
+| 8 | `X-Request-ID` header on every `/chat` request | Yes — inspect orchestrator logs or capture outgoing request |
+| 9 | `Authorization: Bearer <token>` header when `HARLE_API_TOKEN` is set | Yes — set token, verify auth header |
+| 10 | Access policy enforcement: reject unlisted users when `HARLE_TELEGRAM_ACCESS_POLICY=allowlist` | Yes — set policy + allowlist, send from unlisted user, verify rejection |
 
 ### What Stage 1 does NOT do
 
@@ -208,7 +216,7 @@ This section is the contract for the Stage 1 implementation.
 - No typing indicator.
 - No group chat support.
 - No streaming.
-- No rate limiting beyond the optional user allowlist.
+- No rate limiting beyond the access policy gate.
 
 ---
 
@@ -219,6 +227,7 @@ The bot is a thin HTTP client that maps Telegram events to orchestrator HTTP cal
 | Bot trigger | HTTP method | Path | Key fields | Stage |
 |---|---|---|---|---|
 | User text message | `POST` | `/chat` | `message`, `context="personal"`, `conversation_id=null` (Stage 1) or stored ID (Stage 2+) | 1 |
+| Unsupported non-text message | — | — | Local reply only: "I can't process this content type yet. Please send text." | 1 |
 | `/start` | — | — | Local reply only, no orchestrator call | 1 |
 | `/help` | — | — | Local reply only | 1 |
 | `/new` | — | — | Local state: reset `conversation_id` to `null` | 2 |
@@ -243,14 +252,26 @@ With headers:
 ```
 Content-Type: application/json
 X-Harle-Client: telegram
+X-Request-ID: <generated request id>
 Authorization: Bearer <HARLE_API_TOKEN>   (if configured)
 ```
+
+### Long-running request handling
+
+The Telegram bot should follow the same `/chat` liveness contract as the CLI instead of inventing a separate timeout model:
+
+- `POST /chat` uses a long-lived HTTP client with no short per-request deadline.
+- The bot generates an `X-Request-ID` for each `/chat` turn.
+- While `/chat` is in flight, the bot may poll `GET /processing/{request_id}` with a short timeout to distinguish "server is still working" from "server is unreachable".
+- `504` from `/chat` is treated as a server-side run timeout and surfaced distinctly to the user.
+- Repeated processing ping failures are treated as unreachable server/network failure and surfaced distinctly to the user.
+- This liveness algorithm should mirror the CLI behavior as closely as practical. Shared constants, error classification rules, and test vectors should be centralized wherever cross-client reuse is feasible, even though the current CLI is Go and the bot is Python.
 
 ### Response handling
 
 The bot reads `RunResponse` and extracts:
 
-- `result` → reply text sent to user.
+- `result` → reply text sent to user. In Stage 1, send as plain text and split across multiple Telegram messages if needed. In Stage 2+, escape for HTML formatting and fall back to plain text on parse failure.
 - `conversation_id` → stored for Stage 2+ continuity.
 - `status` → if `"failed"`, the bot sends `result` as an error message (the orchestrator includes a user-facing error description in `result` on failure).
 
@@ -280,6 +301,42 @@ Storage: in-memory dict (lost on restart — acceptable for single-operator use)
 
 Each forum topic gets its own `conversation_id`, keyed by `(group_id, message_thread_id)`. Topics are fully independent of the DM conversation. The DM and forum group operate in parallel — the user can message the bot in DM and use forum topics at the same time.
 
+### Concurrency model
+
+Once continuity exists, the bot must avoid overlapping turns for the same conversation key:
+
+- Stage 2 DM key: `chat_id`
+- Stage 3 forum key: `(group_id, message_thread_id)`
+- Only one `/chat` request may be active per key at a time.
+- If a second message arrives while a turn is active for the same key, the bot either queues it or rejects it with a clear "please wait for the current reply to finish" message. This behavior should be configured once and applied consistently.
+- Different keys may run in parallel. For example, a DM and a forum topic can each have one in-flight request at the same time.
+
+---
+
+## Access Policy Strategy
+
+The bot must not rely on ad hoc allowlist behavior forever. Access should be defined as policy so the bot can later serve an organization safely.
+
+### Stage 1 — Minimal policy modes
+
+Stage 1 supports:
+
+- `HARLE_TELEGRAM_ACCESS_POLICY=allowlist` (default): only users in `HARLE_TELEGRAM_ALLOWED_USER_IDS` may use the bot.
+- `HARLE_TELEGRAM_ACCESS_POLICY=open`: any Telegram user may use the bot.
+
+The default must be safe for deployment. `open` is an explicit opt-in, intended for development or intentionally public bots.
+
+### Stage 3+ — Organizational policy
+
+Later stages may extend the policy model to include:
+
+- allowed Telegram user IDs
+- allowed group IDs
+- allowed forum topic scopes
+- role-based policy definitions for organization use
+
+The policy mechanism should remain declarative and config-driven rather than hard-coded in handlers.
+
 ---
 
 ## Security — Threats and Mitigations
@@ -287,9 +344,9 @@ Each forum topic gets its own `conversation_id`, keyed by `(group_id, message_th
 | Threat | Mitigation (Stage 1) | Future stages |
 |---|---|---|
 | Bot token leak | Token loaded from env var (`HARLE_TELEGRAM_BOT_TOKEN`) only, never in committed config files. `.env` is in `.gitignore`. | Rotate via BotFather. |
-| Unauthorized users | Optional `HARLE_TELEGRAM_ALLOWED_USER_IDS` allowlist (comma-separated numeric Telegram user IDs). If empty, allow all (single-operator assumption). | Admin commands, DB-backed ACL (Stage 3). |
+| Unauthorized users | Access controlled by `HARLE_TELEGRAM_ACCESS_POLICY`; default `allowlist` mode admits only `HARLE_TELEGRAM_ALLOWED_USER_IDS`. `open` is explicit opt-in. | Richer organizational policy definitions (users, groups, topics, roles). |
 | Orchestrator API token leak | Reuse `HARLE_API_TOKEN` env var. Bot reads it at startup. Same token the CLI uses. | Same. |
-| Abuse / spam | Not enforced in Stage 1 (single-user). Allowlist is the primary gate. | Rate limiter per `user_id` (Stage 3). |
+| Abuse / spam | Not fully enforced in Stage 1. Access policy is the primary gate. | Rate limiter per `user_id` plus group/topic policy (Stage 3). |
 | Message content exfiltration | Telegram API uses HTTPS. Orchestrator on localhost or private network (Tailscale). | TLS to orchestrator if remote. |
 | Prompt injection via Telegram | Same risk as CLI — the orchestrator is responsible for sandboxing. No change to the threat model. | No change. |
 | Bot process compromise | Runs as unprivileged systemd service. Has access only to orchestrator API, not to the database or filesystem directly. | Same. |
@@ -305,7 +362,8 @@ Configuration follows the existing [`config.py`](../../../src/harle/config.py) p
 | `HARLE_TELEGRAM_BOT_TOKEN` | yes | — | BotFather token for the chat bot |
 | `HARLE_API_URL` | no | `http://127.0.0.1:8000` | Orchestrator base URL |
 | `HARLE_API_TOKEN` | no | — | Bearer token for orchestrator auth (same as CLI) |
-| `HARLE_TELEGRAM_ALLOWED_USER_IDS` | no | (empty = allow all) | Comma-separated Telegram user IDs |
+| `HARLE_TELEGRAM_ACCESS_POLICY` | no | `allowlist` | Access mode: `allowlist` or `open` in Stage 1 |
+| `HARLE_TELEGRAM_ALLOWED_USER_IDS` | no | empty | Comma-separated Telegram user IDs used when policy is `allowlist` |
 | `HARLE_TELEGRAM_CONTEXT` | no | `personal` | Default `context` field sent to `/chat` |
 
 **Important:** the existing `HARLE_TELEGRAM_ALERT_BOT_TOKEN` and `HARLE_TELEGRAM_ALERT_CHAT_ID` (used by `scripts/health-monitor.sh` for operational alerts) are separate from the chat bot token. The chat bot should use its own dedicated BotFather token to keep alert and chat concerns isolated.
@@ -338,10 +396,12 @@ src/harle/telegram/
     main.py          # entrypoint: bot setup, polling loop, signal handling
     handlers.py      # message and command handlers (/start, /help, text)
     client.py        # thin HTTP wrapper: POST /chat, auth headers
+    processing.py    # request-id generation, /processing polling, timeout classification
+    transport.py     # Telegram reply splitting, escaping, content-type rejections
     config.py        # Telegram-specific settings (or extend harle.config)
 ```
 
-Each file stays under 500 lines per project convention. `client.py` mirrors the patterns from the Go CLI's `client.go` — a struct/class that holds the base URL, API token, and a method per endpoint.
+Each file stays under 500 lines per project convention. `client.py` mirrors the patterns from the Go CLI's `client.go` — a struct/class that holds the base URL, API token, and a method per endpoint. `processing.py` should intentionally mirror the CLI's liveness behavior so timeout handling and `/processing` semantics do not diverge across clients.
 
 ---
 
@@ -353,6 +413,7 @@ Each file stays under 500 lines per project convention. `client.py` mirrors the 
 | Long-polling (not webhook) for Stage 1 | Simpler deployment — no public endpoint, no TLS certificate, no reverse proxy. The bot process connects outbound. |
 | Separate process (not embedded in FastAPI) | The bot has its own event loop and lifecycle. Decoupling from the orchestrator means either can restart independently. The orchestrator does not need to know about Telegram. |
 | `httpx` for orchestrator calls | Async HTTP client already used elsewhere in the project. Supports timeouts, connection pooling, and auth headers. |
+| CLI-aligned `/processing` liveness | Reuse the same server contract, request-id semantics, and error classification as the CLI so clients behave consistently during long runs. |
 
 **Why not `python-telegram-bot`?**
 Both `aiogram` and `python-telegram-bot` are mature. `aiogram 3.x` was chosen for its async-first design (no synchronous fallback confusion), cleaner handler registration via routers, and stronger type annotations. Either would work.
@@ -374,13 +435,16 @@ Both `aiogram` and `python-telegram-bot` are mature. `aiogram 3.x` was chosen fo
 HARLE_TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 ```
 
-2. (Optional) Restrict access to your own Telegram user ID:
+2. Choose an access policy. Safe default for a private deployment:
 
 ```bash
+HARLE_TELEGRAM_ACCESS_POLICY=allowlist
 HARLE_TELEGRAM_ALLOWED_USER_IDS=123456789
 ```
 
 To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot) or check the bot's startup logs after sending it a message.
+
+Use `HARLE_TELEGRAM_ACCESS_POLICY=open` only when you intentionally want an open bot.
 
 3. Install and run:
 
