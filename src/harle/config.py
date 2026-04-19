@@ -50,6 +50,13 @@ class Settings:
     HARLE_PORT: int = 8000
     # When non-empty, require ``Authorization: Bearer <token>`` on all routes except ``/health*``.
     HARLE_API_TOKEN: str = ""
+    # Orchestrator base URL (CLI, vault-sync, Telegram bot). No trailing slash required.
+    HARLE_API_URL: str = "http://127.0.0.1:8000"
+
+    # Telegram chat bot (Stage 1+). Separate from HARLE_TELEGRAM_ALERT_* (health-monitor alerts).
+    HARLE_TELEGRAM_BOT_TOKEN: str = ""
+    HARLE_TELEGRAM_ACCESS_POLICY: str = "allowlist"  # allowlist | open
+    HARLE_TELEGRAM_ALLOWED_USER_IDS: str = ""  # comma-separated Telegram user IDs when policy is allowlist
     HARLE_LLM_PROVIDER: str = PROVIDER_OPENAI
 
     # Model tiers — must be non-empty (see :class:`~harle.orchestrator.model_tier.ModelTierConfig`)

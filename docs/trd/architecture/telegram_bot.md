@@ -92,7 +92,7 @@ The smallest possible slice: Telegram message in → orchestrator → assistant 
 **In scope:**
 
 - Bot responds to `/start` with a welcome message.
-- Any other text message is forwarded to `POST /chat` with `context="personal"` and `conversation_id=null` (every message is a new conversation — no memory between messages).
+- Any other text message is forwarded to `POST /chat` with `conversation_id=null` (every message is a new conversation — no memory between messages). The bot omits the `context` field so the orchestrator's default (currently `personal`) and role-based routing decide.
 - The `result` field from `RunResponse` is sent back as plain Telegram text. If the result exceeds Telegram's per-message limit, the bot splits it into multiple sequential messages.
 - Errors (orchestrator 5xx, timeout, network) produce a user-friendly error reply instead of a crash or silence.
 - Unsupported content types (photo, voice, audio, video, document, sticker, location, contact, poll, etc.) receive an explicit reply that the bot currently supports text messages and commands only.
@@ -200,7 +200,7 @@ This section is the contract for the Stage 1 implementation.
 |---|---|---|
 | 1 | `/start` returns a welcome message explaining what the bot does | Yes — send `/start`, verify reply |
 | 2 | `/help` returns a list of available commands | Yes — send `/help`, verify reply |
-| 3 | Any text message → `POST /chat` with `message=<text>`, `context="personal"`, `conversation_id=null` | Yes — send message, verify orchestrator receives request |
+| 3 | Any text message → `POST /chat` with `message=<text>`, `conversation_id=null` (no `context` override; orchestrator default applies) | Yes — send message, verify orchestrator receives request |
 | 4 | `RunResponse.result` is sent back as Telegram text; oversized replies are split into multiple messages | Yes — verify reply content and chunk ordering |
 | 5 | Orchestrator errors (5xx, timeout, unreachable) → user-friendly error reply with distinct timeout vs unreachable messaging | Yes — stop orchestrator or force 504, verify error reply |
 | 6 | Unsupported content types receive an explicit "text only for now" reply and do not call the orchestrator | Yes — send photo/sticker, verify reply and no `/chat` request |
@@ -226,7 +226,7 @@ The bot is a thin HTTP client that maps Telegram events to orchestrator HTTP cal
 
 | Bot trigger | HTTP method | Path | Key fields | Stage |
 |---|---|---|---|---|
-| User text message | `POST` | `/chat` | `message`, `context="personal"`, `conversation_id=null` (Stage 1) or stored ID (Stage 2+) | 1 |
+| User text message | `POST` | `/chat` | `message`, `conversation_id=null` (Stage 1) or stored ID (Stage 2+); `context` left to orchestrator default until Stage 4 `/context` command | 1 |
 | Unsupported non-text message | — | — | Local reply only: "I can't process this content type yet. Please send text." | 1 |
 | `/start` | — | — | Local reply only, no orchestrator call | 1 |
 | `/help` | — | — | Local reply only | 1 |
@@ -364,7 +364,8 @@ Configuration follows the existing [`config.py`](../../../src/harle/config.py) p
 | `HARLE_API_TOKEN` | no | — | Bearer token for orchestrator auth (same as CLI) |
 | `HARLE_TELEGRAM_ACCESS_POLICY` | no | `allowlist` | Access mode: `allowlist` or `open` in Stage 1 |
 | `HARLE_TELEGRAM_ALLOWED_USER_IDS` | no | empty | Comma-separated Telegram user IDs used when policy is `allowlist` |
-| `HARLE_TELEGRAM_CONTEXT` | no | `personal` | Default `context` field sent to `/chat` |
+
+The bot deliberately exposes **no** config knob for the orchestrator's `context` field. Stage 1 omits `context` from `POST /chat` so the orchestrator applies its own default; per-message context selection is the role/orchestrator's responsibility, not the bot's. (Stage 4's `/context` command is a per-conversation override, not a startup config.)
 
 **Important:** the existing `HARLE_TELEGRAM_ALERT_BOT_TOKEN` and `HARLE_TELEGRAM_ALERT_CHAT_ID` (used by `scripts/health-monitor.sh` for operational alerts) are separate from the chat bot token. The chat bot should use its own dedicated BotFather token to keep alert and chat concerns isolated.
 
