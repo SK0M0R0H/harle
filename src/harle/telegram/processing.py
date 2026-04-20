@@ -112,53 +112,71 @@ async def _chat_with_polling_impl(
     request_id: str,
 ) -> RunResponse:
     chat_task: asyncio.Task[RunResponse] = asyncio.create_task(client.chat(request, request_id))
-
-    early = await _grace_wait(chat_task, cfg.grace_period)
-    if early is not None:
-        return early
-
-    missed_pings = 0
-    not_found_streak = 0
-    immediate_ping = True
-
-    while True:
-        interval = 0.0 if immediate_ping else cfg.ping_interval
-        immediate_ping = False
-
-        sleep_task = asyncio.create_task(asyncio.sleep(interval))
-        _, pending = await asyncio.wait(
-            {chat_task, sleep_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        # Never cancel ``chat_task`` here: when the sleep wins the race, ``pending``
-        # is ``{chat_task}`` — cancelling it would abort the in-flight POST /chat.
-        for t in pending:
-            if t is chat_task:
-                continue
-            t.cancel()
-        await _await_cancelled_helper(sleep_task)
-
-        if chat_task.done():
-            return await chat_task
-
-        try:
-            status = await client.check_processing(request_id)
-        except (ChatUnreachable, ChatHTTPError) as exc:
-            missed_pings += 1
-            if missed_pings >= cfg.max_missed_pings:
-                return await _finalize_unreachable(chat_task, exc)
-            continue
+    try:
+        early = await _grace_wait(chat_task, cfg.grace_period)
+        if early is not None:
+            return early
 
         missed_pings = 0
+        not_found_streak = 0
+        immediate_ping = True
 
-        if status.status == "processing":
-            not_found_streak = 0
-        elif status.status == "not_found":
-            not_found_streak += 1
-            if not_found_streak >= 2:
-                return await _finalize_processing_lost(chat_task)
-        else:
-            not_found_streak = 0
+        while True:
+            interval = 0.0 if immediate_ping else cfg.ping_interval
+            immediate_ping = False
+
+            sleep_task = asyncio.create_task(asyncio.sleep(interval))
+            _, pending = await asyncio.wait(
+                {chat_task, sleep_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # Never cancel ``chat_task`` here: when the sleep wins the race, ``pending``
+            # is ``{chat_task}`` — cancelling it would abort the in-flight POST /chat.
+            for t in pending:
+                if t is chat_task:
+                    continue
+                t.cancel()
+            await _await_cancelled_helper(sleep_task)
+
+            if chat_task.done():
+                return await chat_task
+
+            try:
+                status = await client.check_processing(request_id)
+            except (ChatUnreachable, ChatHTTPError) as exc:
+                missed_pings += 1
+                if missed_pings >= cfg.max_missed_pings:
+                    return await _finalize_unreachable(chat_task, exc)
+                continue
+
+            missed_pings = 0
+
+            if status.status == "processing":
+                not_found_streak = 0
+            elif status.status == "not_found":
+                not_found_streak += 1
+                if not_found_streak >= 2:
+                    return await _finalize_processing_lost(chat_task)
+            else:
+                not_found_streak = 0
+    finally:
+        # When the outer ``asyncio.wait_for(..., max_wait_seconds=...)`` times out (or this
+        # coroutine is cancelled for any other reason), cancel and drain ``chat_task`` so
+        # the POST /chat does not keep running as an orphan task.
+        if not chat_task.done():
+            chat_task.cancel()
+            try:
+                await asyncio.wait_for(chat_task, timeout=_POST_CANCEL_DRAIN_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            except ChatServerTimeout:
+                pass
+            except ChatHTTPError:
+                pass
+            except ChatUnreachable:
+                pass
+            except asyncio.TimeoutError:
+                pass
 
 
 async def _grace_wait(chat_task: asyncio.Task[RunResponse], grace_period: float) -> RunResponse | None:

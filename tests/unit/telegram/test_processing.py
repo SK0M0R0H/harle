@@ -182,3 +182,35 @@ async def test_max_wait_seconds() -> None:
             config=cfg,
         )
     assert ei.value.request_id is not None and len(ei.value.request_id) >= 32
+
+
+@pytest.mark.asyncio
+async def test_max_wait_seconds_cancels_inflight_chat_task() -> None:
+    """``HARLE_CHAT_MAX_WAIT_SECONDS`` must cancel the POST /chat task, not leave it running."""
+    chat_cancelled = asyncio.Event()
+
+    class C(_FakeOrchestrator):
+        async def chat(self, request: RunRequest, request_id: str) -> RunResponse:
+            try:
+                await asyncio.sleep(100.0)
+            except asyncio.CancelledError:
+                chat_cancelled.set()
+                raise
+            return RunResponse(run_id="1", status="completed", result="never", context="personal")
+
+        async def check_processing(self, request_id: str) -> ProcessingStatusResponse:
+            return ProcessingStatusResponse(
+                request_id=request_id,
+                status="processing",
+                started_at="2020-01-01T00:00:00+00:00",
+            )
+
+    c = C()
+    cfg = PollConfig(ping_interval=0.05, max_missed_pings=10, grace_period=0.0, max_wait_seconds=0.08)
+    with pytest.raises(ChatServerTimeout):
+        await chat_with_polling(
+            c,  # type: ignore[arg-type]
+            RunRequest(message="hi", context="personal"),
+            config=cfg,
+        )
+    assert chat_cancelled.is_set()
