@@ -141,63 +141,63 @@ def build_router(
         typing_stop = asyncio.Event()
         typing_task = asyncio.create_task(typing_loop(message.bot, chat_id, typing_stop))
         try:
-            response = await chat_with_polling(orchestrator_client, run_request)
-        except (ChatServerTimeout, ChatUnreachable, ChatProcessingLost, ChatHTTPError) as exc:
-            logger.warning(
-                "Orchestrator error for user_id=%s request_id=%s: %s",
-                uid, exc.request_id, exc, exc_info=True,
-            )
-            for chunk in split_for_telegram(error_reply_for(exc)):
-                await message.answer(chunk)
-            return
-        except Exception as exc:  # noqa: BLE001 — last-resort user-facing fallback
-            logger.exception("Unexpected error for user_id=%s", uid)
-            for chunk in split_for_telegram(error_reply_for(exc)):
-                await message.answer(chunk)
-            return
-        finally:
-            typing_stop.set()
-            typing_task.cancel()
             try:
-                await typing_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                # typing_loop can raise Telegram API errors (network, blocked chat, etc.).
-                # Swallow here so busy_guard is always released; the user already got a reply
-                # or an error from chat_with_polling above.
+                response = await chat_with_polling(orchestrator_client, run_request)
+            except (ChatServerTimeout, ChatUnreachable, ChatProcessingLost, ChatHTTPError) as exc:
                 logger.warning(
-                    "Typing indicator task ended with error for chat_id=%s: %s",
-                    chat_id,
-                    exc,
-                    exc_info=True,
+                    "Orchestrator error for user_id=%s request_id=%s: %s",
+                    uid, exc.request_id, exc, exc_info=True,
                 )
+                for chunk in split_for_telegram(error_reply_for(exc)):
+                    await message.answer(chunk)
+                return
+            except Exception as exc:  # noqa: BLE001 — last-resort user-facing fallback
+                logger.exception("Unexpected error for user_id=%s", uid)
+                for chunk in split_for_telegram(error_reply_for(exc)):
+                    await message.answer(chunk)
+                return
             finally:
-                await busy_guard.release(chat_id)
+                typing_stop.set()
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    # typing_loop can raise Telegram API errors (network, blocked chat, etc.).
+                    # Swallow here; outer finally still releases busy_guard after any user replies.
+                    logger.warning(
+                        "Typing indicator task ended with error for chat_id=%s: %s",
+                        chat_id,
+                        exc,
+                        exc_info=True,
+                    )
 
-        if response.conversation_id:
-            applied = await store.set_conversation_if_epoch_matches(
-                chat_id,
-                response.conversation_id,
-                expected_epoch=turn_epoch,
-            )
-            if not applied:
-                logger.info(
-                    "Skipped persisting conversation_id after /new race (chat_id=%s)",
+            if response.conversation_id:
+                applied = await store.set_conversation_if_epoch_matches(
                     chat_id,
+                    response.conversation_id,
+                    expected_epoch=turn_epoch,
                 )
+                if not applied:
+                    logger.info(
+                        "Skipped persisting conversation_id after /new race (chat_id=%s)",
+                        chat_id,
+                    )
 
-        plain_result = response.result or "The assistant returned an empty response."
-        if response.status == "failed":
-            for chunk in split_for_telegram(plain_result):
-                await message.answer(chunk)
-            return
+            plain_result = response.result or "The assistant returned an empty response."
+            if response.status == "failed":
+                for chunk in split_for_telegram(plain_result):
+                    await message.answer(chunk)
+                return
 
-        await send_rendered_reply(
-            message,
-            markdown_v2=to_markdown_v2(plain_result),
-            plain_text=plain_result,
-        )
+            await send_rendered_reply(
+                message,
+                markdown_v2=to_markdown_v2(plain_result),
+                plain_text=plain_result,
+            )
+        finally:
+            await busy_guard.release(chat_id)
 
     @router.message(~F.text)
     async def on_non_text(message: Message, access_policy: AccessPolicy) -> None:
