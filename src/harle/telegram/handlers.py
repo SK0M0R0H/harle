@@ -162,7 +162,18 @@ def build_router(
                 await typing_task
             except asyncio.CancelledError:
                 pass
-            await busy_guard.release(chat_id)
+            except Exception as exc:
+                # typing_loop can raise Telegram API errors (network, blocked chat, etc.).
+                # Swallow here so busy_guard is always released; the user already got a reply
+                # or an error from chat_with_polling above.
+                logger.warning(
+                    "Typing indicator task ended with error for chat_id=%s: %s",
+                    chat_id,
+                    exc,
+                    exc_info=True,
+                )
+            finally:
+                await busy_guard.release(chat_id)
 
         if response.conversation_id:
             await store.set(chat_id, response.conversation_id)
