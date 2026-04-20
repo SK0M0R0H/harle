@@ -42,6 +42,10 @@ HARLE_TELEGRAM_BOT_TOKEN=<paste-the-token-from-step-1>
 HARLE_TELEGRAM_ACCESS_POLICY=allowlist
 HARLE_TELEGRAM_ALLOWED_USER_IDS=<your-telegram-user-id>
 
+# Stage 2 state (conversation continuity across restarts).
+# Use an absolute path in systemd/docker deployments.
+HARLE_TELEGRAM_STATE_PATH=telegram_state.sqlite
+
 # Where the orchestrator is listening (already used by the CLI / vault-sync).
 HARLE_API_URL=http://127.0.0.1:8000
 
@@ -53,6 +57,7 @@ Notes:
 
 - `HARLE_TELEGRAM_ALLOWED_USER_IDS` is comma-separated (e.g. `12345,67890`). Whitespace is ignored.
 - `HARLE_TELEGRAM_ACCESS_POLICY=open` allows **any** Telegram user to use the bot. Only set it for development or an intentionally public bot.
+- `HARLE_TELEGRAM_STATE_PATH` is where DM `chat_id -> conversation_id` mappings are persisted in SQLite. For systemd, prefer an absolute path (for example `/home/harle/harle/telegram_state.sqlite`). For Docker, mount this path to persistent storage.
 - `HARLE_API_TOKEN` is shared with `harle-cli` and `vault-sync`. If your orchestrator does not enforce bearer auth (token unset on the server), leave it unset on the bot too.
 - The `context` field on `POST /chat` is **not** a bot config knob — the bot relies on the orchestrator's default and on role-driven routing inside the orchestrator. To change it per role/topic, modify orchestrator routing, not the bot.
 - Optional CLI-aligned polling tunables (defaults are fine for most deployments):
@@ -179,6 +184,17 @@ The image must include the `harle-telegram` entrypoint — rebuild from the curr
 - **Rotate the bot token:** message BotFather, send `/revoke`, pick the bot, paste the new token into `.env`, restart `harle-telegram`.
 - **Add or remove allowed users:** edit `HARLE_TELEGRAM_ALLOWED_USER_IDS` in `.env`, restart the service. Changes are not hot-reloaded.
 - **Switch to `open` policy temporarily (e.g. demo):** set `HARLE_TELEGRAM_ACCESS_POLICY=open`, restart, and **remember to switch back** to `allowlist` afterwards.
+- **Reset Stage 2 DM conversation mappings:** `sqlite3 "$HARLE_TELEGRAM_STATE_PATH" 'DELETE FROM dm_conversations;'` then restart `harle-telegram` (or run while stopped).
+
+## Stage 2 features
+
+Stage 2 adds continuity and a few UX upgrades on top of Stage 1:
+
+- `/new` resets your DM conversation mapping so the next message starts a fresh orchestrator conversation.
+- `/id` shows the current conversation id mapped to your DM.
+- While `/chat` is processing, the bot sends Telegram `typing` actions.
+- Replies are rendered as Telegram `MarkdownV2` (via `telegramify-markdown`) and automatically fall back to plain text if Telegram rejects formatting.
+- The bot allows only one in-flight `/chat` turn per DM. If you send another message before the current turn finishes, the bot replies with a polite "please wait" message.
 
 ## Troubleshooting
 

@@ -136,9 +136,9 @@ The bot becomes a proper assistant you can have an ongoing conversation with.
 - Persistent `conversation_id` mapping: one conversation per DM `chat_id`. The bot stores the `conversation_id` returned by the orchestrator and sends it on subsequent messages.
 - `/new` command resets the conversation (sets `conversation_id=null`).
 - Typing indicator (`sendChatAction: typing`) while the orchestrator is processing.
-- Markdown rendering of assistant replies (Telegram `parse_mode: "HTML"` with escaping and fallback to plain text on parse errors).
+- Markdown rendering of assistant replies (Telegram `parse_mode: "MarkdownV2"` via `telegramify-markdown`, with fallback to plain text on parse errors).
 - `/id` command shows the current `conversation_id`.
-- Single in-flight request per DM `chat_id`; later messages are queued or rejected with a "please wait" response until the active turn completes.
+- Single in-flight request per DM `chat_id`; Stage 2 chooses reject-busy behavior with a "please wait" response until the active turn completes.
 
 **Out of scope:** group/topic support, context switching, rate limiting, capture/import.
 
@@ -271,7 +271,7 @@ The Telegram bot should follow the same `/chat` liveness contract as the CLI ins
 
 The bot reads `RunResponse` and extracts:
 
-- `result` → reply text sent to user. In Stage 1, send as plain text and split across multiple Telegram messages if needed. In Stage 2+, escape for HTML formatting and fall back to plain text on parse failure.
+- `result` → reply text sent to user. In Stage 1, send as plain text and split across multiple Telegram messages if needed. In Stage 2+, convert Markdown to Telegram `MarkdownV2` and fall back to plain text on parse failure.
 - `conversation_id` → stored for Stage 2+ continuity.
 - `status` → if `"failed"`, the bot sends `result` as an error message (the orchestrator includes a user-facing error description in `result` on failure).
 
@@ -295,7 +295,7 @@ The bot maintains a single `conversation_id` per DM user:
 
 This is the same pattern as the CLI's `session/manager.go`: the bot holds only a mapping `chat_id → conversation_id`; the orchestrator + database own all history.
 
-Storage: in-memory dict (lost on restart — acceptable for single-operator use). Optionally persist to a small file or SQLite if restart durability is needed.
+Storage: SQLite-backed mapping (`HARLE_TELEGRAM_STATE_PATH`, default `telegram_state.sqlite`) so conversation continuity survives bot restarts by default.
 
 ### Stage 3+ — Forum topics
 
@@ -364,6 +364,7 @@ Configuration follows the existing [`config.py`](../../../src/harle/config.py) p
 | `HARLE_API_TOKEN` | no | — | Bearer token for orchestrator auth (same as CLI) |
 | `HARLE_TELEGRAM_ACCESS_POLICY` | no | `allowlist` | Access mode: `allowlist` or `open` in Stage 1 |
 | `HARLE_TELEGRAM_ALLOWED_USER_IDS` | no | empty | Comma-separated Telegram user IDs used when policy is `allowlist` |
+| `HARLE_TELEGRAM_STATE_PATH` | no | `telegram_state.sqlite` | SQLite file that stores DM `chat_id → conversation_id` mappings |
 
 The bot deliberately exposes **no** config knob for the orchestrator's `context` field. Stage 1 omits `context` from `POST /chat` so the orchestrator applies its own default; per-message context selection is the role/orchestrator's responsibility, not the bot's. (Stage 4's `/context` command is a per-conversation override, not a startup config.)
 

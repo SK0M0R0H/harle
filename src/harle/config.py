@@ -57,6 +57,7 @@ class Settings:
     HARLE_TELEGRAM_BOT_TOKEN: str = ""
     HARLE_TELEGRAM_ACCESS_POLICY: str = "allowlist"  # allowlist | open
     HARLE_TELEGRAM_ALLOWED_USER_IDS: str = ""  # comma-separated Telegram user IDs when policy is allowlist
+    HARLE_TELEGRAM_STATE_PATH: str = "telegram_state.sqlite"
     HARLE_LLM_PROVIDER: str = PROVIDER_OPENAI
 
     # Model tiers — must be non-empty (see :class:`~harle.orchestrator.model_tier.ModelTierConfig`)

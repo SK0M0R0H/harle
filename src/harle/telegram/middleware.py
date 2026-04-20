@@ -10,7 +10,9 @@ from aiogram.types import Message, TelegramObject
 
 from harle.config import Settings
 from harle.telegram.access import AccessPolicy
+from harle.telegram.busy import ChatBusyGuard
 from harle.telegram.client import OrchestratorClient
+from harle.telegram.store import SqliteConversationStore
 
 
 class TelegramContextMiddleware(BaseMiddleware):
@@ -21,10 +23,14 @@ class TelegramContextMiddleware(BaseMiddleware):
         settings: Settings,
         client: OrchestratorClient,
         access: AccessPolicy,
+        store: SqliteConversationStore,
+        busy_guard: ChatBusyGuard,
     ) -> None:
         self._settings = settings
         self._client = client
         self._access = access
+        self._store = store
+        self._busy_guard = busy_guard
 
     async def __call__(
         self,
@@ -35,6 +41,8 @@ class TelegramContextMiddleware(BaseMiddleware):
         data["settings"] = self._settings
         data["orchestrator_client"] = self._client
         data["access_policy"] = self._access
+        data["store"] = self._store
+        data["busy_guard"] = self._busy_guard
         return await handler(event, data)
 
 

@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods.base import TelegramType
 from aiogram.types import Chat, Message, Update, User
 from aiogram.enums import ChatType
@@ -50,6 +52,7 @@ class RecordingSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.methods: list[Any] = []
+        self.fail_markdown_v2 = False
 
     async def close(self) -> None:
         pass
@@ -72,6 +75,10 @@ class RecordingSession(BaseSession):
     ) -> TelegramType:
         self.methods.append(method)
         api = method.__api_method__
+        if api == "sendMessage":
+            parse_mode = getattr(method, "parse_mode", None)
+            if self.fail_markdown_v2 and parse_mode in ("MarkdownV2", ParseMode.MARKDOWN_V2):
+                raise TelegramBadRequest(method=method, message="can't parse entities")
         if api == "sendMessage":
             from aiogram.types import Message as OutMessage
 

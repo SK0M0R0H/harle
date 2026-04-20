@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import Message
+
 from harle.telegram.errors import (
     ChatError,
     ChatHTTPError,
@@ -159,3 +163,56 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+async def send_rendered_reply(
+    message: Message,
+    *,
+    markdown_v2: str | None,
+    plain_text: str,
+) -> None:
+    """Send a reply, preferring MarkdownV2 and falling back to plain text."""
+    if markdown_v2:
+        try:
+            for chunk in split_markdown_v2_for_telegram(markdown_v2):
+                await message.answer(chunk, parse_mode=ParseMode.MARKDOWN_V2)
+            return
+        except TelegramBadRequest:
+            pass
+
+    for chunk in split_for_telegram(plain_text):
+        await message.answer(chunk)
+
+
+def split_markdown_v2_for_telegram(
+    text: str,
+    limit: int = TELEGRAM_MAX_MESSAGE_LENGTH,
+) -> list[str]:
+    """Split MarkdownV2 text by paragraph boundaries.
+
+    If any paragraph still exceeds ``limit``, this returns plain chunking so
+    the caller can still deliver content.
+    """
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for block in text.split("\n\n"):
+        candidate = block if not current else f"{current}\n\n{block}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = block
+        else:
+            return split_for_telegram(text, limit=limit)
+        if len(current) > limit:
+            return split_for_telegram(text, limit=limit)
+
+    if current:
+        chunks.append(current)
+    return chunks
