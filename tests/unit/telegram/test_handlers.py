@@ -351,6 +351,51 @@ async def test_rejects_second_message_while_first_is_inflight(
 
 
 @pytest.mark.asyncio
+async def test_new_during_inflight_does_not_restore_old_conversation_id(
+    monkeypatch: pytest.MonkeyPatch,
+    recording_bot: tuple[Bot, RecordingSession],
+    telegram_open_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    """``/new`` while ``/chat`` is in flight must not let the late response repopulate the store."""
+    bot, _session = recording_bot
+    orch = OrchestratorClient(telegram_open_settings.HARLE_API_URL, "")
+    access = AccessPolicy(telegram_open_settings)
+    store = await _init_store(tmp_path)
+    busy_guard = ChatBusyGuard()
+    await store.set(1, "conv-old")
+
+    gate = asyncio.Event()
+
+    async def fake_poll(client: object, req: RunRequest, config: object | None = None) -> RunResponse:
+        await gate.wait()
+        return RunResponse(
+            run_id="r",
+            status="completed",
+            result="stale reply",
+            context="personal",
+            conversation_id="conv-from-stale-turn",
+        )
+
+    monkeypatch.setattr("harle.telegram.handlers.chat_with_polling", fake_poll)
+    dp = Dispatcher()
+    dp.include_router(build_router(telegram_open_settings, orch, access, store, busy_guard))
+    try:
+        first_task = asyncio.create_task(
+            dp.feed_update(bot, make_update(make_private_message(text="long running"))),
+        )
+        await asyncio.sleep(0.05)
+        await dp.feed_update(bot, make_update(make_private_message(text="/new")))
+        gate.set()
+        await first_task
+        assert await store.get(1) is None
+    finally:
+        await store.aclose()
+        await orch.aclose()
+        await bot.session.close()
+
+
+@pytest.mark.asyncio
 async def test_markdown_v2_falls_back_to_plain_text_on_parse_error(
     monkeypatch: pytest.MonkeyPatch,
     recording_bot: tuple[Bot, RecordingSession],

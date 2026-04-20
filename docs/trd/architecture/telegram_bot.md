@@ -291,11 +291,11 @@ The bot maintains a single `conversation_id` per DM user:
 
 - First message: `conversation_id=null`. The orchestrator creates a new conversation and returns the ID in `RunResponse.conversation_id`.
 - Subsequent messages: the bot sends the stored `conversation_id`. The orchestrator includes prior messages in context.
-- `/new`: resets the stored ID to `null`. Next message starts fresh.
+- `/new`: resets the stored ID to `null` and bumps a per-chat epoch so a still-running `/chat` cannot write back the old `conversation_id` after the reset (concurrent update ordering).
 
 This is the same pattern as the CLI's `session/manager.go`: the bot holds only a mapping `chat_id → conversation_id`; the orchestrator + database own all history.
 
-Storage: SQLite-backed mapping (`HARLE_TELEGRAM_STATE_PATH`, default `telegram_state.sqlite`) so conversation continuity survives bot restarts by default.
+Storage: SQLite (`HARLE_TELEGRAM_STATE_PATH`, default `telegram_state.sqlite`) holds the `chat_id → conversation_id` mapping plus a small per-chat epoch counter used to make `/new` safe against in-flight orchestrator replies.
 
 ### Stage 3+ — Forum topics
 
@@ -364,7 +364,7 @@ Configuration follows the existing [`config.py`](../../../src/harle/config.py) p
 | `HARLE_API_TOKEN` | no | — | Bearer token for orchestrator auth (same as CLI) |
 | `HARLE_TELEGRAM_ACCESS_POLICY` | no | `allowlist` | Access mode: `allowlist` or `open` in Stage 1 |
 | `HARLE_TELEGRAM_ALLOWED_USER_IDS` | no | empty | Comma-separated Telegram user IDs used when policy is `allowlist` |
-| `HARLE_TELEGRAM_STATE_PATH` | no | `telegram_state.sqlite` | SQLite file that stores DM `chat_id → conversation_id` mappings |
+| `HARLE_TELEGRAM_STATE_PATH` | no | `telegram_state.sqlite` | SQLite file for DM `chat_id → conversation_id` mappings and per-chat `/new` epoch |
 
 The bot deliberately exposes **no** config knob for the orchestrator's `context` field. Stage 1 omits `context` from `POST /chat` so the orchestrator applies its own default; per-message context selection is the role/orchestrator's responsibility, not the bot's. (Stage 4's `/context` command is a per-conversation override, not a startup config.)
 

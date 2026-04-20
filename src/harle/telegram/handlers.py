@@ -131,7 +131,7 @@ def build_router(
             return
 
         try:
-            conversation_id = await store.get(chat_id)
+            conversation_id, turn_epoch = await store.get_conversation_and_epoch(chat_id)
             run_request = RunRequest(message=text, conversation_id=conversation_id)
         except ValidationError:
             await message.answer("That message could not be sent to Harle (validation error).")
@@ -176,7 +176,16 @@ def build_router(
                 await busy_guard.release(chat_id)
 
         if response.conversation_id:
-            await store.set(chat_id, response.conversation_id)
+            applied = await store.set_conversation_if_epoch_matches(
+                chat_id,
+                response.conversation_id,
+                expected_epoch=turn_epoch,
+            )
+            if not applied:
+                logger.info(
+                    "Skipped persisting conversation_id after /new race (chat_id=%s)",
+                    chat_id,
+                )
 
         plain_result = response.result or "The assistant returned an empty response."
         if response.status == "failed":

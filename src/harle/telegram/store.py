@@ -34,6 +34,14 @@ class SqliteConversationStore:
             )
             """
         )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dm_chat_epoch (
+                chat_id INTEGER PRIMARY KEY,
+                epoch   INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
         await conn.commit()
         self._conn = conn
 
@@ -56,6 +64,32 @@ class SqliteConversationStore:
             await cursor.close()
             return str(row[0]) if row else None
 
+    async def get_conversation_and_epoch(self, chat_id: int) -> tuple[str | None, int]:
+        """Return ``(conversation_id, epoch)`` for ``chat_id`` under one lock.
+
+        Callers should use this snapshot when starting a turn so ``/new`` (which
+        bumps ``epoch`` and clears the row) invalidates late persistence from older
+        turns.
+        """
+        async with self._lock:
+            conn = self._require_connection()
+            cursor = await conn.execute(
+                "SELECT conversation_id FROM dm_conversations WHERE chat_id = ?",
+                (chat_id,),
+            )
+            conv_row = await cursor.fetchone()
+            await cursor.close()
+            conversation_id = str(conv_row[0]) if conv_row else None
+
+            cursor = await conn.execute(
+                "SELECT epoch FROM dm_chat_epoch WHERE chat_id = ?",
+                (chat_id,),
+            )
+            epoch_row = await cursor.fetchone()
+            await cursor.close()
+            epoch = int(epoch_row[0]) if epoch_row else 0
+            return conversation_id, epoch
+
     async def set(self, chat_id: int, conversation_id: str) -> None:
         """Upsert ``chat_id -> conversation_id`` mapping."""
         async with self._lock:
@@ -72,10 +106,53 @@ class SqliteConversationStore:
             )
             await conn.commit()
 
-    async def clear(self, chat_id: int) -> None:
-        """Delete the mapping for ``chat_id`` if present."""
+    async def set_conversation_if_epoch_matches(
+        self,
+        chat_id: int,
+        conversation_id: str,
+        *,
+        expected_epoch: int,
+    ) -> bool:
+        """Persist ``conversation_id`` only if ``dm_chat_epoch`` for ``chat_id`` is still ``expected_epoch``."""
         async with self._lock:
             conn = self._require_connection()
+            cursor = await conn.execute(
+                "SELECT epoch FROM dm_chat_epoch WHERE chat_id = ?",
+                (chat_id,),
+            )
+            row = await cursor.fetchone()
+            await cursor.close()
+            current = int(row[0]) if row else 0
+            if current != expected_epoch:
+                return False
+            await conn.execute(
+                """
+                INSERT INTO dm_conversations(chat_id, conversation_id, updated_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    conversation_id=excluded.conversation_id,
+                    updated_at=datetime('now')
+                """,
+                (chat_id, conversation_id),
+            )
+            await conn.commit()
+            return True
+
+    async def clear(self, chat_id: int) -> None:
+        """Bump per-chat epoch and delete the mapping for ``chat_id`` (``/new``).
+
+        Bumping the epoch invalidates any in-flight turn that started with an older
+        epoch snapshot, so late ``RunResponse`` writes cannot undo a reset.
+        """
+        async with self._lock:
+            conn = self._require_connection()
+            await conn.execute(
+                """
+                INSERT INTO dm_chat_epoch(chat_id, epoch) VALUES (?, 1)
+                ON CONFLICT(chat_id) DO UPDATE SET epoch = epoch + 1
+                """,
+                (chat_id,),
+            )
             await conn.execute("DELETE FROM dm_conversations WHERE chat_id = ?", (chat_id,))
             await conn.commit()
 
