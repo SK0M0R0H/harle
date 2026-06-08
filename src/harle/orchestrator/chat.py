@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -185,6 +186,12 @@ class ChatMixin:
             routing_method=state.routing_method,
         )
 
+        if (
+            state.timeout_deadline_monotonic is not None
+            and time.monotonic() > state.timeout_deadline_monotonic
+        ):
+            raise RunTimeoutError("Run timed out before completion")
+
         with self.db.session() as session:
             add_message(
                 session,
@@ -226,6 +233,10 @@ class ChatMixin:
             conversation_id=request.conversation_id,
         )
         agent_result: AgentResult | None = None
+        if self.run_timeout_seconds and self.run_timeout_seconds > 0:
+            state.timeout_deadline_monotonic = (
+                time.monotonic() + float(self.run_timeout_seconds)
+            )
 
         with etrace.span(
             "handle_chat",
