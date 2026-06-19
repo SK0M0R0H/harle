@@ -523,3 +523,14 @@ Environment variables (never in config file):
 | `HARLE_DOTENV_PATH` | No | Optional custom `.env` file path |
 
 Harle loads `.env` automatically on startup. Process environment variables take precedence over values from `.env`.
+
+## License & commercial use
+
+Harle is **source-available**: the full source is public so anyone can read, audit, and verify exactly what the agent does.
+
+It is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE), which means:
+
+- **Free for noncommercial use** — personal projects, study, experimentation, research, and use by charities, educational institutions, and government bodies.
+- **Paid for business use** — any commercial purpose (use for the benefit of a business, building a product/service on it, offering it to customers) requires a separate commercial license.
+
+To use Harle commercially, see [LICENSE-COMMERCIAL.md](./LICENSE-COMMERCIAL.md) or contact **shirobokov.research@gmail.com**.
