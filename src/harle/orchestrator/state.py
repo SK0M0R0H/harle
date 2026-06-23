@@ -69,6 +69,7 @@ class RunState:
     final_agent: str | None = None
     starting_role: str | None = None
     models_used: dict[str, str] | None = None
+    timeout_deadline_monotonic: float | None = None
 
 
 class RunTimeoutError(TimeoutError):

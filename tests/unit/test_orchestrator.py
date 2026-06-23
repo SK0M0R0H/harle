@@ -303,6 +303,50 @@ class TestOrchestratorRunTimeout:
         assert len(exc_holder) == 1
         assert "timed out" in str(exc_holder[0])
 
+    def test_worker_thread_timeout_does_not_persist_messages_after_late_completion(
+        self,
+    ) -> None:
+        """POST /chat runs in a threadpool; a late agent finish must not write messages."""
+        from sqlalchemy import func, select
+
+        from harle.db.models import Message
+
+        slow_provider = MagicMock()
+        slow_provider.generate.side_effect = lambda **kwargs: (
+            time.sleep(1.5),
+            "completed after timeout",
+        )[1]
+
+        db = make_in_memory_chat_db()
+        svc = OrchestratorService(
+            llm_provider=slow_provider,
+            run_timeout_seconds=1,
+            db=db,
+        )
+        req = RunRequest(message="hello", context="personal")
+        exc_holder: list[Exception] = []
+
+        def run_in_worker() -> None:
+            try:
+                svc.chat(request=req)
+            except RunTimeoutError as exc:
+                exc_holder.append(exc)
+
+        worker = threading.Thread(target=run_in_worker)
+        worker.start()
+        worker.join(timeout=5)
+        assert worker.is_alive() is False
+        assert len(exc_holder) == 1
+
+        # Allow a late-finishing nested worker thread to finish if the bug is present.
+        time.sleep(2)
+
+        with db.session() as session:
+            message_count = session.scalar(
+                select(func.count()).select_from(Message),
+            )
+        assert message_count == 0
+
 
 class TestOrchestratorAgentRunnerTrello:
     @pytest.fixture(autouse=True)

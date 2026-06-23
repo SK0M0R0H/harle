@@ -78,9 +78,14 @@ def run_with_timeout(seconds: int | None, thunk: Callable[[], _T]) -> _T:
         with run_timeout(seconds):
             return thunk()
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(thunk)
-        try:
-            return future.result(timeout=seconds)
-        except FuturesTimeoutError:
-            raise RunTimeoutError("Run timed out before completion")
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(thunk)
+    try:
+        return future.result(timeout=seconds)
+    except FuturesTimeoutError:
+        raise RunTimeoutError("Run timed out before completion")
+    finally:
+        # Do not wait for the nested worker after timeout: the caller already
+        # treats the run as failed. chat() uses timeout_deadline_monotonic to
+        # skip late persistence in the orphan thread.
+        pool.shutdown(wait=False, cancel_futures=True)
