@@ -96,5 +96,6 @@ def run_with_timeout(
     except FuturesTimeoutError:
         if on_timeout is not None:
             on_timeout()
-        pool.shutdown(wait=False, cancel_futures=True)
         raise RunTimeoutError("Run timed out before completion")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
