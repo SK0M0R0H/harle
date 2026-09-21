@@ -243,6 +243,42 @@ class TestRunWithTimeout:
         assert len(exc_holder) == 1
         assert "timed out" in str(exc_holder[0])
 
+    def test_worker_thread_timeout_returns_without_waiting_for_thunk(self) -> None:
+        """Worker-thread timeout must not block until the thunk finishes."""
+        completed = threading.Event()
+        start = time.perf_counter()
+
+        def slow_thunk() -> int:
+            time.sleep(2)
+            completed.set()
+            return 1
+
+        def run_in_worker() -> None:
+            with pytest.raises(RunTimeoutError, match="timed out"):
+                _run_with_timeout(0.2, slow_thunk)
+
+        t = threading.Thread(target=run_in_worker)
+        t.start()
+        t.join(timeout=3)
+        elapsed = time.perf_counter() - start
+
+        assert t.is_alive() is False
+        assert elapsed < 1.0
+        assert completed.wait(timeout=3) is True
+
+    def test_worker_thread_on_timeout_callback_runs_before_raise(self) -> None:
+        fired = threading.Event()
+
+        def run_in_worker() -> None:
+            with pytest.raises(RunTimeoutError, match="timed out"):
+                _run_with_timeout(0.2, lambda: time.sleep(2), on_timeout=fired.set)
+
+        t = threading.Thread(target=run_in_worker)
+        t.start()
+        t.join(timeout=3)
+        assert t.is_alive() is False
+        assert fired.is_set()
+
 
 class TestOrchestratorRunTimeout:
     """OrchestratorService.chat() applies run_timeout_seconds and raises RunTimeoutError."""
@@ -302,6 +338,55 @@ class TestOrchestratorRunTimeout:
         assert t.is_alive() is False
         assert len(exc_holder) == 1
         assert "timed out" in str(exc_holder[0])
+
+    def test_chat_timeout_skips_late_message_persistence_from_worker_thread(self) -> None:
+        """Timed-out chat must not persist assistant text that finishes after the limit."""
+        from harle.db.conversations import create_conversation, get_recent_messages
+
+        slow_provider = MagicMock()
+        slow_provider.generate.side_effect = lambda **kwargs: (
+            time.sleep(1.5),
+            "too late",
+        )[1]
+
+        db = make_in_memory_chat_db()
+        with db.session() as session:
+            create_conversation(
+                session,
+                conversation_id="conv-timeout",
+                context_scope="personal",
+                agent_role="assistant",
+            )
+
+        svc = OrchestratorService(
+            llm_provider=slow_provider,
+            run_timeout_seconds=1,
+            db=db,
+        )
+        req = RunRequest(
+            message="hello",
+            context="personal",
+            conversation_id="conv-timeout",
+        )
+        exc_holder: list[Exception] = []
+
+        def run_in_worker() -> None:
+            try:
+                svc.chat(request=req)
+            except RunTimeoutError as e:
+                exc_holder.append(e)
+
+        t = threading.Thread(target=run_in_worker)
+        t.start()
+        t.join(timeout=5)
+        assert t.is_alive() is False
+        assert len(exc_holder) == 1
+
+        time.sleep(2)
+
+        with db.session() as session:
+            messages = get_recent_messages(session, "conv-timeout")
+        assert messages == []
 
 
 class TestOrchestratorAgentRunnerTrello:
