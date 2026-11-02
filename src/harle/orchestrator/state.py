@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -69,6 +70,7 @@ class RunState:
     final_agent: str | None = None
     starting_role: str | None = None
     models_used: dict[str, str] | None = None
+    abort_event: threading.Event | None = None
 
 
 class RunTimeoutError(TimeoutError):
