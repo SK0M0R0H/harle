@@ -14,6 +14,7 @@ from harle.orchestrator.state import RESULT_SUMMARY_MAX_CHARS, RunTimeoutError
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+_OnTimeout = Callable[[], None]
 
 
 def safe_error_summary(exc: Exception) -> str:
@@ -64,12 +65,21 @@ def run_timeout(seconds: int | None) -> object:
         signal.signal(signal.SIGALRM, previous_handler)
 
 
-def run_with_timeout(seconds: int | None, thunk: Callable[[], _T]) -> _T:
+def run_with_timeout(
+    seconds: int | None,
+    thunk: Callable[[], _T],
+    *,
+    on_timeout: _OnTimeout | None = None,
+) -> _T:
     """Run a callable under a wall-clock timeout that works in any thread.
 
     On the main thread uses SIGALRM; on worker threads (e.g. under
     run_in_threadpool) runs the thunk in a separate thread and waits
     with timeout so the server-side limit is enforced in production.
+
+    When the worker-thread limit is exceeded, the executor is shut down
+    without waiting for the thunk to finish.  Callers may pass *on_timeout*
+    to signal cooperative abort (e.g. skip late persistence).
     """
     if not seconds or seconds <= 0:
         return thunk()
@@ -78,9 +88,13 @@ def run_with_timeout(seconds: int | None, thunk: Callable[[], _T]) -> _T:
         with run_timeout(seconds):
             return thunk()
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(thunk)
-        try:
-            return future.result(timeout=seconds)
-        except FuturesTimeoutError:
-            raise RunTimeoutError("Run timed out before completion")
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(thunk)
+    try:
+        return future.result(timeout=seconds)
+    except FuturesTimeoutError:
+        if on_timeout is not None:
+            on_timeout()
+        raise RunTimeoutError("Run timed out before completion")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
