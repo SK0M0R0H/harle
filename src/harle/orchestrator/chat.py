@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -185,28 +186,29 @@ class ChatMixin:
             routing_method=state.routing_method,
         )
 
-        with self.db.session() as session:
-            add_message(
-                session,
-                conversation_id=state.conversation_id,
-                role="user",
-                content=request.message,
-                run_id=state.run_id,
-            )
-            add_message(
-                session,
-                conversation_id=state.conversation_id,
-                role="assistant",
-                content=state.result_text,
-                run_id=state.run_id,
-            )
-            touch_conversation(session, state.conversation_id)
-            if route.routing_method == "explicit_override":
-                update_conversation_agent_role(
+        if state.abort_event is None or not state.abort_event.is_set():
+            with self.db.session() as session:
+                add_message(
                     session,
-                    state.conversation_id,
-                    route.agent_role,
+                    conversation_id=state.conversation_id,
+                    role="user",
+                    content=request.message,
+                    run_id=state.run_id,
                 )
+                add_message(
+                    session,
+                    conversation_id=state.conversation_id,
+                    role="assistant",
+                    content=state.result_text,
+                    run_id=state.run_id,
+                )
+                touch_conversation(session, state.conversation_id)
+                if route.routing_method == "explicit_override":
+                    update_conversation_agent_role(
+                        session,
+                        state.conversation_id,
+                        route.agent_role,
+                    )
 
         return agent_result
 
@@ -218,12 +220,14 @@ class ChatMixin:
                 "Set DATABASE_URL in the configuration."
             )
 
+        abort_event = threading.Event()
         state = RunState(
             run_id=f"run_{uuid.uuid4().hex[:12]}",
             started_at=datetime.now(timezone.utc),
             message=request.message,
             context=request.context,
             conversation_id=request.conversation_id,
+            abort_event=abort_event,
         )
         agent_result: AgentResult | None = None
 
@@ -237,6 +241,7 @@ class ChatMixin:
                 agent_result = run_with_timeout(
                     self.run_timeout_seconds,
                     lambda: self._chat_core(request, state),
+                    on_timeout=abort_event.set,
                 )
                 self._finalize_run(
                     state=state,
